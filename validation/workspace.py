@@ -112,9 +112,14 @@ TOKEN_RE = re.compile(r"--spawn-request ([0-9a-f]{32})")
 DOWN_ARROW = b"\x1b[B"
 PRIVATE_PATH_RE = re.compile(r"/(?:tmp|home|run/user)/\S*")
 DIAGNOSTIC_LINES = 40
+DIAGNOSTIC_LINE_CHARS = 200
 SCREEN_AFTER = 5.0
 CLIENT_TAIL_BYTES = 16384
-ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()=>][0-9A-Za-z]?")
+ANSI_RE = re.compile(
+    rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()=>][0-9A-Za-z]?"
+)
+# Zellij draws rows with cursor positioning, not newlines.
+CURSOR_ROW_RE = re.compile(rb"\x1b\[\d*(?:;\d*)?[Hf]")
 RERUN_STDERR = "rerun.stderr"
 # exec keeps the rerun the pane's own process; only its stderr goes to the file.
 STDERR_TO_FILE = 'exec "$@" 2>"$0"'
@@ -459,8 +464,12 @@ class CapturingClient(PtyClient):
 
 
 def screen_text(raw):
-    """Terminal output as plain text lines, with escape sequences removed."""
-    text = ANSI_RE.sub(b"", raw).decode("utf-8", "replace")
+    """Terminal output as plain text lines, with escape sequences removed.
+
+    A cursor move to a row starts a new line, so a redrawn screen does not run
+    together into one long line.
+    """
+    text = ANSI_RE.sub(b"", CURSOR_ROW_RE.sub(b"\n", raw)).decode("utf-8", "replace")
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -468,14 +477,17 @@ def pane_titles(target):
     return sorted(pane.get("title", "") for pane in target.panes())
 
 
-def diagnostic_lines(text, root, limit=DIAGNOSTIC_LINES):
+def diagnostic_lines(text, root, limit=DIAGNOSTIC_LINES, width=DIAGNOSTIC_LINE_CHARS):
     """The last ``limit`` non-blank lines of ``text``, with private paths dropped.
+
+    Each line is cut to ``width`` characters after redaction.
 
     A pane dump wraps long lines, so a path the final redaction would replace
     can be split; any piece still naming a private dir becomes ``<path>``.
     """
     text = (text or "").replace(str(root), "<tmp>")
     lines = [PRIVATE_PATH_RE.sub("<path>", line).rstrip() for line in text.splitlines()]
+    lines = [line if len(line) <= width else line[:width - 3] + "..." for line in lines]
     return [line for line in lines if line.strip()][-limit:]
 
 

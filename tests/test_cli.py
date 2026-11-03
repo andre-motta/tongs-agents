@@ -550,7 +550,7 @@ def test_install_codex_mcp_removes_legacy_and_keeps_foreign(tmp_path, capsys):
         'command = "/old/bin/python3"\n'
         f'args = ["-m", "{LEGACY_MODULE}"]\n'
     ))
-    assert cli._install_codex_mcp(tmp_path / "codex")
+    assert cli._install_codex_mcp(tmp_path / "codex") is False
     assert path.read_text() == foreign
     assert "Kept existing Codex MCP server named tongs-agents" in capsys.readouterr().out
 
@@ -610,7 +610,7 @@ def test_install_writes_codex_mcp_only_with_the_codex_cli(tmp_path, monkeypatch,
     monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", tmp_path / ".claude.json")
     monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")
     monkeypatch.setattr(cli, "CODEX_HOOKS_FILE", tmp_path / "codex" / "hooks.json")
-    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: True)
     monkeypatch.setattr(cli, "_uninstall_claude_mcp", lambda *args: None)
     monkeypatch.setattr(cli.subprocess, "run", _never_run)
     config = tmp_path / "codex" / "config.toml"
@@ -635,6 +635,75 @@ def test_install_writes_codex_mcp_only_with_the_codex_cli(tmp_path, monkeypatch,
 
     cli.cmd_uninstall(SimpleNamespace(keep_data=True))
     assert "mcp_servers" not in tomllib.loads(config.read_text())
+
+
+def _codex_only_install(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")
+    monkeypatch.setattr(cli, "CODEX_HOOKS_FILE", tmp_path / "codex" / "hooks.json")
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+
+
+def _foreign_codex_table(directory):
+    return _write_codex_config(directory, '[mcp_servers.tongs-agents]\ncommand = "node"\n')
+
+
+def _symlinked_codex_config(directory):
+    real = directory.parent / "dotfiles" / "config.toml"
+    real.parent.mkdir(parents=True)
+    real.write_text('model = "o3"\n')
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "config.toml").symlink_to(real)
+    return real
+
+
+@pytest.mark.parametrize("prepare", [
+    lambda directory: _write_codex_config(directory, "[mcp_servers\n"),
+    _foreign_codex_table,
+    pytest.param(_symlinked_codex_config, marks=pytest.mark.skipif(
+        os.name == "nt", reason="symlinks")),
+], ids=["unparseable", "foreign", "symlink"])
+def test_install_summary_names_a_failed_codex_registration(tmp_path, monkeypatch, capsys,
+                                                           prepare):
+    _codex_only_install(tmp_path, monkeypatch)
+    path = prepare(tmp_path / "codex")
+    before = path.read_text()
+    cli.cmd_install(SimpleNamespace(agent="codex"))
+    output = capsys.readouterr().out
+    assert path.read_text() == before
+    assert "Tongs Agents installed for Codex!" in output
+    assert "Hooks only for Codex (MCP server not registered; see the messages above)" in output
+    assert "MCP tools available" not in output
+
+
+def test_install_summary_names_a_failed_claude_registration(settings_file, monkeypatch,
+                                                            capsys):
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: False)
+    cli.cmd_install(None)
+    output = capsys.readouterr().out
+    assert "Hooks only for Claude Code (MCP server not registered" in output
+    assert "(MCP tools available in Codex sessions)" in output
+
+
+@pytest.mark.parametrize("returncode, expected", [(0, True), (1, False)])
+def test_install_claude_mcp_reports_whether_our_entry_is_in_place(tmp_path, monkeypatch,
+                                                                  returncode, expected):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(tmp_path, {}))
+    monkeypatch.setattr(cli.subprocess, "run", _recorder([], returncode=returncode))
+    assert cli._install_claude_mcp("/usr/bin/claude") is expected
+
+
+@pytest.mark.parametrize("servers, expected", [
+    ({"tongs-agents": CURRENT}, True),
+    ({"tongs-agents": {"command": "node", "args": ["mine.js"]}}, False),
+])
+def test_install_claude_mcp_current_and_foreign_entries(tmp_path, monkeypatch, servers,
+                                                        expected):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(tmp_path, servers))
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    assert cli._install_claude_mcp("/usr/bin/claude") is expected
 
 
 def test_install_summary_names_what_was_installed(settings_file, monkeypatch, capsys):

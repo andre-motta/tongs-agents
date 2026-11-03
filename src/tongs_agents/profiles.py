@@ -348,6 +348,43 @@ def parse_profile(name: str, table) -> Profile:
     )
 
 
+def _home() -> Path | None:
+    try:
+        return Path.home()
+    except (RuntimeError, KeyError):
+        return None
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path
+
+
+def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
+    """Why ``folder`` must not be uploaded into a sandbox, or None when it may be.
+
+    The upload skips only .gitignore'd files, and a home folder is rarely a git
+    repository, so uploading ``/``, the home folder or a folder holding it would
+    copy SSH keys and harness credentials where the agent can read them.
+    """
+    home = _home() if home is None else home
+    if home is not None and not home.is_absolute():
+        home = None
+    folders = {Path(folder), _resolved(Path(folder))}
+    homes = {home, _resolved(home)} if home is not None else set()
+    for candidate in folders:
+        if candidate.anchor and candidate == Path(candidate.anchor):
+            return f"{folder} is the filesystem root"
+        for place in homes:
+            if candidate == place:
+                return f"{folder} is your home folder"
+            if candidate in place.parents:
+                return f"{folder} holds your home folder"
+    return None
+
+
 def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,
                      mcp_control: bool) -> None:
     """Profile keys that cannot apply inside a sandbox are errors, not ignored."""
@@ -365,6 +402,13 @@ def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,
         raise ProfileError(f"{where}.mcp_control: not available inside a sandbox")
     if sandbox.upload and cwd is None:
         raise ProfileError(f"{where}.cwd: needed to upload the workspace into the sandbox")
+    if sandbox.upload:
+        unsafe = unsafe_folder(cwd)
+        if unsafe is not None:
+            raise ProfileError(
+                f"{where}.cwd: {unsafe}; the sandbox upload would include its "
+                "credentials (pick a project folder)"
+            )
 
 
 def load_profiles(path: Path | None = None) -> dict[str, Profile]:

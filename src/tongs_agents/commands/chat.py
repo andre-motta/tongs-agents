@@ -20,7 +20,6 @@ See docs/chat.md.
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 
@@ -39,6 +38,7 @@ from tongs_agents.chat.store import (
     ChatRefused,
     ChatStore,
 )
+from tongs_agents.commands import CommandParser
 from tongs_agents.widgets.chat_panel import ChatPanel, message_text
 from tongs_agents.widgets.shell import AppFooter, AppHeader, apply_theme
 
@@ -288,7 +288,7 @@ def run(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tongs-agents chat", description=HELP)
+    parser = CommandParser(prog="tongs-agents chat", description=HELP)
     add_arguments(parser)
     return run(parser.parse_args(argv))
 

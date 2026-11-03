@@ -443,7 +443,16 @@ def test_hook_row_missing_past_the_status_ceiling_fails(monkeypatch):
 def test_screen_text_strips_terminal_sequences():
     raw = b"\x1b[2J\x1b[1;1Hzellij \x1b[31merror\x1b[0m\r\n\x1b]0;title\x07next\rline"
 
-    assert validator.screen_text(raw) == "zellij error\nnext\nline"
+    assert validator.screen_text(raw) == "\nzellij error\nnext\nline"
+    st = b"\x1b]8;;https://x.invalid\x1b\\link\x1b]8;;\x1b\\ done"
+    assert validator.screen_text(st) == "link done"
+    rows = b"\x1b[1;1Hfirst row\x1b[2;1Hsecond row\x1b[3Hthird"
+    assert validator.screen_text(rows).split("\n")[1:] == ["first row", "second row", "third"]
+
+
+def test_diagnostic_lines_are_cut_to_a_readable_width():
+    lines = validator.diagnostic_lines("x" * 5000 + "\nshort", "/tmp/root")
+    assert lines == ["x" * 197 + "...", "short"]
 
 
 @linux_only

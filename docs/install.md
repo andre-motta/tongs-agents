@@ -55,8 +55,9 @@ extension ([Pi](pi.md)). Claude Code gets the server through
 `claude mcp add --scope user`. Codex gets one `[mcp_servers.tongs-agents]`
 table in its `config.toml`, written by tongs-agents itself (see
 [Codex config.toml](#codex-configtoml)). It is idempotent. The summary at
-the end names the harnesses actually set up, and any that got hooks only
-because their CLI was missing. Restart running agent sessions afterwards; in
+the end names the harnesses actually set up, and any that got hooks only,
+either because their CLI was missing or because the MCP server could not be
+registered (the messages above it say why). Restart running agent sessions afterwards; in
 Codex, review and trust the new hooks with `/hooks`.
 
 A profile with a `sandbox` table is skipped: its agent runs inside OpenShell,
@@ -130,8 +131,26 @@ tables, with the same owned-table writer `config apply` uses:
 A `tongs-agents` table that starts anything else is the user's: install
 keeps it and says so. Every other byte of the file, comments included, stays
 as it was. When the file defines our table in a form the writer cannot edit
-exactly (an inline table or dotted keys), install leaves the file alone and
-prints `Could not register the Codex MCP server: <path>: <reason>`.
+exactly (an inline table or dotted keys), or when it is not valid TOML,
+install leaves the file alone and prints
+`Could not register the Codex MCP server: <path>: <reason>`.
+
+A symlinked `config.toml` (for example one managed by stow from a dotfiles
+repository) is left untouched as well: install refuses to write through the
+link, and `config apply` follows the same rule. Add the table to the file the
+link points at by hand, with the Python that has tongs-agents installed as
+`command` (`python3 -c 'import sys; print(sys.executable)'` from that
+environment prints it):
+
+```toml
+[mcp_servers.tongs-agents]
+command = "/path/to/python"
+args = ["-m", "tongs_agents.mcp_server"]
+env_vars = ["TONGS_AGENTS_LAUNCH_ID", "TONGS_AGENTS_PROFILE", "ZELLIJ_SESSION_NAME", "ZELLIJ_SOCKET_DIR", "TMUX", "TMUX_PANE", "XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR", "XDG_CONFIG_HOME", "TONGS_AGENTS_CONFIG_DIR", "XDG_RUNTIME_DIR"]
+```
+
+While the link stays, every install prints the refusal and its summary
+lists Codex as hooks only, even when the table is already in place.
 
 Codex starts a stdio MCP server with only `HOME`, `LANG`, `PATH`, `TMPDIR`
 and `USER` plus the variables named in its `env_vars`. The table therefore

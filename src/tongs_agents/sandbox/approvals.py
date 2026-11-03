@@ -116,7 +116,7 @@ class Proposal:
 
     @property
     def flagged(self) -> bool:
-        """OpenShell attached security notes (shown first in the review)."""
+        """OpenShell (or the agent's rationale) attached Security notes; marks the notice."""
         return bool(self.security)
 
     def fingerprint(self) -> tuple:

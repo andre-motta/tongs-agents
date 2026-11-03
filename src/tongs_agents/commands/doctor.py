@@ -329,8 +329,15 @@ def _pi_checks(target, expected: bool) -> list[Check]:
             "hooks", "ok", f"pi extension installed in {target.pi_dir}{_profile_sources(target)}",
         ))
     elif expected:
-        ready = shutil.which("pi") is not None and shutil.which(cli.HOOK_COMMAND) is not None
-        if ready:
+        pi_command = shutil.which("pi")
+        ready = pi_command is not None and shutil.which(cli.HOOK_COMMAND) is not None
+        version = pi_install.detect_pi_version(pi_command) if ready else None
+        if version is not None and version < pi_install.MINIMUM_PI_VERSION:
+            found = ".".join(str(part) for part in version)
+            level, remediation = "error", (
+                f"Upgrade Pi to {_PI_MINIMUM} or newer (found {found}), then run {fix}"
+            )
+        elif ready:
             level, remediation = "error", f"{fix} (needs Pi {_PI_MINIMUM} or newer)"
         else:
             # install skips a profile-only Pi home with a warning when Pi is missing

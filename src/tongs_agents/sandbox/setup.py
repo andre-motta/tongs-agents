@@ -52,11 +52,13 @@ from tongs_agents.profiles import (
     ProfileError,
     parse_profile,
     profiles_path,
+    unsafe_folder,
 )
 from tongs_agents.sandbox.approvals import clean
 from tongs_agents.sandbox.launcher import READY_TIMEOUT, SandboxLaunchError, wait_ready
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
+    SANDBOX_DOCS_URL,
     OpenShell,
     OpenShellError,
     flavour,
@@ -144,12 +146,13 @@ def version_checks(client: OpenShell, *, required: bool = True) -> tuple[list[Ch
     version = parse_version(text)
     error, warnings = version_problems(version)
     if error:
-        return [Check("openshell", level, error,
-                      "Install a supported OpenShell CLI yourself (see docs/sandbox.md)")], text
+        remediation = f"Install a supported OpenShell CLI yourself (see {SANDBOX_DOCS_URL})"
+        return [Check("openshell", level, error, remediation)], text
     shown = ".".join(map(str, version))
     checks = [Check("openshell", "ok",
                     f"openshell {shown} ({flavour(text)}) at {client.executable}")]
-    checks += [Check("openshell", "warn", warning, "See docs/sandbox.md for supported versions")
+    checks += [Check("openshell", "warn", warning,
+                     f"See {SANDBOX_DOCS_URL} for supported versions")
                for warning in warnings]
     return checks, text
 
@@ -453,43 +456,6 @@ def _yaml(value, indent: int = 0) -> list[str]:
 
 
 # Plan
-
-
-def _home() -> Path | None:
-    try:
-        return Path.home()
-    except (RuntimeError, KeyError):
-        return None
-
-
-def _resolved(path: Path) -> Path:
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError):
-        return path
-
-
-def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
-    """Why ``folder`` must not be uploaded into a sandbox, or None when it may be.
-
-    The upload skips only .gitignore'd files, and a home folder is rarely a git
-    repository, so uploading ``/``, the home folder or a folder holding it would
-    copy SSH keys and harness credentials where the agent can read them.
-    """
-    home = _home() if home is None else home
-    if home is not None and not home.is_absolute():
-        home = None
-    folders = {Path(folder), _resolved(Path(folder))}
-    homes = {home, _resolved(home)} if home is not None else set()
-    for candidate in folders:
-        if candidate.anchor and candidate == Path(candidate.anchor):
-            return f"{folder} is the filesystem root"
-        for place in homes:
-            if candidate == place:
-                return f"{folder} is your home folder"
-            if candidate in place.parents:
-                return f"{folder} holds your home folder"
-    return None
 
 
 def secret_paths(folder: Path) -> tuple[str, ...]:

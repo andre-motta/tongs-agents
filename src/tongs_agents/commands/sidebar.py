@@ -29,7 +29,6 @@ The layout starts it as ``python -m tongs_agents.commands.sidebar``.
 
 from __future__ import annotations
 
-import argparse
 import os
 import sys
 import threading
@@ -40,6 +39,7 @@ from textual.binding import Binding
 
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import AppConfig, AppConfigError, load_app_config
+from tongs_agents.commands import CommandParser
 from tongs_agents.models import FleetSession, FocusResult
 from tongs_agents.multiplexers import (
     Multiplexer,
@@ -67,6 +67,20 @@ def add_arguments(parser):
     parser.add_argument("--compact", action="store_true", help="Always use compact rows")
 
 
+def focus_pane(mux: Multiplexer, ref: PaneRef) -> FocusResult:
+    """Select ``ref`` through the multiplexer when it is still listed in its session."""
+    try:
+        panes = mux.list_panes(ref.session)
+    except MultiplexerError as error:
+        return FocusResult(state="failed", reason=error.detail, backend=mux.name)
+    if not any(pane.ref.pane_id == ref.pane_id for pane in panes):
+        return FocusResult(state="not-found", reason=f"pane {ref.pane_id} is gone")
+    try:
+        return mux.focus(ref)
+    except MultiplexerError as error:
+        return FocusResult(state="failed", reason=error.detail, backend=mux.name)
+
+
 def focus_launch_pane(mux: Multiplexer, current_session: str,
                       session: FleetSession) -> FocusResult:
     """Select a hookless row's pane when it is listed in the caller's session."""
@@ -76,18 +90,20 @@ def focus_launch_pane(mux: Multiplexer, current_session: str,
     socket_dir = env.get("ZELLIJ_SOCKET_DIR") or None
     if name != current_session or not pane_id:
         return FocusResult(
-            state="unavailable", reason="the pane is not in this zellij session",
+            state="unavailable", reason=f"the pane is not in this {mux.name} session",
         )
-    try:
-        panes = mux.list_panes(name)
-    except MultiplexerError as error:
-        return FocusResult(state="failed", reason=error.detail, backend=mux.name)
-    if not any(pane.ref.pane_id == pane_id for pane in panes):
-        return FocusResult(state="not-found", reason=f"pane {pane_id} is gone")
-    try:
-        return mux.focus(PaneRef(mux.name, name, pane_id, socket_dir))
-    except MultiplexerError as error:
-        return FocusResult(state="failed", reason=error.detail, backend=mux.name)
+    return focus_pane(mux, PaneRef(mux.name, name, pane_id, socket_dir))
+
+
+def focus_launched_row(mux: Multiplexer, feed: WorkspaceFeed,
+                       session: FleetSession) -> FocusResult:
+    """Select the pane of the launch a hook or notify row names (tmux rows)."""
+    ref = feed.launch_pane(session.launch_id)
+    if ref is None:
+        return FocusResult(
+            state="not-found", reason="the launch's pane is no longer recorded",
+        )
+    return focus_pane(mux, ref)
 
 
 class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
@@ -183,13 +199,23 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         self.agents_panel.poll()
 
     def _do_focus(self, session: FleetSession) -> None:
-        if session.source != LAUNCH_SOURCE:
+        """Launch rows, and on tmux every launched row, focus through the multiplexer.
+
+        On tmux a hook or notify row replaces its launch row; it is selected
+        through the launch's pane, never through the terminal API, so no
+        emulator window is raised for a pane in the sidebar's own session.
+        """
+        through_launch = self.multiplexer.name == "tmux" and bool(session.launch_id)
+        if session.source != LAUNCH_SOURCE and not through_launch:
             super()._do_focus(session)
             return
 
         def _run():
             try:
-                result = focus_launch_pane(self.multiplexer, self.session, session)
+                if session.source == LAUNCH_SOURCE:
+                    result = focus_launch_pane(self.multiplexer, self.session, session)
+                else:
+                    result = focus_launched_row(self.multiplexer, self.feed, session)
             except Exception as error:  # noqa: BLE001 - report, never crash the sidebar
                 result = FocusResult(state="failed", reason=str(error))
             self.call_from_thread(self._notify_focus_result, session.repo, result)
@@ -230,7 +256,7 @@ def run(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="tongs-agents sidebar", description=HELP)
+    parser = CommandParser(prog="tongs-agents sidebar", description=HELP)
     add_arguments(parser)
     return run(parser.parse_args(argv))
 

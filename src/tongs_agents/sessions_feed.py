@@ -227,6 +227,24 @@ class WorkspaceFeed(SessionFeed):
             and record.multiplexer == self.multiplexer.name
         ]
 
+    def launch_pane(self, launch_id: str) -> PaneRef | None:
+        """The pane of this session's running launch ``launch_id``, or None."""
+        for record in self._launch_records():
+            if record.launch_id != launch_id or record.state != "running":
+                continue
+            if not record.pane_id:
+                return None
+            if (
+                record.socket_dir and self.socket_dir
+                and not _same_dir(record.socket_dir, self.socket_dir)
+            ):
+                return None
+            return PaneRef(
+                self.multiplexer.name, self.session, record.pane_id,
+                record.socket_dir or self.socket_dir,
+            )
+        return None
+
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":
             return record.pane_id

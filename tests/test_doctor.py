@@ -289,6 +289,20 @@ def test_pi_profile_without_extension_is_an_error(installed, monkeypatch, capsys
     assert error["remediation"] == "tongs-agents install (needs Pi 0.84.4 or newer)"
 
 
+@pytest.mark.parametrize("version, remediation", [
+    ((0, 80, 1), "Upgrade Pi to 0.84.4 or newer (found 0.80.1), then run tongs-agents install"),
+    ((0, 84, 4), "tongs-agents install (needs Pi 0.84.4 or newer)"),
+])
+def test_pi_too_old_leads_with_the_upgrade(installed, monkeypatch, capsys, version,
+                                           remediation):
+    monkeypatch.setattr(doctor.pi_install, "detect_pi_version", lambda command: version)
+    _write_profiles('[profiles.pi-local]\ncommand = ["pi"]\n')
+    code, checks = _doctor(monkeypatch, capsys)
+    assert code == 2
+    error = _find(checks, "error", "hooks", "Pi extension")[0]
+    assert error["remediation"] == remediation
+
+
 def test_pi_profile_without_pi_is_a_warning_with_a_real_fix(installed, monkeypatch, capsys):
     tools = {"tongs-agents-hook": installed.hook}
     monkeypatch.setattr(cli.shutil, "which", lambda name: tools.get(name))

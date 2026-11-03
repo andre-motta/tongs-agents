@@ -102,8 +102,9 @@ What it writes:
 - hooks in `settings.json` (Claude Code) and `hooks.json` (Codex) of each
   home, after keeping a one-time `<name>.tongs-agents.bak` copy of a file
   that already existed;
-- the `tongs-agents` MCP server, through `claude mcp add --scope user` and
-  `codex mcp add`, when those CLIs are on `PATH`;
+- the `tongs-agents` MCP server, through `claude mcp add --scope user` for
+  Claude Code and as a table in Codex's `config.toml`, when those CLIs are on
+  `PATH`;
 - the packaged Pi extension, through Pi itself.
 
 Restart agents that were already running. The first time you start Codex

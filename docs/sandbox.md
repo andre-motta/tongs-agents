@@ -167,7 +167,9 @@ policy = "~/policies/claude.yaml"                   # --policy (a host file)
 Unknown keys are errors. A sandboxed profile also refuses `env`, `config_dir`
 (the harness config is the one tongs-agents uploads) and `mcp_control` (MCP
 control and the fleet tools are not available inside a sandbox). `cwd` is
-required while `upload` is true. `workdir` is an absolute path inside the
+required while `upload` is true, and, as in the wizard, it may not be `/`,
+your home folder or a folder that holds it (a profile written by hand with
+`cwd = "~"` fails to load). `workdir` is an absolute path inside the
 sandbox and the agent's working directory: the contents of `cwd` land
 directly in it. `policy` is a file on the host.
 

@@ -105,8 +105,9 @@ Do not use `notify` in such a pane: it refuses in a pane whose profile names a
 hooked harness (`claude`, `codex` or `pi`), because the hooks already report
 its status.
 
-`tongs-agents doctor` warns about every `other` profile that runs
-unmonitored, and about wrappers whose name hides the harness.
+`tongs-agents doctor` lists each `other` profile as a note (INFO), because
+its status comes only from `tongs-agents notify`, and warns about wrappers
+whose name hides the harness.
 
 ## What you learned
 

@@ -93,6 +93,41 @@ def test_upload_needs_a_cwd():
         parse_profile("boxed", {"command": ["claude"], "sandbox": {}})
 
 
+@pytest.fixture
+def fake_home(tmp_path, monkeypatch):
+    home = tmp_path / "home" / "user"
+    (home / "project").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    return home
+
+
+@pytest.mark.parametrize("cwd, message", [
+    (lambda home: "~", "is your home folder"),
+    (lambda home: str(home), "is your home folder"),
+    (lambda home: str(home.parent), "holds your home folder"),
+    (lambda home: "/", "is the filesystem root"),
+])
+def test_upload_refuses_home_root_and_folders_holding_home(fake_home, cwd, message):
+    with pytest.raises(ProfileError, match=rf"boxed\.cwd: .*{message}"):
+        profile({}, cwd=cwd(fake_home))
+    with pytest.raises(ProfileError, match=rf"boxed\.cwd: .*{message}"):
+        profile({"upload": True}, cwd=cwd(fake_home))
+
+
+def test_upload_accepts_a_project_inside_home(fake_home):
+    spec = profile({}, cwd="~/project").sandbox
+    assert spec.upload is True
+
+
+def test_no_upload_may_use_any_cwd(fake_home):
+    assert profile({"upload": False}, cwd="~").sandbox.upload is False
+
+
+def test_unsandboxed_profiles_may_use_home_as_cwd(fake_home):
+    assert parse_profile("plain", {"command": ["claude"], "cwd": "~"}).cwd == fake_home
+
+
 def test_unsandboxed_profiles_are_unchanged():
     assert parse_profile("plain", {"command": ["claude"]}).sandbox is None
 

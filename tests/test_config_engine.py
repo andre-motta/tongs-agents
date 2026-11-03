@@ -15,6 +15,7 @@ import pytest
 from tongs_agents import cli, owned
 from tongs_agents.config_layer import engine, schema
 from tongs_agents.config_layer.protocol import CanonicalFragment, Change, ProfileTarget
+from tongs_agents.profiles import parse_profile
 
 POSIX = pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes and symlinks")
 
@@ -221,6 +222,16 @@ def test_load_example(config, homes):
     default = ProfileTarget("claude", None)
     assert [s.name for s in config.mcp_servers_for_target(default)] == ["issues", "docs"]
     assert config.profiles_for(ProfileTarget("codex", None)) == ("codex-review",)
+
+
+def test_sandboxed_profiles_match_no_host_home(homes):
+    profiles = {
+        "claude-boxed": parse_profile("claude-boxed", {
+            "command": ["claude"], "cwd": "/srv/project", "sandbox": {},
+        }),
+        "claude-host": parse_profile("claude-host", {"command": ["claude"]}),
+    }
+    assert schema.profiles_for(profiles, ProfileTarget("claude", None)) == ("claude-host",)
 
 
 def _load(tmp_path, homes, text):

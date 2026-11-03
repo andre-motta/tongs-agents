@@ -7,7 +7,10 @@ description: "Paste prompts into agent panes, read their screens and wait for th
 script drive agents, but only in panes that tongs-agents spawned and can verify
 right now. A pane is named by its launch id: the 32-character hex id of its
 launch record, shown by `tongs-agents agent-status` and set as
-`TONGS_AGENTS_LAUNCH_ID` inside the pane.
+`TONGS_AGENTS_LAUNCH_ID` inside the pane. Sent text has your full user
+authority in the target, as if you typed it there, including `!` shell
+escapes and slash commands, whoever runs `send` (see
+[what a sender can do](mcp-control.md)).
 
 Control works with Zellij and tmux panes started by `tongs-agents workspace`
 or the sidebar (on tmux see [tmux](workspace.md#tmux) for how pastes and

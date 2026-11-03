@@ -562,6 +562,7 @@ def _restore_claude_mcp(claude_cmd, previous, directory=None):
 
 
 def _install_claude_mcp(claude_cmd, directory=None):
+    """Register our Claude Code MCP server; True only when our entry is in place."""
     servers = _claude_servers_for(directory)
     if _is_owned_mcp(servers.get(legacy.LEGACY_MCP_NAME)):
         _run_claude_mcp(
@@ -572,13 +573,13 @@ def _install_claude_mcp(claude_cmd, directory=None):
     if existing is not None:
         if not _is_owned_mcp(existing):
             print(f"  Kept existing Claude Code MCP server named {MCP_NAME}")
-            return
+            return False
         if _is_current_mcp(existing):
-            return
+            return True
         if not _run_claude_mcp(
             claude_cmd, ["remove", "--scope", "user", MCP_NAME], "replace", directory
         ):
-            return
+            return False
     added = _run_claude_mcp(
         claude_cmd,
         ["add", "--scope", "user", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
@@ -587,6 +588,7 @@ def _install_claude_mcp(claude_cmd, directory=None):
     )
     if not added and existing is not None:
         _restore_claude_mcp(claude_cmd, existing, directory)
+    return added
 
 
 def _uninstall_claude_mcp(claude_cmd, directory=None):
@@ -666,12 +668,17 @@ def _edit_codex_config(path, plan, action):
 
 
 def _install_codex_mcp(directory=None):
+    """Register our Codex MCP table; True only when our table is in place.
+
+    A foreign table, an unparseable or symlinked config.toml and any write error
+    return False.
+    """
     path = codex_config_file(directory)
     kept = []
     done = _edit_codex_config(path, lambda text: _codex_install_changes(text, kept), "register")
     if kept:
         print(f"  Kept existing Codex MCP server named {MCP_NAME}")
-    return done
+    return done and not kept
 
 
 def _uninstall_codex_mcp(directory=None):
@@ -814,6 +821,7 @@ def cmd_install(args):
     commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
     installed = set()
     with_mcp = set()
+    mcp_failed = set()
     skipped = set()
     for target in hook_targets:
         _record(installs, target, True)
@@ -826,11 +834,11 @@ def cmd_install(args):
                 name = HARNESS_NAMES[target.harness]
                 print(f"  {name} CLI not found; skipped {name} MCP registration")
             continue
-        with_mcp.add(target.harness)
         if target.harness == "claude":
-            _install_claude_mcp(command, target.directory)
+            registered = _install_claude_mcp(command, target.directory)
         else:
-            _install_codex_mcp(target.directory)
+            registered = _install_codex_mcp(target.directory)
+        (with_mcp if registered else mcp_failed).add(target.harness)
 
     pi_failed = False
     if pi_targets:
@@ -857,7 +865,7 @@ def cmd_install(args):
     save_installs(installs)
     if pi_failed:
         raise SystemExit(1)
-    _print_install_summary(installed, with_mcp)
+    _print_install_summary(installed, with_mcp, mcp_failed)
 
 
 def _names(harnesses):
@@ -867,17 +875,25 @@ def _names(harnesses):
     return ", ".join(names[:-1]) + " and " + names[-1]
 
 
-def _print_install_summary(installed, with_mcp):
-    """What install actually set up, from the harnesses it wrote, and what to run next."""
+def _print_install_summary(installed, with_mcp, mcp_failed=frozenset()):
+    """What install actually set up, from the harnesses it wrote, and what to run next.
+
+    ``with_mcp`` holds harnesses whose MCP server is registered, ``mcp_failed``
+    those where registration was attempted and did not leave our entry in place.
+    """
     print()
     if not installed:
         print("Tongs Agents installed nothing: no agent integration could be set up.")
         return
     print(f"Tongs Agents installed for {_names(installed)}!")
-    hooks_only = {kind for kind in installed if kind != "pi"} - with_mcp
+    with_mcp = set(with_mcp) - set(mcp_failed)
+    hooks_only = {kind for kind in installed if kind != "pi"} - with_mcp - set(mcp_failed)
     if hooks_only:
         print(f"  Hooks only for {_names(hooks_only)} (CLI not found; no MCP server "
               "registered)")
+    if mcp_failed:
+        print(f"  Hooks only for {_names(mcp_failed)} (MCP server not registered; "
+              "see the messages above)")
     print()
     print("Next:")
     print("  tongs-agents doctor           # Check the installation")
