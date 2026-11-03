@@ -1,0 +1,43 @@
+{
+  "schema": "claude-import-validation/1",
+  "result": "pass",
+  "error": null,
+  "provenance": "live",
+  "provenance_detail": "real claude -p sessions against a local fake Messages API (no model, fake key); config emitted by the Claude emitter into a private CLAUDE_CONFIG_DIR",
+  "network": "user and network namespace, loopback only",
+  "decision": "emitter-strategy row 2",
+  "claude_version": "2.1.317 (Claude Code)",
+  "emit": {
+    "conflicts": [],
+    "failed_steps": [],
+    "claude_md": "@tongs-agents/instructions.md\n",
+    "instructions_file_has_token": true,
+    "settings_has_hooks": true
+  },
+  "with_import": {
+    "exit_code": 0,
+    "reply_is_fake_provider": true,
+    "requests": 1,
+    "message_requests": 1,
+    "token_in_a_request": true,
+    "stderr_tail": []
+  },
+  "control_without_import": {
+    "exit_code": 0,
+    "reply_is_fake_provider": true,
+    "requests": 1,
+    "message_requests": 1,
+    "token_in_a_request": false,
+    "stderr_tail": []
+  },
+  "hook_session_records": {
+    "count": 2,
+    "statuses": [
+      "ended"
+    ]
+  },
+  "user_config_unchanged": true,
+  "temp_dir_removed": true,
+  "duration_seconds": 1.0,
+  "tested_commit": "43f545c8c54c8b3696550f68841ef33ca6543210"
+}

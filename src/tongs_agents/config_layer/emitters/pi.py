@@ -1,0 +1,251 @@
+"""Pi emitter (docs/work/emitter-strategy.md, rows 9 to 12).
+
+- Skills: owned dir ``<pi>/skills/tongs-agents/<skill>/``, copied.
+- Instructions: a managed block in ``<pi>/AGENTS.md``.
+- MCP: ``pi mcp add`` and ``remove`` with ``PI_CODING_AGENT_DIR`` per target,
+  only on Pi 0.99.0 or newer (native MCP); below it the servers are skipped
+  with one line. No ``env`` is written: Pi stdio servers inherit its
+  environment.
+- Hooks: the packaged extension plus the owned ``<pi>/tongs-agents.json``,
+  installed by ``pi_install.install_pi`` when they are missing or stale.
+"""
+
+from __future__ import annotations
+
+import shutil
+import sys
+from pathlib import Path
+from typing import Any
+
+from tongs_agents import cli, owned, pi_install
+from tongs_agents.config_layer.emitters import _common
+from tongs_agents.config_layer.emitters.base import BaseEmitter
+from tongs_agents.config_layer.emitters.claude import skill_tree_files
+from tongs_agents.config_layer.protocol import CanonicalFragment, ProfileTarget
+
+MCP_MINIMUM = (0, 99, 0)
+
+
+def skills_dir(directory: Path) -> Path:
+    return directory / "skills" / _common.BUNDLE
+
+
+def normalize(entry: Any) -> tuple[Any, bool]:
+    """The fields tongs-agents sets on a Pi MCP entry, and whether it is disabled."""
+    if not isinstance(entry, dict):
+        return {"unrecognized": entry}, False
+    result: dict[str, Any] = {}
+    if "url" in entry:
+        result["url"] = entry["url"]
+    else:
+        result["command"] = entry.get("command")
+        result["args"] = entry.get("args", [])
+    for key in ("env", "headers"):
+        if entry.get(key):
+            result[key] = entry[key]
+    if "cwd" in entry:
+        result["cwd"] = entry["cwd"]
+    return result, entry.get("enabled") is False
+
+
+def _version_text(version: tuple[int, ...]) -> str:
+    return ".".join(str(part) for part in version)
+
+
+def _read_servers(path: Path) -> dict[str, Any]:
+    document = owned.read_json(path, missing={})
+    servers = document.get("mcpServers", {}) if isinstance(document, dict) else None
+    if not isinstance(servers, dict):
+        raise owned.OwnedFileError(f"{path}: 'mcpServers' must be a JSON object")
+    return servers
+
+
+class PiEmitter(BaseEmitter):
+    harness_id = "pi"
+
+    def plan_full(
+        self, config: Any, target: ProfileTarget, *, force: bool = False
+    ) -> _common.EmitPlan:
+        canonical, plan, previous = self._start(config, target)
+        directory = _common.config_dir(target)
+
+        skills = _common.selected_skills(canonical, target)
+        files = skill_tree_files(skills_dir(directory), skills)
+        _common.plan_owned_tree(plan, files, previous=previous, force=force)
+
+        body = _common.render_instructions(canonical, "pi")
+        agents_md = directory / "AGENTS.md"
+        if body is not None or f"md-block:{agents_md}" in previous:
+            _common.plan_markdown_block(plan, agents_md, body, previous=previous, force=force)
+
+        pi_command = shutil.which("pi")
+        version = None if pi_command is None else pi_install.detect_pi_version(pi_command)
+        self._plan_hooks(plan, directory, pi_command, version)
+        self._plan_mcp(plan, canonical, target, directory, previous, force,
+                       pi_command, version)
+        return plan
+
+    def _plan_hooks(self, plan, directory: Path, pi_command, version) -> None:
+        hook = _common.hook_command()
+        if pi_command is None or not Path(hook).is_absolute():
+            plan.notes.append(f"Pi monitoring skipped: {cli.PI_PREREQUISITE}")
+            return
+        if version is None or version < pi_install.MINIMUM_PI_VERSION:
+            minimum = _version_text(pi_install.MINIMUM_PI_VERSION)
+            plan.notes.append(f"Pi monitoring skipped: Pi {minimum} or newer is required")
+            return
+        config_path = directory / pi_install.PI_CONFIG_NAME
+        try:
+            current = pi_install._read_owned_config(config_path)
+            expected_hook = str(Path(hook).resolve(strict=True))
+            extension = str(pi_install.pi_extension_path())
+        except ValueError as error:
+            plan.conflicts.append(str(error))
+            return
+        except OSError as error:
+            plan.notes.append(f"Pi monitoring skipped: {error}")
+            return
+        if (
+            current is not None
+            and current.get("hook_path") == expected_hook
+            and current.get("extension_path") == extension
+            and current.get("managed_paths") == [extension]
+        ):
+            return
+        environment = pi_install.pi_environment(directory)
+        plan.commands.append(_common.CommandStep(
+            description=f"install the tongs-agents Pi extension into {directory}",
+            call=lambda: pi_install.install_pi(pi_command, hook, environment),
+        ))
+
+    def _desired(self, plan, canonical, target) -> dict[str, dict[str, Any]]:
+        desired = {
+            _common.RESERVED_SERVER: {
+                "command": sys.executable, "args": ["-m", cli.MCP_MODULE],
+            },
+        }
+        for server in _common.selected_servers(canonical, target):
+            if server.url is not None:
+                plan.notes.append(
+                    f"MCP server {server.name}: HTTP servers are not emitted for Pi yet "
+                    "(no live evidence for header handling); skipped"
+                )
+                continue
+            value: dict[str, Any] = {
+                "command": _common.expand_home(server.command[0]),
+                "args": list(server.command[1:]),
+            }
+            if server.cwd is not None:
+                value["cwd"] = _common.expand_home(server.cwd)
+            desired[server.name] = value
+        return desired
+
+    def _plan_mcp(self, plan, canonical, target, directory, previous, force,
+                  pi_command, version) -> None:
+        managed = self._managed_names(previous, "mcp-cli")
+        keep_recorded = [
+            (entry_id, fields) for entry_id, fields in previous.items()
+            if fields.get("kind") == "mcp-cli"
+        ]
+        if pi_command is None or version is None or version < MCP_MINIMUM:
+            found = "not found" if pi_command is None else (
+                "unrecognized" if version is None else _version_text(version))
+            plan.notes.append(
+                f"Pi MCP servers skipped: Pi {_version_text(MCP_MINIMUM)} or newer is "
+                f"required (found {found})"
+            )
+            plan.entries.update((key, dict(value)) for key, value in keep_recorded)
+            return
+        desired = self._desired(plan, canonical, target)
+        path = directory / "mcp.json"
+        try:
+            current_raw = _read_servers(path)
+        except owned.OwnedFileError as error:
+            plan.conflicts.append(f"{error}; MCP servers not changed")
+            plan.entries.update((key, dict(value)) for key, value in keep_recorded)
+            return
+        env = {"PI_CODING_AGENT_DIR": str(directory), "PI_OFFLINE": "1"}
+        for name in sorted(set(desired) | managed):
+            entry_id = f"mcp:{name}"
+            recorded = previous.get(entry_id)
+            raw = current_raw.get(name)
+            current, disabled = normalize(raw) if name in current_raw else (None, False)
+            want = desired.get(name)
+            action = _common.server_action(
+                want, current, recorded.get("sha256") if recorded else None,
+                adoptable=False, force=force,
+            )
+            label = f"Pi MCP server {name}"
+            _common.report_action(plan, label, action)
+            entry = None if want is None else {
+                "kind": "mcp-cli", "key": name, "sha256": _common.digest_value(want),
+            }
+            if action == "keep":
+                plan.entries[entry_id] = entry
+                continue
+            if action == "drifted" and recorded is not None:
+                plan.entries[entry_id] = dict(recorded)
+                continue
+            if disabled and action in ("replace", "remove"):
+                plan.notes.append(f"{label}: disabled in {path}; left as is")
+                if recorded is not None:
+                    plan.entries[entry_id] = dict(recorded)
+                continue
+            if action == "remove":
+                plan.commands.append(_common.CommandStep(
+                    description=f"remove {label}",
+                    argv=(pi_command, "mcp", "remove", name),
+                    env=env, entry_id=entry_id, entry=None,
+                ))
+            elif action in ("add", "replace"):
+                cwd = ("--cwd", want["cwd"]) if "cwd" in want else ()
+                plan.commands.append(_common.CommandStep(
+                    description=f"add {label}",
+                    argv=(pi_command, "mcp", "add", name, *cwd, "--",
+                          want["command"], *want["args"]),
+                    env=env, entry_id=entry_id, entry=entry,
+                ))
+                plan.entries[entry_id] = entry
+
+    def capture(
+        self, target: ProfileTarget, *, include_unmanaged: bool = False
+    ) -> CanonicalFragment:
+        directory = _common.config_dir(target)
+        previous = owned.manifest_entries_for(target)
+        warnings: list[str] = []
+        skills = _common.capture_skill_tree(skills_dir(directory))
+        instructions = _common.read_block(directory / "AGENTS.md")
+        managed = self._managed_names(previous, "mcp-cli")
+        try:
+            entries = _read_servers(directory / "mcp.json")
+        except owned.OwnedFileError as error:
+            warnings.append(str(error))
+            entries = {}
+        servers = {}
+        for name, entry in sorted(entries.items()):
+            if name == _common.RESERVED_SERVER or not isinstance(entry, dict):
+                continue
+            if name not in managed and not include_unmanaged:
+                continue
+            label = f"Pi MCP server {name}"
+            if "url" in entry:
+                servers[name] = {"url": entry["url"]}
+                continue
+            command = entry.get("command")
+            args = entry.get("args", [])
+            if not isinstance(command, str) or not isinstance(args, list):
+                warnings.append(f"{label}: unrecognized entry; skipped")
+                continue
+            value: dict[str, Any] = {"command": [command, *map(str, args)]}
+            names = _common.env_names_from(entry.get("env"), label, warnings)
+            if names:
+                value["env"] = names
+            if isinstance(entry.get("cwd"), str):
+                value["cwd"] = entry["cwd"]
+            servers[name] = value
+        return _common.fragment(target, {
+            "skills": skills,
+            "instructions": instructions,
+            "mcp_servers": servers,
+            "warnings": warnings,
+        })
