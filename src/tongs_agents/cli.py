@@ -63,6 +63,8 @@ CODEX_HOOK_EVENTS = [
 
 
 # A config file the installer must not modify; every owned.py refusal is one.
+# It subclasses OSError: catch ConfigError before any broad ``except OSError``,
+# which would otherwise swallow the refusal as an ordinary I/O error.
 ConfigError = owned.OwnedFileError
 
 
@@ -1092,7 +1094,9 @@ def build_parser(modules=None):
             "skipped with a warning, not an error, when pi or tongs-agents-hook is not "
             "installed; --agent pi or --pi-agent-dir still fail in that case. Before it "
             "first changes an existing settings.json or hooks.json, install keeps a copy "
-            f"of it next to the file as <name>{owned.BACKUP_SUFFIX}."
+            f"of it next to the file as <name>{owned.BACKUP_SUFFIX}. That copy is taken "
+            "only once: later installs never refresh it and uninstall keeps it. Every hook "
+            "file is written as one unit before any MCP server is registered."
         ),
     )
     p_install.add_argument(
@@ -1101,7 +1105,16 @@ def build_parser(modules=None):
     )
     _add_dir_options(p_install, "Install")
 
-    p_uninstall = sub.add_parser("uninstall", help="Remove agent monitoring")
+    p_uninstall = sub.add_parser(
+        "uninstall", help="Remove agent monitoring",
+        description=(
+            "Remove agent monitoring: hooks and MCP entries, plus session records for the "
+            "default or --agent all selection unless --keep-data. The "
+            f"<name>{owned.BACKUP_SUFFIX} copies install kept before its first "
+            "edit of settings.json or hooks.json are left in place; delete them yourself "
+            "once you no longer need them."
+        ),
+    )
     p_uninstall.add_argument("--keep-data", action="store_true", help="Keep session status data")
     p_uninstall.add_argument(
         "--agent", choices=["claude", "codex", "pi", "all"],

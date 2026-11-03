@@ -183,6 +183,30 @@ def test_without_a_start_token_the_record_is_unresolved(monkeypatch):
     assert data["launch"]["launch_id"] == record.launch_id
 
 
+@pytest.mark.parametrize("ending", ["process exits", "launch record removed"])
+def test_an_unresolved_row_is_dropped_with_its_launch(monkeypatch, ending):
+    record = claimed(process_start=None)
+    in_pane(monkeypatch, record)
+    assert call("working") == 0
+    discovery._cleanup_stale_sessions()
+    assert len(stored()) == 1
+    if ending == "process exits":
+        monkeypatch.setattr(discovery, "get_process_info", lambda pid: None)
+    else:
+        (paths.launches_dir() / f"{record.launch_id}.json").unlink()
+    assert discovery._cleanup_stale_sessions() == 1
+    assert stored() == []
+
+
+def test_an_identified_row_is_not_joined_on_its_launch(monkeypatch):
+    record = claimed()
+    in_pane(monkeypatch, record)
+    assert call("working") == 0
+    (paths.launches_dir() / f"{record.launch_id}.json").unlink()
+    discovery._cleanup_stale_sessions()
+    assert len(stored()) == 1
+
+
 def test_a_failed_write_never_fails_the_wrapper(monkeypatch, capsys):
     record = claimed()
     in_pane(monkeypatch, record)
@@ -233,7 +257,10 @@ def test_notify_is_a_cli_command():
 def test_a_non_harness_profile_shows_its_reported_state_in_the_sidebar(tmp_path):
     """Acceptance: the real launcher execs a shell profile that calls notify."""
     notify_cmd = shlex.join([sys.executable, "-m", "tongs_agents.cli", "notify"])
-    script = f"{notify_cmd} working && {notify_cmd} done 'tests passed' || {notify_cmd} failed"
+    script = (
+        f"{notify_cmd} working; if true; then {notify_cmd} done 'tests passed'; "
+        f"else {notify_cmd} failed; fi"
+    )
     config = tmp_path / "config"
     config.mkdir(mode=0o700, exist_ok=True)
     path = config / "config.toml"

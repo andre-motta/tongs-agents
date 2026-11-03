@@ -273,6 +273,11 @@ which keeps one run per pin with source hashes. The maintainer's live run with
 real profiles is separate; see the
 [runbook](../docs/work/workspace-live-run.md).
 
+`tongs-agents notify` (profiles with harness `other`) is not covered here
+yet: its evidence is the synthetic test suite plus a real launcher and shell
+in `tests/test_notify.py`, with no live Zellij pane. A notify pane belongs in
+the next update of this validator, or in the maintainer's M1 live run (#16).
+
 ## Config emitters (M2-C)
 
 Three checks cover the Claude, Codex and Pi emitters beyond the synthetic
@@ -325,9 +330,12 @@ downloads the release tarball from the npm registry, checks its size and
 sha256 against the table before npm sees it, installs it and confirms the
 reported version. The hosted `pi-mcp-emitter` job installs the 0.99.0 pin
 this way. The `pi-validation` lifecycle job keeps its original
-`npm install` of 0.85.0, which checks the registry's sha512 integrity (also
-recorded in the table); it starts a Pi session, so it cannot be reproduced
-locally and its install step is left exactly as it was validated.
+`npm install` of 0.85.0. That install relies only on the sha512 integrity
+the npm registry itself supplies: the 0.85.0 `sha256` and `integrity` in the
+table are recorded for reference but not enforced by that job, so it does not
+pin the tarball the way `install_pin.py` does. The job starts a Pi session,
+so it cannot be reproduced locally and its install step is left exactly as it
+was validated.
 
 ## Investigation probes
 

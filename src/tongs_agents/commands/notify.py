@@ -1,7 +1,8 @@
 """``tongs-agents notify``: report a launched pane's state without harness hooks.
 
 Any command started from an ``other`` profile can call it, for example
-``make test && tongs-agents notify done || tongs-agents notify failed``.
+``if make test; then tongs-agents notify done; else tongs-agents notify failed; fi``
+(not ``&& ... ||``, which also reports failed when ``notify done`` is refused).
 The pane is identified by ``TONGS_AGENTS_LAUNCH_ID``, which the launcher sets,
 and its claimed launch record. The state is written as a schema v1 session
 record (harness ``other``, source ``notify``) through the hook's record
@@ -29,7 +30,7 @@ from tongs_agents.sessions_feed import NOTIFY_SOURCE
 NAME = "notify"
 HELP = "Report this launched pane's state (working, needs-you, done, failed, quiet)"
 
-HARNESS = "other"
+HARNESS = discovery.OTHER_HARNESS
 EXIT_REFUSED = 1
 
 STATES = {
