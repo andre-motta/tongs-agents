@@ -47,21 +47,15 @@ RESERVED_SERVER = "tongs-agents"
 HOOK_COMMAND = "tongs-agents-hook"
 BLOCK_BEGIN = "<!-- tongs-agents:begin -->"
 BLOCK_END = "<!-- tongs-agents:end -->"
-DOTFILES_SCHEMA = "tongs-agents-dotfiles/1"
-EMIT_HARNESSES = ("claude", "codex", "pi")
 MAX_INSTRUCTIONS_BYTES = 64 * 1024
 MAX_SKILL_FILES = 256
 MAX_SKILL_BYTES = 4 * 1024 * 1024
-NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
-SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
-ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\Z")
 # Suffix to owned.py marker format for files inside a skill directory.
 SKILL_FORMATS = {
     ".md": "md", ".json": "json", ".toml": "toml", ".kdl": "kdl",
     ".py": "hash", ".sh": "hash", ".bash": "hash", ".yaml": "hash", ".yml": "hash",
     ".js": "slash", ".mjs": "slash", ".cjs": "slash", ".ts": "slash",
 }
-_LOCAL_HOSTS = ("localhost", "127.0.0.1", "[::1]")
 
 
 class EmitError(ValueError):
@@ -101,13 +95,31 @@ class EmitConfig:
         *,
         profiles: Mapping[str, Any] | None = None,
     ) -> EmitConfig:
-        """Build from a parsed ``agentic.toml`` and the directory that holds it.
+        """Validate a parsed ``agentic.toml`` with the schema loader and view it.
 
-        ``profiles`` (name to Profile or profile table) replaces the
-        document's own; the engine passes the merged set. Validation here is
-        what emission needs; the schema loader owns the full checks.
+        This is ``schema.parse_document`` plus ``from_canonical``, the same
+        rules ``config apply`` uses, with every skill's files also checked for
+        an owner marker format. ``profiles`` (name to Profile or profile
+        table) replaces the document's own; the engine passes the merged set.
         """
-        return _from_document(document, Path(root), profiles)
+        root = Path(os.path.abspath(root))
+        local = None
+        if profiles is not None:
+            document = {key: value for key, value in document.items() if key != "profiles"}
+            local = {}
+        try:
+            for name, value in (profiles or {}).items():
+                local[name] = value if isinstance(value, Profile) else parse_profile(
+                    name, dict(value)
+                )
+            canonical = schema.parse_document(
+                dict(document), root, root / schema.CANONICAL_FILE_NAME, local
+            )
+        except (schema.SchemaError, ProfileError, TypeError, ValueError) as error:
+            raise EmitError(str(error)) from None
+        for skill in canonical.skills.values():
+            skill_files(skill.path, skill.name)
+        return cls.from_canonical(canonical)
 
     @classmethod
     def from_canonical(cls, config: schema.CanonicalConfig) -> EmitConfig:
@@ -291,114 +303,12 @@ def skip_cli_entries(
 
 
 def coerce_config(config: Any) -> EmitConfig:
-    """An EmitConfig from what the engine passes.
-
-    Accepted: an EmitConfig; the engine's ``schema.CanonicalConfig``; an
-    object with ``to_emit_config()``; or an object with ``root`` (or
-    ``source``) and ``document`` (or ``data``), optionally with ``profiles``.
-    """
+    """An EmitConfig from what the engine passes: an EmitConfig or a ``schema.CanonicalConfig``."""
     if isinstance(config, EmitConfig):
         return config
     if isinstance(config, schema.CanonicalConfig):
         return EmitConfig.from_canonical(config)
-    convert = getattr(config, "to_emit_config", None)
-    if callable(convert):
-        result = convert()
-        if isinstance(result, EmitConfig):
-            return result
-    root = getattr(config, "root", None) or getattr(config, "source", None)
-    document = getattr(config, "document", None)
-    if document is None:
-        document = getattr(config, "data", None)
-    if root is not None and isinstance(document, Mapping):
-        return EmitConfig.from_document(
-            document, Path(root), profiles=getattr(config, "profiles", None)
-        )
     raise TypeError(f"cannot emit from a {type(config).__name__}")
-
-
-def _inside_root(root: Path, value: Any, where: str) -> Path:
-    if not isinstance(value, str) or not value or "\0" in value:
-        raise EmitError(f"{where}: must be a non-empty relative path")
-    relative = Path(value)
-    if relative.is_absolute() or ".." in relative.parts or value.startswith("~"):
-        raise EmitError(f"{where}: must stay inside the dotfiles directory")
-    path = root / relative
-    real_root = os.path.realpath(root)
-    real = os.path.realpath(path)
-    if os.path.commonpath([real_root, real]) != real_root:
-        raise EmitError(f"{where}: leaves the dotfiles directory through a symlink")
-    return path
-
-
-def _string_tuple(value: Any, where: str) -> tuple[str, ...]:
-    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-        raise EmitError(f"{where}: must be a list of strings")
-    return tuple(value)
-
-
-def _scope(table: Mapping[str, Any], where: str, profiles: Mapping[str, Profile]) -> Scope:
-    harnesses = profiles_list = None
-    if "harnesses" in table:
-        harnesses = _string_tuple(table["harnesses"], f"{where}.harnesses")
-        unknown = [name for name in harnesses if name not in EMIT_HARNESSES]
-        if unknown:
-            raise EmitError(f"{where}.harnesses: unknown harness {unknown[0]!r}")
-    if "profiles" in table:
-        profiles_list = _string_tuple(table["profiles"], f"{where}.profiles")
-        unknown = [name for name in profiles_list if name not in profiles]
-        if unknown:
-            raise EmitError(f"{where}.profiles: unknown profile {unknown[0]!r}")
-    return Scope(harnesses, profiles_list)
-
-
-def _table(value: Any, where: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise EmitError(f"{where}: must be a table")
-    return value
-
-
-def _profiles(document: Mapping[str, Any], override: Mapping[str, Any] | None) -> dict:
-    source = override if override is not None else document.get("profiles", {})
-    result = {}
-    for name, value in _table(source, "profiles").items():
-        if isinstance(value, Profile):
-            result[name] = value
-            continue
-        try:
-            result[name] = parse_profile(name, dict(_table(value, f"profiles.{name}")))
-        except ProfileError as error:
-            raise EmitError(str(error)) from None
-    return result
-
-
-def _front_matter(text: str) -> dict[str, str]:
-    lines = text.splitlines()
-    if not lines or lines[0].strip() != "---":
-        return {}
-    values = {}
-    for line in lines[1:]:
-        if line.strip() == "---":
-            return values
-        key, separator, value = line.partition(":")
-        if separator and key and not key[0].isspace():
-            values[key.strip()] = value.strip().strip("'\"")
-    return {}
-
-
-def _check_skill(path: Path, name: str) -> None:
-    where = f"skills: {name}"
-    if not SKILL_NAME_RE.match(name):
-        raise EmitError(f"{where}: name must match {SKILL_NAME_RE.pattern}")
-    files = skill_files(path, name)
-    skill_md = next((text for relative, _, text in files if relative == "SKILL.md"), None)
-    if skill_md is None:
-        raise EmitError(f"{where}: SKILL.md is missing")
-    front = _front_matter(skill_md)
-    if front.get("name") != name:
-        raise EmitError(f"{where}: SKILL.md front matter name must be {name!r}")
-    if not front.get("description"):
-        raise EmitError(f"{where}: SKILL.md front matter needs a description")
 
 
 def skill_files(path: Path, name: str) -> list[tuple[str, str, str]]:
@@ -433,107 +343,6 @@ def skill_files(path: Path, name: str) -> list[tuple[str, str, str]]:
                 raise EmitError(f"{where}: {relative} is not UTF-8 text") from None
             found.append((relative, fmt, text))
     return sorted(found)
-
-
-def _from_document(
-    document: Mapping[str, Any], root: Path, profiles_override: Mapping[str, Any] | None
-) -> EmitConfig:
-    schema = document.get("schema")
-    if schema is not None and schema != DOTFILES_SCHEMA:
-        raise EmitError(f"schema: expected {DOTFILES_SCHEMA!r}, got {schema!r}")
-    root = Path(os.path.abspath(root))
-    profiles = _profiles(document, profiles_override)
-
-    section = _table(document.get("instructions", {}), "instructions")
-    instructions = tuple(
-        _inside_root(root, item, "instructions.files")
-        for item in _string_tuple(section.get("files", []), "instructions.files")
-    )
-    per_harness = {}
-    for harness, table in _table(section.get("harness", {}), "instructions.harness").items():
-        if harness not in EMIT_HARNESSES:
-            raise EmitError(f"instructions.harness.{harness}: unknown harness")
-        where = f"instructions.harness.{harness}.files"
-        per_harness[harness] = tuple(
-            _inside_root(root, item, where)
-            for item in _string_tuple(_table(table, where).get("files", []), where)
-        )
-
-    section = _table(document.get("skills", {}), "skills")
-    overrides = _table(section.get("overrides", {}), "skills.overrides")
-    skills = {}
-    for item in _string_tuple(section.get("dirs", []), "skills.dirs"):
-        directory = _inside_root(root, item, "skills.dirs")
-        if not directory.is_dir():
-            raise EmitError(f"skills.dirs: {item} is not a directory")
-        for child in sorted(directory.iterdir()):
-            if child.is_symlink() or not child.is_dir() or not (child / "SKILL.md").is_file():
-                continue
-            if child.name in skills:
-                raise EmitError(f"skills: two skills are named {child.name!r}")
-            _check_skill(child, child.name)
-            scope = _scope(
-                _table(overrides.get(child.name, {}), f"skills.overrides.{child.name}"),
-                f"skills.overrides.{child.name}", profiles,
-            )
-            skills[child.name] = Skill(child.name, child, scope)
-    for name in overrides:
-        if name not in skills:
-            raise EmitError(f"skills.overrides.{name}: no such skill")
-
-    servers = []
-    for name, table in _table(document.get("mcp_servers", {}), "mcp_servers").items():
-        servers.append(_server(name, _table(table, f"mcp_servers.{name}"), profiles))
-    return EmitConfig(
-        root=root,
-        instructions=instructions,
-        harness_instructions=MappingProxyType(per_harness),
-        skills=tuple(skills.values()),
-        mcp_servers=tuple(servers),
-        profiles=MappingProxyType(profiles),
-    )
-
-
-def _server(name: str, table: Mapping[str, Any], profiles: Mapping[str, Profile]) -> McpServer:
-    where = f"mcp_servers.{name}"
-    if not NAME_RE.match(name):
-        raise EmitError(f"{where}: name must match {NAME_RE.pattern}")
-    if name == RESERVED_SERVER:
-        raise EmitError(f"{where}: the name {RESERVED_SERVER} is reserved")
-    if ("command" in table) == ("url" in table):
-        raise EmitError(f"{where}: needs exactly one of command or url")
-    command = None
-    if "command" in table:
-        command = _string_tuple(table["command"], f"{where}.command")
-        if not command or not command[0]:
-            raise EmitError(f"{where}.command: must start with a non-empty command")
-    env = table.get("env", [])
-    if isinstance(env, Mapping):
-        raise EmitError(
-            f"{where}.env: list variable names only; values belong in the agent's environment"
-        )
-    env = _string_tuple(env, f"{where}.env")
-    for item in env:
-        if not ENV_NAME_RE.match(item):
-            raise EmitError(f"{where}.env: {item!r} is not a variable name")
-    url = table.get("url")
-    if url is not None:
-        if not isinstance(url, str) or not (
-            url.startswith("https://")
-            or any(url.startswith(f"http://{host}") for host in _LOCAL_HOSTS)
-        ):
-            raise EmitError(f"{where}.url: must be https://, or http:// on localhost")
-    bearer = table.get("bearer_token_env")
-    if bearer is not None and (not isinstance(bearer, str) or not ENV_NAME_RE.match(bearer)):
-        raise EmitError(f"{where}.bearer_token_env: must be a variable name")
-    cwd = table.get("cwd")
-    if cwd is not None and (not isinstance(cwd, str) or not (
-        cwd.startswith("~/") or os.path.isabs(cwd))):
-        raise EmitError(f"{where}.cwd: must be absolute or start with ~/")
-    enabled = table.get("enabled", True)
-    if not isinstance(enabled, bool):
-        raise EmitError(f"{where}.enabled: must be true or false")
-    return McpServer(name, command, cwd, env, url, bearer, enabled, _scope(table, where, profiles))
 
 
 # Targets

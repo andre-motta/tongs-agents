@@ -142,8 +142,41 @@ def test_wait_defaults(calls, monkeypatch):
 
 
 def test_wait_rejects_unknown_until():
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as raised:
         invoke(["wait", LAUNCH, "--until", "finished"])
+    assert raised.value.code == commands.EXIT_USAGE == control.EXIT_ERROR
+
+
+@pytest.mark.parametrize("argv", [
+    ["wait", LAUNCH, "--until", "donee"],
+    ["wait", "--until", "bogus", LAUNCH],
+    ["wait", LAUNCH, "--timeout", "soon"],
+    ["wait"],
+    ["wait", LAUNCH, "--bogus"],
+    ["send"],
+    ["send", LAUNCH],
+    ["read", LAUNCH, "--lines", "x"],
+    ["agent-status", "--nope"],
+    ["no-such-verb"],
+])
+def test_usage_errors_exit_1_not_the_timeout_code(calls, monkeypatch, capsys, argv):
+    for name in ("send", "read", "wait", "status", "list_statuses"):
+        monkeypatch.setattr(control, name, calls.record(name))
+    monkeypatch.setattr(sys, "argv", ["tongs-agents", *argv])
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+    assert raised.value.code == control.EXIT_ERROR
+    assert raised.value.code != control.EXIT_TIMEOUT
+    assert "usage: tongs-agents" in capsys.readouterr().err
+    assert calls == []
+
+
+def test_help_still_exits_0(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["tongs-agents", "wait", "--help"])
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+    assert raised.value.code == 0
+    assert "--until" in capsys.readouterr().out
 
 
 def test_agent_status_json_for_one_launch(calls, monkeypatch, capsys):

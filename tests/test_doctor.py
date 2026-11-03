@@ -109,7 +109,7 @@ def test_config_dir_option_validates(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["tongs-agents", "doctor", "--config-dir", "zsh=/x"])
     with pytest.raises(SystemExit) as raised:
         cli.main()
-    assert raised.value.code == 2
+    assert raised.value.code == 1
     assert "KIND=DIR" in capsys.readouterr().err
 
 

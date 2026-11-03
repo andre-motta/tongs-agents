@@ -195,11 +195,11 @@ def test_an_emitter_refuses_another_harness_target(world):
         EMITTERS["claude"].plan(load(world), target(world, "codex"))
 
 
-def test_plan_accepts_an_engine_object_with_root_and_document(world):
+def test_plan_refuses_an_untyped_engine_object(world):
     document = tomllib.loads((FIXTURE / "agentic.toml").read_text())
     engine_config = SimpleNamespace(root=FIXTURE, document=document, profiles=world.profiles)
-    changes = EMITTERS["codex"].plan(engine_config, target(world, "codex"))
-    assert {change.kind for change in changes} == {"create"}
+    with pytest.raises(TypeError, match="SimpleNamespace"):
+        EMITTERS["codex"].plan(engine_config, target(world, "codex"))
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
@@ -657,9 +657,9 @@ def test_profile_narrowing_selects_targets(world):
     ("mcp_servers", {"x": {"command": ["a"], "url": "https://h"}}, "exactly one"),
     ("mcp_servers", {"x": {"url": "http://example.invalid"}}, "https"),
     ("mcp_servers", {"x": {"command": ["a"], "env": ["lower"]}}, "variable name"),
-    ("instructions", {"files": ["../outside.md"]}, "inside the dotfiles"),
-    ("instructions", {"files": ["/etc/hostname"]}, "inside the dotfiles"),
-    ("skills", {"dirs": ["skills"], "overrides": {"nope": {}}}, "no such skill"),
+    ("instructions", {"files": ["../outside.md"]}, "relative to the dotfiles"),
+    ("instructions", {"files": ["/etc/hostname"]}, "relative to the dotfiles"),
+    ("skills", {"dirs": ["skills"], "overrides": {"nope": {}}}, "no skill named"),
     ("mcp_servers", {"x": {"command": ["a"], "profiles": ["ghost"]}}, "unknown profile"),
 ])
 def test_invalid_canonical_config_is_refused(world, key, value, message):
@@ -679,7 +679,7 @@ def test_skill_contents_are_checked(world, tmp_path):
         load(world, root=root)
     (skill / "link.md").unlink()
     (skill / "SKILL.md").write_text("---\nname: other\ndescription: x\n---\n")
-    with pytest.raises(EmitError, match="name must be 'release-notes'"):
+    with pytest.raises(EmitError, match="name must equal 'release-notes'"):
         load(world, root=root)
 
 

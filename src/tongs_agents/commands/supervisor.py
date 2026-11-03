@@ -2,8 +2,9 @@
 
 They drive only panes that tongs-agents spawned and verifies now; every call
 goes through ``tongs_agents.control`` and is audited there. Exit codes:
-0 ok, 1 error, 2 timeout, 3 blocked (needs you), 4 agent exited, 5 refused
-(not spawned or not verified by tongs-agents), 6 multiplexer unsupported.
+0 ok, 1 error (usage errors included, see ``commands.EXIT_USAGE``), 2 timeout,
+3 blocked (needs you), 4 agent exited, 5 refused (not spawned or not verified
+by tongs-agents), 6 multiplexer unsupported.
 
 This module registers several verbs through ``COMMANDS``.
 """
