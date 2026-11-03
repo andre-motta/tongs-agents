@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import owned, pi_install, toml_tables
+from tongs_agents import cli, owned, pi_install, toml_tables
 from tongs_agents.config_layer import emitters, schema
 from tongs_agents.config_layer.emitters import (
     EMITTERS,
@@ -325,7 +325,7 @@ def test_codex_layout(world):
                                 "env_vars": ["EXAMPLE_ISSUES_TOKEN"]}
     assert tables["notes"] == {"command": str(world.home / "bin" / "example-notes-mcp"),
                                "cwd": str(world.home / "notes")}
-    assert tables["tongs-agents"]["env_vars"] == ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]
+    assert tables["tongs-agents"] == cli.codex_mcp_table()
     assert set(tables) == {"issues", "notes", "tongs-agents"}
     assert "# tongs-agents" not in (directory / "config.toml").read_text()
     assert world.cli.calls == []
@@ -584,8 +584,41 @@ def test_m1_entries_are_adopted(world):
         'args = ["-m", "tongs_agents.mcp_server"]\n')
     plan = emit(world, "codex", load(world, mcp_servers={}))
     assert any("adopted" in note for note in plan.notes)
-    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"][
-        "env_vars"] == ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]
+    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"] == (
+        cli.codex_mcp_table())
+
+
+def test_install_and_apply_write_the_same_codex_table(world):
+    config_toml = world.dirs["codex"] / "config.toml"
+    assert cli._install_codex_mcp(world.dirs["codex"])
+    installed = config_toml.read_bytes()
+    plan = emit(world, "codex", load(world, mcp_servers={}))
+    assert any("adopted" in note for note in plan.notes)
+    assert config_toml.read_bytes() == installed
+
+    assert cli._install_codex_mcp(world.dirs["codex"])
+    assert config_toml.read_bytes() == installed
+    plan = EMITTERS["codex"].plan_full(load(world, mcp_servers={}), target(world, "codex"))
+    assert all(change.kind == "unchanged" for change in plan.changes
+               if change.path == config_toml)
+
+
+def test_apply_replaces_a_table_recorded_with_the_old_env_vars(world):
+    emit(world, "codex", load(world, mcp_servers={}))
+    config_toml = world.dirs["codex"] / "config.toml"
+    old = {**cli.codex_mcp_table(), "env_vars": ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]}
+    config_toml.write_text(toml_tables.render_tables(
+        config_toml.read_text(), {"tongs-agents": old}))
+    entries = owned.manifest_entries_for(target(world, "codex"))
+    recorded = dict(entries["toml-table:tongs-agents"], sha256=_common.digest_value(old))
+    changes = owned.ChangeSet()
+    changes.record_entries(target(world, "codex"),
+                           {**entries, "toml-table:tongs-agents": recorded})
+    changes.commit()
+
+    emit(world, "codex", load(world, mcp_servers={}))
+    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"] == (
+        cli.codex_mcp_table())
 
 
 def test_a_failed_cli_step_keeps_the_previous_record(world):
