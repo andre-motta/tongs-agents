@@ -86,3 +86,94 @@ async def test_mcp_protocol_lists_tools_and_returns_fleet_status(
         "running-session",
         "waiting-session",
     }
+
+
+FLEET_TOOLS = {
+    "fleet_status",
+    "fleet_session",
+    "fleet_sessions_needing_attention",
+    "fleet_focus",
+    "fleet_cleanup",
+}
+CONTROL_TOOLS = {"agents_spawn", "agents_send", "agents_status", "agents_wait"}
+
+
+async def _list_and_call(server, name=None, arguments=None):
+    client_to_server_send, client_to_server_receive = anyio.create_memory_object_stream(0)
+    server_to_client_send, server_to_client_receive = anyio.create_memory_object_stream(0)
+    async with anyio.create_task_group() as task_group:
+        task_group.start_soon(
+            server._mcp_server.run,
+            client_to_server_receive,
+            server_to_client_send,
+            server._mcp_server.create_initialization_options(),
+        )
+        async with ClientSession(server_to_client_receive, client_to_server_send) as session:
+            await session.initialize()
+            tools = await session.list_tools()
+            result = None if name is None else await session.call_tool(name, arguments)
+        task_group.cancel_scope.cancel()
+    return tools, result
+
+
+def _write_control(tmp_path, enabled):
+    directory = tmp_path / "config"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / "config.toml"
+    path.write_text(f"[control]\nmcp_enabled = {str(enabled).lower()}\n")
+    path.chmod(0o600)
+    return path
+
+
+@pytest.mark.asyncio
+async def test_control_tools_are_absent_when_control_is_disabled(tmp_path):
+    _write_control(tmp_path, False)
+    assert mcp_server.control_enabled() is False
+    server = mcp_server.create_server(mcp_server.control_enabled())
+    tools, _ = await asyncio.wait_for(_list_and_call(server), timeout=5)
+    assert {tool.name for tool in tools.tools} == FLEET_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_control_tools_are_listed_when_enabled_and_take_no_command(tmp_path):
+    _write_control(tmp_path, True)
+    assert mcp_server.control_enabled() is True
+    server = mcp_server.create_server(mcp_server.control_enabled())
+    tools, _ = await asyncio.wait_for(_list_and_call(server), timeout=5)
+    assert {tool.name for tool in tools.tools} == FLEET_TOOLS | CONTROL_TOOLS
+    parameters = {
+        tool.name: set(tool.inputSchema.get("properties", {}))
+        for tool in tools.tools if tool.name in CONTROL_TOOLS
+    }
+    assert parameters == {
+        "agents_spawn": {"profile"},
+        "agents_send": {"launch_id", "text"},
+        "agents_status": {"launch_id"},
+        "agents_wait": {"launch_id", "until", "timeout_s"},
+    }
+
+
+def test_an_invalid_config_leaves_control_off(tmp_path, capsys):
+    path = _write_control(tmp_path, True)
+    path.write_text("[control]\nmcp_enabled = 1\n")
+    assert mcp_server.control_enabled() is False
+    assert "MCP control tools off" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_a_control_call_outside_a_launched_pane_is_refused(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("TONGS_AGENTS_LAUNCH_ID", raising=False)
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    _write_control(tmp_path, True)
+    server = mcp_server.create_server(True)
+    _, result = await asyncio.wait_for(
+        _list_and_call(server, "agents_send", {"launch_id": "a" * 32, "text": "hi"}),
+        timeout=5,
+    )
+    payload = json.loads(result.content[0].text)
+    assert payload["ok"] is False
+    assert (payload["outcome"], payload["exit_code"]) == ("refused", 5)
+    audit = (tmp_path / "state" / "audit" / "control.jsonl").read_text().splitlines()
+    assert json.loads(audit[-1])["actor"] == "mcp"

@@ -30,13 +30,17 @@ MIN_REFRESH_INTERVAL = 0.5
 MAX_REFRESH_INTERVAL = 3600.0
 DEFAULT_SEND_DELAY_MS = 150
 MAX_SEND_DELAY_MS = 5000
+DEFAULT_MCP_RATE_PER_MINUTE = 6
+MAX_MCP_RATE_PER_MINUTE = 60
 MAX_DEFAULT_PROFILES = 32
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 THEME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 
 WORKSPACE_KEYS = frozenset({"session", "default_profiles", "tongs_tab", "multiplexer"})
 UI_KEYS = frozenset({"refresh_interval", "notify_level", "theme", "compact"})
-CONTROL_KEYS = frozenset({"mcp_enabled", "send_delay_ms"})
+CONTROL_KEYS = frozenset({
+    "mcp_enabled", "send_delay_ms", "mcp_any_target", "mcp_rate_per_minute",
+})
 
 
 class AppConfigError(ValueError):
@@ -63,6 +67,8 @@ class UISettings:
 class ControlSettings:
     mcp_enabled: bool = False
     send_delay_ms: int = DEFAULT_SEND_DELAY_MS
+    mcp_any_target: bool = False
+    mcp_rate_per_minute: int = DEFAULT_MCP_RATE_PER_MINUTE
 
 
 @dataclass(frozen=True)
@@ -166,9 +172,19 @@ def parse_control(section: dict) -> ControlSettings:
         raise AppConfigError(
             f"{where}.send_delay_ms: must be a whole number from 0 to {MAX_SEND_DELAY_MS}"
         )
+    rate = section.get("mcp_rate_per_minute", DEFAULT_MCP_RATE_PER_MINUTE)
+    if isinstance(rate, bool) or not isinstance(rate, int) or not (
+        1 <= rate <= MAX_MCP_RATE_PER_MINUTE
+    ):
+        raise AppConfigError(
+            f"{where}.mcp_rate_per_minute: must be a whole number from 1 to "
+            f"{MAX_MCP_RATE_PER_MINUTE}"
+        )
     return ControlSettings(
         mcp_enabled=_bool(section, "mcp_enabled", where, False),
         send_delay_ms=delay,
+        mcp_any_target=_bool(section, "mcp_any_target", where, False),
+        mcp_rate_per_minute=rate,
     )
 
 

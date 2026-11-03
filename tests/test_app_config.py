@@ -40,7 +40,9 @@ def test_an_absent_file_gives_the_defaults():
     assert config.ui == UISettings(
         refresh_interval=2.0, notify_level="all", theme="textual-dark", compact=False,
     )
-    assert config.control == ControlSettings(mcp_enabled=False, send_delay_ms=150)
+    assert config.control == ControlSettings(
+        mcp_enabled=False, send_delay_ms=150, mcp_any_target=False, mcp_rate_per_minute=6,
+    )
 
 
 def test_every_section_is_parsed(tmp_path):
@@ -63,11 +65,13 @@ compact = true
 [control]
 mcp_enabled = true
 send_delay_ms = 0
+mcp_any_target = true
+mcp_rate_per_minute = 12
 """)
     config = load_app_config()
     assert config.workspace == WorkspaceSettings("work.1", ("alpha", "beta"), False, "tmux")
     assert config.ui == UISettings(5.0, "waiting", "nord", True)
-    assert config.control == ControlSettings(True, 0)
+    assert config.control == ControlSettings(True, 0, True, 12)
 
 
 def test_a_partial_section_keeps_the_other_defaults(tmp_path):
@@ -119,6 +123,13 @@ compact = true
         ("[control]\nsend_delay_ms = 1.5\n", "control.send_delay_ms: must be a whole number"),
         ("[control]\nsend_delay_ms = -1\n", "control.send_delay_ms"),
         ("[control]\nsend_delay_ms = 60000\n", "control.send_delay_ms"),
+        ("[control]\nmcp_any_target = 1\n", "control.mcp_any_target: must be true or false"),
+        ("[control]\nmcp_rate_per_minute = 0\n",
+         "control.mcp_rate_per_minute: must be a whole number from 1 to 60"),
+        ("[control]\nmcp_rate_per_minute = 61\n", "control.mcp_rate_per_minute"),
+        ("[control]\nmcp_rate_per_minute = true\n", "control.mcp_rate_per_minute"),
+        ("[control]\nmcp_rate_per_minute = 2.5\n", "control.mcp_rate_per_minute"),
+        ("[control]\nmcp_targets = 1\n", "control.mcp_targets: unknown key"),
         ("ui = 3\n", "ui: must be a table"),
         ("[ui\n", "invalid TOML"),
     ],
