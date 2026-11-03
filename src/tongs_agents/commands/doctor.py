@@ -3,6 +3,11 @@
 Doctor only reads. It runs no harness CLI and never writes a file. Each
 finding is a ``Check`` with a level; the exit status is 0 when nothing is
 worse than ``info``, 1 for a warning and 2 for an error.
+
+``doctor --fix NAME`` is the one exception: it runs only the named fix, the
+``doctor_fix(args)`` of the command module called NAME (``--fix zellij``
+installs the pinned Zellij build), and returns that fix's exit status. A
+module that offers a fix names it in its checks' remediation.
 """
 
 from __future__ import annotations
@@ -11,6 +16,7 @@ import argparse
 import json
 import os
 import shutil
+import sys
 import tomllib
 from dataclasses import dataclass
 from importlib import metadata
@@ -74,6 +80,11 @@ def add_arguments(parser):
         "--config-dir", dest="config_dirs", action="append", default=[],
         type=_config_dir_option, metavar="KIND=DIR",
         help="Also check KIND (claude, codex or pi) monitoring in DIR (repeatable)",
+    )
+    parser.add_argument(
+        "--fix", dest="fixes", action="append", default=[], metavar="NAME",
+        help="Run the named fix instead of the checks (repeatable); "
+             "'zellij' installs the pinned Zellij build",
     )
 
 
@@ -454,7 +465,39 @@ def _print_text(checks):
         print("Everything checked is monitored.")
 
 
+def available_fixes(modules=None) -> dict:
+    """``{name: doctor_fix}`` for every command module that offers a fix."""
+    modules = commands.discover() if modules is None else modules
+    return {
+        commands.command_name(module): module.doctor_fix
+        for module in modules
+        if callable(getattr(module, "doctor_fix", None))
+    }
+
+
+def run_fixes(args, names) -> int:
+    fixes = available_fixes()
+    unknown = [name for name in names if name not in fixes]
+    if unknown:
+        print(
+            f"tongs-agents doctor: no fix named {unknown[0]!r:.80}; available: "
+            f"{', '.join(sorted(fixes)) or 'none'}",
+            file=sys.stderr,
+        )
+        return EXIT_CODES["error"]
+    if getattr(args, "json", False):
+        print("tongs-agents doctor: --fix cannot be combined with --json", file=sys.stderr)
+        return EXIT_CODES["error"]
+    code = 0
+    for name in dict.fromkeys(names):
+        code = max(code, fixes[name](args) or 0)
+    return code
+
+
 def run(args) -> int:
+    fixes = getattr(args, "fixes", None) or []
+    if fixes:
+        return run_fixes(args, fixes)
     checks = collect(args)
     code = exit_code(checks)
     if getattr(args, "json", False):

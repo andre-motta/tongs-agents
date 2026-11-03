@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "item": "M2-E (#22)",
+  "label": "live",
+  "date": "2026-11-03",
+  "platform": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "python": "3.14.8",
+    "os": "Fedora 44"
+  },
+  "base_commit": "784dfa86ff6893fe8715c3ec3c1ea35d17da9d6a",
+  "tree": "M2-E working tree with its changes uncommitted on base_commit; Python 3.14 takes the tarfile data filter path (the 3.11 fallback is covered by tests)",
+  "isolation": "fresh temp root for HOME, XDG config/state/cache/data and TONGS_AGENTS_STATE_DIR/CONFIG_DIR; PATH = venv bin, /usr/bin, /bin (no zellij)",
+  "zellij_on_path": null,
+  "pin": {
+    "version": "0.45.1",
+    "flavor": "no-web",
+    "asset": "zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+    "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+    "sha256": "d7bda1e18c30a688833ae7627f1d6a253bbba5349a4bc48e4f0ec008aaf75ed1",
+    "size": 14961925,
+    "binary_sha256": "0ec6ef07b63c6355c02ce18343d40ef5ef5af19e25313ea9009c8fceda29e94f"
+  },
+  "doctor_before": [
+    {
+      "name": "workspace-zellij",
+      "level": "info",
+      "message": "zellij is not on PATH; 'tongs-agents workspace' needs zellij 0.44.2 or newer",
+      "remediation": "Install zellij 0.44.2 or newer to use the workspace",
+      "details": []
+    },
+    {
+      "name": "zellij-managed",
+      "level": "info",
+      "message": "zellij 0.44.2 or newer is not available; tongs-agents can install the pinned official build into its state directory (downloads from GitHub)",
+      "remediation": "tongs-agents doctor --fix zellij",
+      "details": []
+    }
+  ],
+  "status_before": {
+    "argv": [
+      "tongs-agents",
+      "zellij"
+    ],
+    "exit_code": 1,
+    "stdout": [
+      "zellij: not found (needs 0.44.2 or newer); run 'tongs-agents doctor --fix zellij'"
+    ],
+    "stderr": []
+  },
+  "fix": {
+    "argv": [
+      "tongs-agents",
+      "doctor",
+      "--fix",
+      "zellij"
+    ],
+    "exit_code": 0,
+    "stdout": [
+      "Downloading https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+      "Verified sha256 d7bda1e18c30a688833ae7627f1d6a253bbba5349a4bc48e4f0ec008aaf75ed1",
+      "Installed zellij 0.45.1 at $ROOT/tongs-state/bin/zellij-0.45.1/zellij",
+      "Linked $ROOT/tongs-state/bin/zellij -> zellij-0.45.1/zellij"
+    ],
+    "stderr": []
+  },
+  "installed": {
+    "bin_dir": "$ROOT/tongs-state/bin",
+    "bin_dir_mode": "0o700",
+    "version_dir": "$ROOT/tongs-state/bin/zellij-0.45.1",
+    "version_dir_mode": "0o700",
+    "binary_mode": "0o700",
+    "link_is_symlink": true,
+    "link_target": "zellij-0.45.1/zellij",
+    "bin_dir_entries": [
+      "zellij",
+      "zellij-0.45.1"
+    ],
+    "binary_sha256": "0ec6ef07b63c6355c02ce18343d40ef5ef5af19e25313ea9009c8fceda29e94f",
+    "binary_sha256_matches_pin": true,
+    "version_output": "zellij 0.45.1"
+  },
+  "doctor_after": [
+    {
+      "name": "workspace-zellij",
+      "level": "ok",
+      "message": "zellij 0.45.1 at $ROOT/tongs-state/bin/zellij",
+      "remediation": "",
+      "details": []
+    },
+    {
+      "name": "zellij-managed",
+      "level": "ok",
+      "message": "zellij 0.45.1 from managed",
+      "remediation": "",
+      "details": []
+    }
+  ],
+  "status_after": {
+    "argv": [
+      "tongs-agents",
+      "zellij"
+    ],
+    "exit_code": 0,
+    "stdout": [
+      "zellij 0.45.1 at $ROOT/tongs-state/bin/zellij (managed)"
+    ],
+    "stderr": []
+  },
+  "refix_when_satisfied": {
+    "argv": [
+      "tongs-agents",
+      "doctor",
+      "--fix",
+      "zellij"
+    ],
+    "exit_code": 0,
+    "stdout": [
+      "zellij 0.45.1 at $ROOT/tongs-state/bin/zellij meets the floor; nothing to fix"
+    ],
+    "stderr": []
+  },
+  "result": "pass"
+}
