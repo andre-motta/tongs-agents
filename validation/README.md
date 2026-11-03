@@ -185,6 +185,34 @@ to 0.43.1 a scratch wrapper substituted the fixture listing that needs
 `list-panes` (0.44.0+) so the adapter steps could run; that wrapper is not
 committed.
 
+### Zellij pin table
+
+[`src/tongs_agents/data/zellij_pins.json`](../src/tongs_agents/data/zellij_pins.json)
+is the one list of Zellij releases that hosted CI downloads, and the table a
+later managed download reads. It is packaged in the wheel.
+
+| Key | Meaning |
+| --- | --- |
+| `floor` | Lowest supported release (`X.Y.Z`) |
+| `validated_ceiling` | Highest validated release; equals `ZellijAPI`'s `VALIDATED_VERSION` |
+| `pins.<X.Y.Z>.<platform>` | One entry per release and platform; only `linux-x86_64` today |
+
+Each entry has these keys:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `flavor` | yes | `no-web` or `full` upstream build |
+| `asset` | yes | Release asset name, for example `zellij-no-web-x86_64-unknown-linux-musl.tar.gz` |
+| `url` | yes | `https://github.com/zellij-org/zellij/releases/download/v<X.Y.Z>/<asset>` |
+| `sha256` | yes | SHA-256 of the tarball, checked before extraction |
+| `size` | yes | Tarball size in bytes |
+| `binary_sha256` | optional | SHA-256 of the extracted `zellij` binary (upstream's `.sha256sum` covers the binary, not the tarball) |
+
+`binary_sha256` is optional in the schema, so a consumer must accept it and
+must not reject an entry without it. The hosted workflow reads it for every
+`linux-x86_64` `no-web` pin it downloads, so those pins must carry it;
+`tests/test_zellij_pins.py` checks both rules. No other key is allowed.
+
 ## Agent workspace on Linux
 
 ```console

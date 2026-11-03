@@ -39,6 +39,21 @@ def test_package_resource_is_the_source_file():
     assert _load() == json.loads((ROOT / PINS_RELATIVE).read_text(encoding="utf-8"))
 
 
+def _assert_entry(version, platform, entry):
+    assert platform in PLATFORMS, platform
+    assert REQUIRED <= set(entry) <= REQUIRED | OPTIONAL, (version, platform)
+    prefix = FLAVORS[entry["flavor"]]
+    if entry["flavor"] == "full":
+        assert not entry["asset"].startswith(FLAVORS["no-web"])
+    assert entry["asset"] == f"{prefix}{PLATFORMS[platform]}.tar.gz"
+    assert entry["url"] == f"{RELEASES}v{version}/{entry['asset']}"
+    assert SHA256_RE.match(entry["sha256"]), (version, platform)
+    assert type(entry["size"]) is int and entry["size"] > 0
+    if "binary_sha256" in entry:
+        assert SHA256_RE.match(entry["binary_sha256"]), (version, platform)
+        assert entry["binary_sha256"] != entry["sha256"]
+
+
 def test_schema_is_valid():
     table = _load()
 
@@ -50,18 +65,37 @@ def test_schema_is_valid():
         _version(version)
         assert isinstance(platforms, dict) and platforms, version
         for platform, entry in platforms.items():
-            assert platform in PLATFORMS, platform
-            assert REQUIRED <= set(entry) <= REQUIRED | OPTIONAL, (version, platform)
-            prefix = FLAVORS[entry["flavor"]]
-            if entry["flavor"] == "full":
-                assert not entry["asset"].startswith(FLAVORS["no-web"])
-            assert entry["asset"] == f"{prefix}{PLATFORMS[platform]}.tar.gz"
-            assert entry["url"] == f"{RELEASES}v{version}/{entry['asset']}"
-            assert SHA256_RE.match(entry["sha256"]), (version, platform)
-            assert type(entry["size"]) is int and entry["size"] > 0
-            if "binary_sha256" in entry:
-                assert SHA256_RE.match(entry["binary_sha256"]), (version, platform)
-                assert entry["binary_sha256"] != entry["sha256"]
+            _assert_entry(version, platform, entry)
+
+
+def test_binary_sha256_is_an_optional_field():
+    version, platforms = next(iter(_load()["pins"].items()))
+    entry = dict(platforms["linux-x86_64"])
+    entry.pop("binary_sha256", None)
+
+    _assert_entry(version, "linux-x86_64", entry)
+    with pytest.raises(AssertionError):
+        _assert_entry(version, "linux-x86_64", {**entry, "binary_sha256": "not-a-digest"})
+
+
+def test_pins_downloaded_by_ci_carry_binary_sha256():
+    table = _load()
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert 'entry["binary_sha256"]' in text
+    for version, platforms in table["pins"].items():
+        entry = platforms.get("linux-x86_64", {})
+        if entry.get("flavor") == "no-web":
+            assert "binary_sha256" in entry, version
+
+
+def test_pin_table_fields_are_documented():
+    text = (ROOT / "validation" / "README.md").read_text(encoding="utf-8")
+    section = text[text.index("### Zellij pin table"):text.index("## Agent workspace")]
+
+    for field in sorted(REQUIRED | OPTIONAL):
+        assert f"`{field}`" in section, field
+    assert "| `binary_sha256` | optional |" in section
 
 
 def test_floor_and_ceiling_are_pinned_for_linux_no_web():

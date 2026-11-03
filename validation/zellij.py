@@ -20,6 +20,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -51,6 +52,7 @@ from tongs_agents.terminal_apis.zellij import ZellijAPI
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = REPO_ROOT / "validation" / "evidence" / "zellij-fedora44.json"
+VERSION_RE = re.compile(r"zellij (\d+\.\d+\.\d+)")
 LEGACY_DETAIL = (
     "session recorded before zellij pane capture; restart the agent"
     " session to enable selection"
@@ -496,6 +498,12 @@ def socket_dir_checks(api, client, io_dir, pids, envs, env, observations):
     }
 
 
+def observed_version(reported):
+    """The X.Y.Z of the binary this run exercised, from `zellij --version`."""
+    match = VERSION_RE.fullmatch((reported or "").strip())
+    return match.group(1) if match else None
+
+
 def cleanup(root, sessions, tracker):
     env = isolated_env(root)
     for name in sessions:
@@ -537,15 +545,19 @@ def validate(write=True, output=EVIDENCE):
     healthy_cleanup = (cleanup_result["survivors"] == 0 and cleanup_result["marker_strays"] == 0
                        and cleanup_result["marker_strays_after_run"] == 0
                        and cleanup_result["temp_dir_removed"])
+    reported = observations.pop("zellij_version", None)
+    observed = observed_version(reported)
+    passed = error is None and healthy_cleanup
     evidence = {
         "schema": "zellij-validation/1",
-        "result": "pass" if error is None and healthy_cleanup else "fail",
+        "result": "pass" if passed else "fail",
         "error": error,
-        "zellij_version": observations.pop("zellij_version", None),
-        "validated_versions": [zellij.VALIDATED_VERSION],
+        "zellij_version": reported,
+        "validated_versions": [observed] if passed and observed else [],
+        "adapter_validated_ceiling": zellij.VALIDATED_VERSION,
         "version_floor": (
-            "not established: only zellij " + zellij.VALIDATED_VERSION + " was probed and "
-            "validated; the adapter gates on behavior (nonzero exit, unknown subcommand or "
+            "not established: only zellij " + (observed or "<unknown>") + " was probed in "
+            "this run; the adapter gates on behavior (nonzero exit, unknown subcommand or "
             "unrecognized list-clients columns fail selection) rather than a version number"),
         "provenance": "live",
         "provenance_detail": (
@@ -574,6 +586,7 @@ def validate(write=True, output=EVIDENCE):
     }
     if not evidence["user_config_unchanged"] or evidence["user_zellij_cache_entries_for_run"]:
         evidence["result"] = "fail"
+        evidence["validated_versions"] = []
     redact = Redactor.for_host({str(root): "<tmp>", decoy: "<decoy>", session: "<session>",
                                 token: "<token>"})
     text, leaks = public_text(evidence, redact)
