@@ -1,9 +1,15 @@
-"""Download and install a pinned official Zellij build (Linux x86_64, no-web).
+"""Download and install a pinned official Zellij build (Linux x86_64).
 
 Only the explicit verbs ``tongs-agents zellij install`` and
 ``tongs-agents doctor --fix zellij`` call into this module, and it is the only
 tongs-agents code that opens a network connection. Nothing on the hook path
 imports it.
+
+Two flavors are pinned: ``no-web`` (the table's ``pins``, the default) and
+``web`` (``web_pins``, the full build with the web server, fetched only by
+``tongs-agents zellij install --web``). They install side by side: the no-web
+build behind ``state_dir()/bin/zellij`` and the web build behind
+``state_dir()/bin/zellij-web``, each in its own version directory.
 
 The steps, each refusing rather than guessing:
 
@@ -18,8 +24,8 @@ The steps, each refusing rather than guessing:
    ``zellij``; extract only that member, with tarfile's ``data`` filter when
    this Python has it, else by copying the checked member into a new file;
 5. check the binary's pinned sha256, move it into a new empty 0700
-   ``state_dir()/bin/zellij-<version>/`` and atomically repoint the
-   ``state_dir()/bin/zellij`` symlink at it.
+   ``state_dir()/bin/zellij-<version>/`` (``zellij-web-<version>/`` for the
+   web build) and atomically repoint the flavor's symlink at it.
 """
 
 from __future__ import annotations
@@ -46,16 +52,20 @@ from tongs_agents.multiplexers.zellij_binary import (
     MANAGED_NAME,
     managed_bin_dir,
     managed_link,
+    managed_web_link,
 )
 
 PINS_RESOURCE = ("data", "zellij_pins.json")
 SUPPORTED_PLATFORM = "linux-x86_64"
-FLAVOR = "no-web"
+NO_WEB = "no-web"
+WEB = "web"
+TABLES = {NO_WEB: "pins", WEB: "web_pins"}
 MEMBER = "zellij"
 TIMEOUT_SECONDS = 60
 CHUNK_BYTES = 1024 * 1024
 MAX_BINARY_BYTES = 256 * 1024 * 1024
 VERSION_DIR_PREFIX = "zellij-"
+VERSION_DIR_PREFIXES = {NO_WEB: VERSION_DIR_PREFIX, WEB: "zellij-web-"}
 _X86_64 = {"x86_64", "amd64"}
 
 
@@ -105,8 +115,11 @@ def platform_key() -> str | None:
     return None
 
 
-def select_pin(version: str | None = None, table: dict | None = None) -> Pin:
-    """The pinned no-web build for ``version`` (default: the validated ceiling)."""
+def select_pin(version: str | None = None, table: dict | None = None,
+               flavor: str = NO_WEB) -> Pin:
+    """The pinned ``flavor`` build for ``version`` (default: the validated ceiling)."""
+    if flavor not in TABLES:
+        raise DownloadError(f"unknown zellij flavor {flavor!r}")
     table = load_pins() if table is None else table
     key = platform_key()
     if key is None:
@@ -116,16 +129,19 @@ def select_pin(version: str | None = None, table: dict | None = None) -> Pin:
             f"{table['floor']} manually"
         )
     version = table["validated_ceiling"] if version is None else version
-    entry = table["pins"].get(version, {}).get(key)
+    pins = table.get(TABLES[flavor]) or {}
+    entry = pins.get(version, {}).get(key)
     if entry is None:
         raise DownloadError(
-            f"zellij {version} is not pinned for {key}; pinned: "
-            f"{', '.join(sorted(table['pins']))}"
+            f"zellij {version} ({flavor}) is not pinned for {key}; pinned: "
+            f"{', '.join(sorted(pins)) or 'none'}"
         )
-    if entry.get("flavor") != FLAVOR:
+    if entry.get("flavor") != flavor:
         raise DownloadError(
-            f"zellij {version} for {key} is pinned as {entry.get('flavor')!r}, not {FLAVOR!r}"
+            f"zellij {version} for {key} is pinned as {entry.get('flavor')!r}, not {flavor!r}"
         )
+    if flavor == WEB and not entry.get("binary_sha256"):
+        raise DownloadError(f"zellij {version} ({WEB}) is pinned without binary_sha256")
     pin = Pin(
         version=version, platform=key, flavor=entry["flavor"], asset=entry["asset"],
         url=entry["url"], sha256=entry["sha256"], size=entry["size"],
@@ -306,10 +322,10 @@ def repoint_link(link: Path, version_dir: Path) -> None:
 
 
 def install(version: str | None = None, opener=None, timeout: float = TIMEOUT_SECONDS,
-            report=None) -> Installed:
-    """Install the pinned build and repoint the managed link; refuse on any doubt."""
+            report=None, flavor: str = NO_WEB) -> Installed:
+    """Install the pinned build and repoint the flavor's link; refuse on any doubt."""
     report = report or (lambda message: None)
-    pin = select_pin(version)
+    pin = select_pin(version, flavor=flavor)
     paths.state_dir(create=True)
     bin_dir = paths.ensure_private_dir(managed_bin_dir())
     work = _new_private_dir(bin_dir, ".download-")
@@ -332,10 +348,10 @@ def install(version: str | None = None, opener=None, timeout: float = TIMEOUT_SE
                 f"extracted zellij sha256 {binary_sha} does not match the pinned "
                 f"{pin.binary_sha256}"
             )
-        version_dir = bin_dir / f"{VERSION_DIR_PREFIX}{pin.version}"
+        version_dir = bin_dir / f"{VERSION_DIR_PREFIXES[flavor]}{pin.version}"
         _replace_version_dir(staging, version_dir)
         os.chmod(version_dir, 0o700)
-        link = managed_link()
+        link = managed_web_link() if flavor == WEB else managed_link()
         repoint_link(link, version_dir)
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -346,7 +362,7 @@ def install(version: str | None = None, opener=None, timeout: float = TIMEOUT_SE
 
 
 __all__ = [
-    "DownloadError", "Installed", "Pin", "UnsupportedPlatform", "download",
+    "NO_WEB", "WEB", "DownloadError", "Installed", "Pin", "UnsupportedPlatform", "download",
     "extract_binary", "install", "load_pins", "platform_key",
     "repoint_link", "select_pin", "unsafe_member",
 ]

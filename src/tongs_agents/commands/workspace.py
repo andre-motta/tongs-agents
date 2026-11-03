@@ -44,6 +44,7 @@ from tongs_agents.multiplexers.zellij_binary import (
     ZELLIJ_CEILING,
     ZELLIJ_FLOOR,
     format_version,
+    new_session_options,
     zellij_binary,
     zellij_version,
 )
@@ -260,7 +261,8 @@ def _prepare_new_session(mux, zellij: str, session: str, profiles,
     except BaseException:
         _discard_new_session(token, records)
         raise
-    argv = [zellij, "--session", session, "--new-session-with-layout", str(path)]
+    argv = [zellij, "--session", session, "--new-session-with-layout", str(path),
+            *new_session_options(zellij)]
     return argv, token, records
 
 
