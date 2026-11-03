@@ -3,6 +3,15 @@
 [![Tests](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
 
+> [!WARNING]
+> **v0.10.0 is an experimental release.** Some features have not yet been
+> validated against real harnesses: OpenShell sandboxes, Codex `PreToolUse`
+> handling and Pi chat delivery, each harness refreshing its tool list when
+> a chat grant changes, and `claude mcp add` and `pi mcp add` against the
+> real CLIs. Expect rough edges, check the
+> [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md) for what is live, and report problems at
+> [github.com/andre-motta/tongs-agents/issues](https://github.com/andre-motta/tongs-agents/issues).
+
 tongs-agents is one workspace for the AI coding agents you run side by side.
 It starts Claude Code, Codex, Pi or any other command as real panes of a
 Zellij (or tmux) session, puts a sidebar next to them that shows which agent
@@ -126,8 +135,8 @@ what you want to do.
 ## MCP tools
 
 `tongs-agents install` registers the `tongs-agents` MCP server with Claude
-Code (`claude mcp add --scope user`) and Codex (`codex mcp add`) when those
-CLIs are on `PATH`. These read-only tools are always available:
+Code (`claude mcp add --scope user`) and Codex (a `[mcp_servers.tongs-agents]`
+table in its `config.toml`) when those CLIs are on `PATH`. These read-only tools are always available:
 
 | Tool | Description |
 | --- | --- |

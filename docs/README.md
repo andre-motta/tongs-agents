@@ -3,6 +3,15 @@ title: "tongs-agents documentation"
 description: "Tutorials, how-to guides, reference and background for tongs-agents, grouped by what you want to do."
 ---
 
+> [!WARNING]
+> **v0.10.0 is an experimental release.** Some features have not yet been
+> validated against real harnesses: OpenShell sandboxes, Codex `PreToolUse`
+> handling and Pi chat delivery, each harness refreshing its tool list when
+> a chat grant changes, and `claude mcp add` and `pi mcp add` against the
+> real CLIs. Expect rough edges, check the
+> [support matrix](support-matrix.md) for what is live, and report problems at
+> [github.com/andre-motta/tongs-agents/issues](https://github.com/andre-motta/tongs-agents/issues).
+
 tongs-agents runs your AI coding agents (Claude Code, Codex, Pi or any
 command) as panes of one Zellij or tmux session, with a sidebar that shows
 which one needs you. These pages are grouped by what you want to do:

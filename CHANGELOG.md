@@ -1,8 +1,13 @@
 # Changelog
 
-## Unreleased (v0.10.0)
+## 0.10.0 (experimental)
 
-The first release of tongs-agents on PyPI. It replaces claude-fleet-monitor
+The first release of tongs-agents on PyPI, published as an experimental
+release: OpenShell sandboxes, Codex `PreToolUse` handling, Pi chat delivery,
+harness tool-list refresh on chat grants, and `claude mcp add` and
+`pi mcp add` against the real CLIs are not yet validated against real
+harnesses. Report problems at
+<https://github.com/andre-motta/tongs-agents/issues>. It replaces claude-fleet-monitor
 0.9.x and ships milestones M0 to M7 of the
 [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md)
 together. Upgrading from claude-fleet-monitor? Read
