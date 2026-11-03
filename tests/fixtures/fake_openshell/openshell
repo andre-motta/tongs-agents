@@ -12,6 +12,14 @@ the keys of ``sandbox_to_json``, and keeps its state under
   with ``/sandbox`` map there, so ``sandbox exec --no-tty`` runs the command
   for real on the host against that tree (the bridge's pull script).
 
+M7-B adds ``sandbox list -o json`` (an array of the ``get`` objects),
+``sandbox get <name> --policy-only`` (the stored policy text: the
+``--policy`` file given at create when it exists, else a default), ``sandbox start|stop``
+(phase Ready or Stopped), ``sandbox download`` (upstream
+``sandbox_sync_down``: a directory's contents land in ``dest``, a file at
+``dest`` or ``dest/<basename>`` when ``dest`` is a directory), ``policy get``,
+``logs <name> -n N`` and a ``delete`` that prints upstream's messages.
+
 Uploads follow upstream ``sandbox_sync_up``: a directory lands at
 ``<dest>/<basename>`` (flat only for ``.``), so a nesting mistake shows up in
 ``fs/``.
@@ -19,8 +27,9 @@ Uploads follow upstream ``sandbox_sync_up``: a directory lands at
 Knobs: ``FAKE_OPENSHELL_VERSION`` (default ``0.1.6``),
 ``FAKE_OPENSHELL_PHASES`` (comma-separated phases returned by successive
 ``get`` calls after create, the last one sticks; default ``Ready``),
-``FAKE_OPENSHELL_FAIL`` (comma-separated subcommands that fail) and
-``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
+``FAKE_OPENSHELL_FAIL`` (comma-separated subcommands that fail; ``status``
+fails ``status -o json``), ``FAKE_OPENSHELL_LOG_TEXT`` (printed by ``logs``
+instead of numbered lines) and ``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
 instead of printing them). It never starts a gateway or a container.
 """
 
@@ -37,6 +46,11 @@ HOME = Path(os.environ["FAKE_OPENSHELL_HOME"])
 STATE = HOME / "state.json"
 FS = HOME / "fs"
 PREFIX = "/sandbox"
+DEFAULT_POLICY = """version: 1
+filesystem_policy:
+  include_workdir: true
+network_policies: {}
+"""
 
 
 def load():
@@ -145,10 +159,14 @@ def create(args):
         fail(f"sandbox '{name}' already exists")
     labels = dict(item.split("=", 1) for item in take(args, "--label"))
     uploads = take(args, "--upload")
+    policies = take(args, "--policy")
+    policy = DEFAULT_POLICY
+    if policies and Path(policies[0]).is_file():
+        policy = Path(policies[0]).read_text()
     phases = os.environ.get("FAKE_OPENSHELL_PHASES", "Ready").split(",")
     data["sandboxes"][name] = {
         "id": uuid.uuid4().hex, "name": name, "labels": labels, "phases": phases,
-        "settings": {}, "command": command, "args": args,
+        "settings": {}, "command": command, "args": args, "policy": policy,
     }
     save(data)
     (FS / name).mkdir(parents=True, exist_ok=True)
@@ -161,11 +179,16 @@ def create(args):
 def get(args):
     if failing("get"):
         fail("status: Unavailable, message: \"gateway unreachable\"")
+    policy_only = "--policy-only" in args
+    args = [arg for arg in args if arg != "--policy-only"]
     name = args[0]
     data = load()
     sandbox = data["sandboxes"].get(name)
     if sandbox is None:
         fail('status: NotFound, message: "sandbox not found"')
+    if policy_only:
+        print(sandbox.get("policy", DEFAULT_POLICY), end="")
+        return
     print(json.dumps(sandbox_json(sandbox), indent=2))
     if len(sandbox["phases"]) > 1:
         sandbox["phases"].pop(0)
@@ -228,11 +251,91 @@ def settings(args):
 
 
 def delete(args):
+    if failing("delete"):
+        fail("delete failed")
     data = load()
     for name in args:
-        data["sandboxes"].pop(name, None)
+        if data["sandboxes"].pop(name, None) is None:
+            print(f"! Sandbox {name} not found")
+        else:
+            print(f"Deleted sandbox {name}")
         shutil.rmtree(FS / name, ignore_errors=True)
     save(data)
+
+
+def list_(args):
+    if failing("list"):
+        fail("status: Unavailable, message: \"gateway unreachable\"")
+    if args[-2:] != ["-o", "json"]:
+        fail("the fake only supports sandbox list -o json", 2)
+    sandboxes = load()["sandboxes"].values()
+    print(json.dumps([sandbox_json(sandbox) for sandbox in sandboxes], indent=2))
+
+
+def lifecycle(verb, args):
+    if failing(verb):
+        fail(f"{verb} failed")
+    name = args[0]
+    data = load()
+    sandbox = data["sandboxes"].get(name)
+    if sandbox is None:
+        fail('status: NotFound, message: "sandbox not found"')
+    sandbox["phases"] = ["Ready" if verb == "start" else "Stopped"]
+    save(data)
+    print(f"{'Started' if verb == 'start' else 'Stopped'} sandbox {name}")
+
+
+def download(args):
+    """Upstream ``sandbox_sync_down`` at ba302a6 (ssh.rs)."""
+    if failing("download"):
+        fail("download failed")
+    name, sandbox_path = args[0], args[1]
+    dest = Path(args[2] if len(args) > 2 else ".")
+    if name not in load()["sandboxes"]:
+        fail('status: NotFound, message: "sandbox not found"')
+    source = Path(mapped(name, sandbox_path))
+    if source.is_dir():
+        if dest.exists() and not dest.is_dir():
+            fail(f"cannot extract directory '{sandbox_path}' over non-directory destination")
+        dest.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source, dest, symlinks=True, dirs_exist_ok=True)
+        return
+    if not source.is_file():
+        fail(f"sandbox path does not exist: {sandbox_path}")
+    target = dest / source.name if dest.is_dir() else dest
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+
+
+def policy(args):
+    if args[0] != "get" or "--global" in args:
+        fail("the fake only supports per-sandbox policy get", 2)
+    if failing("policy"):
+        fail("policy get failed")
+    rest = [arg for arg in args[1:] if arg != "--full"]
+    sandbox = load()["sandboxes"].get(rest[0])
+    if sandbox is None:
+        fail('status: NotFound, message: "sandbox not found"')
+    print(f"Sandbox:      {rest[0]}\nVersion:      1\nStatus:       Loaded\n---")
+    print(sandbox.get("policy", DEFAULT_POLICY), end="")
+
+
+def logs(args):
+    if "--tail" in args:
+        fail("the fake refuses --tail: it would follow forever", 2)
+    if failing("logs"):
+        fail("logs failed")
+    lines = int(take(args, "-n")[0]) if "-n" in args else 200
+    take(args, "--since")
+    take(args, "--source")
+    if args[0] not in load()["sandboxes"]:
+        fail('status: NotFound, message: "sandbox not found"')
+    text = os.environ.get("FAKE_OPENSHELL_LOG_TEXT")
+    if text is not None:
+        print(text)
+        return
+    for index in range(lines):
+        print(f"2026-11-03T12:00:{index % 60:02d}Z INFO sandbox {args[0]} line {index}")
 
 
 def main():
@@ -247,10 +350,16 @@ def main():
     gateway = take(args, "-g") + take(args, "--gateway")
     del gateway
     if args[:2] == ["status", "-o"]:
+        if failing("status"):
+            fail("Disconnected: transport error")
         print(json.dumps({"gateway": "fake", "status": "connected"}))
         return
     if args and args[0] == "settings":
         return settings(args[1:])
+    if args and args[0] == "policy":
+        return policy(args[1:])
+    if args and args[0] == "logs":
+        return logs(args[1:])
     if not args or args[0] != "sandbox":
         fail(f"unsupported command {args!r}", 2)
     verb, rest = args[1], args[2:]
@@ -268,6 +377,12 @@ def main():
         return
     if verb == "delete":
         return delete(rest)
+    if verb == "list":
+        return list_(rest)
+    if verb in ("start", "stop"):
+        return lifecycle(verb, rest)
+    if verb == "download":
+        return download(rest)
     fail(f"unsupported sandbox command {verb!r}", 2)
 
 

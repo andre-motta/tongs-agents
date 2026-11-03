@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""A fake ``openshell-prover`` for the policy check tests.
+
+It accepts ``check <policy> --boundary <boundary>`` (the shape the approved
+design read from upstream docs, unvalidated against a release binary),
+appends ``{"argv": [...], "no_color": ...}`` to
+``$FAKE_OPENSHELL_HOME/prover-calls.jsonl``, and reports a
+``link_local_reach`` finding with exit status 1 when the candidate policy
+mentions ``169.254.``; otherwise it prints that no findings were reported
+and exits 0. It reads only the two files it is given.
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+
+def main():
+    args = sys.argv[1:]
+    home = Path(os.environ["FAKE_OPENSHELL_HOME"])
+    home.mkdir(parents=True, exist_ok=True)
+    with open(home / "prover-calls.jsonl", "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"argv": args, "no_color": os.environ.get("NO_COLOR")}) + "\n")
+    if len(args) != 4 or args[0] != "check" or args[2] != "--boundary":
+        print("usage: openshell-prover check <policy> --boundary <file>", file=sys.stderr)
+        sys.exit(2)
+    candidate = Path(args[1]).read_text()
+    Path(args[3]).read_text()
+    if "169.254." in candidate:
+        print("link_local_reach: policy grants reach to a link-local host (169.254.0.0/16)")
+        sys.exit(1)
+    print("No findings.")
+
+
+if __name__ == "__main__":
+    main()

@@ -10,7 +10,11 @@ v0.1.6 and midstream ``v0.1.6-rhaiv.4``): ``-g/--gateway`` is global,
 ``sandbox create`` takes ``--name``, ``sandbox get|upload|connect|start``
 take the name as their first positional, ``sandbox exec`` takes ``-n``, and
 ``settings set <name> --key K --value V`` scopes a setting to one sandbox.
-They are unvalidated against a live gateway until the maintainer's run
+M7-B adds ``sandbox list -o json`` (a JSON array of the ``get`` objects),
+``sandbox get <name> --policy-only`` (the active policy YAML), ``sandbox
+start|stop|delete <name>``, ``sandbox download <name> <path> <dest>``,
+``policy get <name>``, ``logs <name> -n N`` (never ``--tail``) and
+``status -o json``. They are unvalidated against a live gateway until the maintainer's run
 (row 21); the fake CLI under tests/fixtures pins them.
 """
 
@@ -35,6 +39,9 @@ VALIDATED_MINOR = (0, 1)
 VERSION_RE = re.compile(r"(?<![0-9.])(\d{1,4})\.(\d{1,4})\.(\d{1,6})")
 LAUNCH_LABEL = "tongs-agents.launch"
 PROFILE_LABEL = "tongs-agents.profile"
+OWNED_LABELS = (PROFILE_LABEL, LAUNCH_LABEL)
+LIST_LIMIT = 1000
+STATUS_TIMEOUT = 5.0
 POLICY_ADVISOR_KEY = "agent_policy_proposals_enabled"
 SANDBOX_ENV_NAMES = frozenset({
     "TONGS_AGENTS_LAUNCH_ID",
@@ -73,10 +80,17 @@ class SandboxInfo:
     name: str
     phase: str
     labels: Mapping[str, str]
+    created_at: str = ""
+    policy_version: int | None = None
 
     def label(self, key: str) -> str | None:
         value = self.labels.get(key)
         return value if isinstance(value, str) else None
+
+    @property
+    def owned(self) -> bool:
+        """Row 20: tongs-agents manages only sandboxes carrying one of its labels."""
+        return any(self.label(key) for key in OWNED_LABELS)
 
 
 def parse_version(text: str) -> tuple[int, int, int] | None:
@@ -210,19 +224,41 @@ def _labels(value) -> dict[str, str]:
             if isinstance(key, str) and isinstance(item, str)}
 
 
-def parse_sandbox(text: str) -> SandboxInfo | None:
-    """The name, phase and labels of one ``sandbox get -o json`` object."""
-    try:
-        data = json.loads(text)
-    except (ValueError, RecursionError):
-        return None
+def _sandbox_from(data) -> SandboxInfo | None:
     if not isinstance(data, dict):
         return None
     name = data.get("name")
     phase = data.get("phase")
     if not isinstance(name, str) or not isinstance(phase, str):
         return None
-    return SandboxInfo(name=name, phase=phase, labels=_labels(data.get("labels")))
+    created = data.get("created_at")
+    version = data.get("current_policy_version")
+    return SandboxInfo(
+        name=name, phase=phase, labels=_labels(data.get("labels")),
+        created_at=created if isinstance(created, str) else "",
+        policy_version=version if type(version) is int else None,
+    )
+
+
+def parse_sandbox(text: str) -> SandboxInfo | None:
+    """The name, phase and labels of one ``sandbox get -o json`` object."""
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    return _sandbox_from(data)
+
+
+def parse_sandbox_list(text: str) -> list[SandboxInfo] | None:
+    """The sandboxes of ``sandbox list -o json`` (a JSON array); None when unrecognized."""
+    try:
+        data = json.loads(text)
+    except (ValueError, RecursionError):
+        return None
+    if not isinstance(data, list):
+        return None
+    sandboxes = [_sandbox_from(item) for item in data]
+    return [info for info in sandboxes if info is not None]
 
 
 class OpenShell:
@@ -311,6 +347,54 @@ class OpenShell:
         if workdir:
             args += ["--workdir", workdir]
         return self.run(*args, "--", *command, timeout=timeout, max_bytes=max_bytes)
+
+    def list_sandboxes(self, *, timeout: float = DEFAULT_TIMEOUT) -> list[SandboxInfo]:
+        """Every sandbox the gateway lists (labelled or not; callers filter, row 20)."""
+        result = self.check("sandbox", "list", "--limit", str(LIST_LIMIT), "-o", "json",
+                            timeout=timeout)
+        sandboxes = parse_sandbox_list(result.stdout)
+        if sandboxes is None:
+            raise OpenShellError("openshell sandbox list: unrecognized JSON output")
+        return sandboxes
+
+    def start(self, name: str, *, timeout: float = 120.0) -> Result:
+        return self.check("sandbox", "start", name, timeout=timeout)
+
+    def stop(self, name: str, *, timeout: float = 120.0) -> Result:
+        return self.check("sandbox", "stop", name, timeout=timeout)
+
+    def delete(self, name: str, *, timeout: float = 120.0) -> Result:
+        return self.check("sandbox", "delete", name, timeout=timeout)
+
+    def download(self, name: str, sandbox_path: str, dest: str, *,
+                 timeout: float = 600.0) -> Result:
+        """``sandbox download``; OpenShell reads only inside the sandbox working directory."""
+        return self.check("sandbox", "download", name, sandbox_path, dest, timeout=timeout)
+
+    def active_policy(self, name: str, *, timeout: float = DEFAULT_TIMEOUT) -> str:
+        """The sandbox's active policy YAML (``sandbox get --policy-only``)."""
+        return self.check("sandbox", "get", name, "--policy-only", timeout=timeout).stdout
+
+    def policy_get(self, name: str, *, full: bool = False,
+                   timeout: float = DEFAULT_TIMEOUT) -> Result:
+        args = ["policy", "get", name]
+        if full:
+            args.append("--full")
+        return self.check(*args, timeout=timeout)
+
+    def logs(self, name: str, *, lines: int, since: str | None = None,
+             source: str | None = None, timeout: float = DEFAULT_TIMEOUT) -> Result:
+        """Recent log lines; never ``--tail``, which would follow forever."""
+        args = ["logs", name, "-n", str(int(lines))]
+        if since:
+            args += ["--since", since]
+        if source:
+            args += ["--source", source]
+        return self.check(*args, timeout=timeout)
+
+    def status(self, *, timeout: float = STATUS_TIMEOUT) -> Result:
+        """``status -o json`` for gateway reachability; never raises on a failed status."""
+        return self.run("status", "-o", "json", timeout=timeout, max_bytes=64 * 1024)
 
     def set_policy_advisor(self, name: str, enabled: bool) -> Result:
         """Row 16: this sandbox only; never ``--global``."""
