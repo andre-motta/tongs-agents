@@ -1,0 +1,904 @@
+{
+  "schema": "workspace-spike/1",
+  "zellij_version": "zellij 0.45.1",
+  "steps": {
+    "create": {
+      "new_session_with_layout": {
+        "argv": [
+          "zellij",
+          "--session",
+          "<session>",
+          "--new-session-with-layout",
+          "<layout.kdl>"
+        ],
+        "ready": true,
+        "tabs_started": {
+          "sidebar": true,
+          "main": true,
+          "tongs": true
+        }
+      },
+      "new_session_with_layout_existing_name": {
+        "exit": 1,
+        "stdout": "Session with name \"<token>-main\" already exists. Use attach command to connect to it or specify a different name.",
+        "stderr": "",
+        "note": "run without a TTY against a session that already exists"
+      },
+      "layout_then_attach_create_background": {
+        "argv": [
+          "zellij",
+          "--layout",
+          "<layout.kdl>",
+          "attach",
+          "--create-background",
+          "<session>"
+        ],
+        "exit": 0,
+        "stderr": "",
+        "layout_applied": true,
+        "pane_names": [
+          "main",
+          "sidebar",
+          "tongs"
+        ]
+      },
+      "attach_create_background_existing": {
+        "exit": 1,
+        "stdout": "",
+        "stderr": "Session already exists"
+      },
+      "attach_create_background_options_default_layout": {
+        "argv": [
+          "zellij",
+          "attach",
+          "--create-background",
+          "<session>",
+          "options",
+          "--default-layout",
+          "<layout.kdl>"
+        ],
+        "exit": 0,
+        "stderr": "",
+        "layout_applied": true
+      },
+      "attach_create_new": {
+        "argv": [
+          "zellij",
+          "attach",
+          "--create",
+          "<session>"
+        ],
+        "created": true,
+        "terminal_panes": 1,
+        "pane_commands": [
+          "/bin/sh"
+        ]
+      },
+      "layout_then_attach_create_existing": {
+        "argv": [
+          "zellij",
+          "--layout",
+          "<layout.kdl>",
+          "attach",
+          "--create",
+          "<session>"
+        ],
+        "clients_on_existing": 2,
+        "layout_tab_added_or_started": false,
+        "new_sessions_created": 0
+      },
+      "session_layout_adds_tabs": {
+        "argv": [
+          "zellij",
+          "--session",
+          "<session>",
+          "--layout",
+          "<layout.kdl>"
+        ],
+        "exit": 0,
+        "stdout": "1\nterminal_1",
+        "stderr": "",
+        "layout_started": true,
+        "tab_names": [
+          "Tab #1",
+          "agents",
+          "tongs"
+        ]
+      }
+    },
+    "spawn": {
+      "outside_with_session": {
+        "argv": [
+          "zellij",
+          "--session",
+          "<session>",
+          "action",
+          "new-pane",
+          "--name",
+          "<name>",
+          "--cwd",
+          "<dir>",
+          "--",
+          "<argv>..."
+        ],
+        "exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "zellij_pane_id_env": "3",
+        "pane_id_matches_env": true,
+        "cwd_applied": true,
+        "spike_origin_in_pane": "server-creator",
+        "caller_only_variable_in_pane": false,
+        "client_focus_before": {
+          "1": "terminal_0"
+        },
+        "client_focus_after": {
+          "1": "terminal_3"
+        },
+        "pane_title": "out-agent"
+      },
+      "inside_from_sidebar": {
+        "argv": [
+          "zellij",
+          "action",
+          "new-pane",
+          "--name",
+          "<name>",
+          "--",
+          "<argv>..."
+        ],
+        "exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stdout_trailing_newline": true,
+        "stderr": "",
+        "pane_id_matches_env": true,
+        "spike_origin_in_pane": "server-creator",
+        "caller_only_variable_in_pane": false,
+        "client_focus_before": {
+          "1": "terminal_3"
+        },
+        "client_focus_after": {
+          "1": "terminal_4"
+        }
+      },
+      "inside_no_focus": {
+        "exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "pane_started": true,
+        "client_focus_before": {
+          "1": "terminal_4"
+        },
+        "client_focus_after": {
+          "1": "terminal_4"
+        }
+      },
+      "inside_near_current_pane": {
+        "exit": 0,
+        "pane_started": true,
+        "stderr": "",
+        "client_focus_before": {
+          "1": "terminal_4"
+        },
+        "client_focus_after": {
+          "1": "terminal_4"
+        }
+      },
+      "unknown_tab_id": {
+        "exit": 0,
+        "stdout": "terminal_7",
+        "stderr": ""
+      },
+      "unknown_session": {
+        "exit": 0,
+        "stdout": "\u001b[32;1m<token>-opt\u001b[m [Created \u001b[35;1m2s\u001b[m ago] \n\u001b[32;1m<token>-bg\u001b[m [Created \u001b[35;1m3s\u001b[m ago] \n\u001b[32;1m<token>-main\u001b[",
+        "stderr": "Session '<token>-missing' not found. The following sessions are active:"
+      }
+    },
+    "listings": {
+      "list_panes_json_all_fields": {
+        "cursor_coordinates_in_pane": [
+          "list",
+          "null"
+        ],
+        "default_bg": [
+          "null"
+        ],
+        "default_fg": [
+          "null"
+        ],
+        "exit_status": [
+          "null"
+        ],
+        "exited": [
+          "bool"
+        ],
+        "id": [
+          "int"
+        ],
+        "index_in_pane_group": [
+          "dict"
+        ],
+        "is_floating": [
+          "bool"
+        ],
+        "is_focused": [
+          "bool"
+        ],
+        "is_fullscreen": [
+          "bool"
+        ],
+        "is_held": [
+          "bool"
+        ],
+        "is_plugin": [
+          "bool"
+        ],
+        "is_selectable": [
+          "bool"
+        ],
+        "is_suppressed": [
+          "bool"
+        ],
+        "pane_columns": [
+          "int"
+        ],
+        "pane_command": [
+          "str"
+        ],
+        "pane_content_columns": [
+          "int"
+        ],
+        "pane_content_rows": [
+          "int"
+        ],
+        "pane_content_x": [
+          "int"
+        ],
+        "pane_content_y": [
+          "int"
+        ],
+        "pane_cwd": [
+          "str"
+        ],
+        "pane_rows": [
+          "int"
+        ],
+        "pane_x": [
+          "int"
+        ],
+        "pane_y": [
+          "int"
+        ],
+        "plugin_url": [
+          "null",
+          "str"
+        ],
+        "tab_id": [
+          "int"
+        ],
+        "tab_name": [
+          "str"
+        ],
+        "tab_position": [
+          "int"
+        ],
+        "terminal_command": [
+          "null",
+          "str"
+        ],
+        "title": [
+          "str"
+        ]
+      },
+      "list_panes_json_terminal_fields": {
+        "cursor_coordinates_in_pane": [
+          "list"
+        ],
+        "default_bg": [
+          "null"
+        ],
+        "default_fg": [
+          "null"
+        ],
+        "exit_status": [
+          "null"
+        ],
+        "exited": [
+          "bool"
+        ],
+        "id": [
+          "int"
+        ],
+        "index_in_pane_group": [
+          "dict"
+        ],
+        "is_floating": [
+          "bool"
+        ],
+        "is_focused": [
+          "bool"
+        ],
+        "is_fullscreen": [
+          "bool"
+        ],
+        "is_held": [
+          "bool"
+        ],
+        "is_plugin": [
+          "bool"
+        ],
+        "is_selectable": [
+          "bool"
+        ],
+        "is_suppressed": [
+          "bool"
+        ],
+        "pane_columns": [
+          "int"
+        ],
+        "pane_command": [
+          "str"
+        ],
+        "pane_content_columns": [
+          "int"
+        ],
+        "pane_content_rows": [
+          "int"
+        ],
+        "pane_content_x": [
+          "int"
+        ],
+        "pane_content_y": [
+          "int"
+        ],
+        "pane_cwd": [
+          "str"
+        ],
+        "pane_rows": [
+          "int"
+        ],
+        "pane_x": [
+          "int"
+        ],
+        "pane_y": [
+          "int"
+        ],
+        "plugin_url": [
+          "null"
+        ],
+        "tab_id": [
+          "int"
+        ],
+        "tab_name": [
+          "str"
+        ],
+        "tab_position": [
+          "int"
+        ],
+        "terminal_command": [
+          "str"
+        ],
+        "title": [
+          "str"
+        ]
+      },
+      "list_panes_json_plugin_fields": {
+        "cursor_coordinates_in_pane": [
+          "null"
+        ],
+        "default_bg": [
+          "null"
+        ],
+        "default_fg": [
+          "null"
+        ],
+        "exit_status": [
+          "null"
+        ],
+        "exited": [
+          "bool"
+        ],
+        "id": [
+          "int"
+        ],
+        "index_in_pane_group": [
+          "dict"
+        ],
+        "is_floating": [
+          "bool"
+        ],
+        "is_focused": [
+          "bool"
+        ],
+        "is_fullscreen": [
+          "bool"
+        ],
+        "is_held": [
+          "bool"
+        ],
+        "is_plugin": [
+          "bool"
+        ],
+        "is_selectable": [
+          "bool"
+        ],
+        "is_suppressed": [
+          "bool"
+        ],
+        "pane_columns": [
+          "int"
+        ],
+        "pane_content_columns": [
+          "int"
+        ],
+        "pane_content_rows": [
+          "int"
+        ],
+        "pane_content_x": [
+          "int"
+        ],
+        "pane_content_y": [
+          "int"
+        ],
+        "pane_rows": [
+          "int"
+        ],
+        "pane_x": [
+          "int"
+        ],
+        "pane_y": [
+          "int"
+        ],
+        "plugin_url": [
+          "str"
+        ],
+        "tab_id": [
+          "int"
+        ],
+        "tab_name": [
+          "str"
+        ],
+        "tab_position": [
+          "int"
+        ],
+        "terminal_command": [
+          "null"
+        ],
+        "title": [
+          "str"
+        ]
+      },
+      "list_panes_json_default_fields": {
+        "cursor_coordinates_in_pane": [
+          "list",
+          "null"
+        ],
+        "default_bg": [
+          "null"
+        ],
+        "default_fg": [
+          "null"
+        ],
+        "exit_status": [
+          "null"
+        ],
+        "exited": [
+          "bool"
+        ],
+        "id": [
+          "int"
+        ],
+        "index_in_pane_group": [
+          "dict"
+        ],
+        "is_floating": [
+          "bool"
+        ],
+        "is_focused": [
+          "bool"
+        ],
+        "is_fullscreen": [
+          "bool"
+        ],
+        "is_held": [
+          "bool"
+        ],
+        "is_plugin": [
+          "bool"
+        ],
+        "is_selectable": [
+          "bool"
+        ],
+        "is_suppressed": [
+          "bool"
+        ],
+        "pane_columns": [
+          "int"
+        ],
+        "pane_command": [
+          "str"
+        ],
+        "pane_content_columns": [
+          "int"
+        ],
+        "pane_content_rows": [
+          "int"
+        ],
+        "pane_content_x": [
+          "int"
+        ],
+        "pane_content_y": [
+          "int"
+        ],
+        "pane_cwd": [
+          "str"
+        ],
+        "pane_rows": [
+          "int"
+        ],
+        "pane_x": [
+          "int"
+        ],
+        "pane_y": [
+          "int"
+        ],
+        "plugin_url": [
+          "null",
+          "str"
+        ],
+        "tab_id": [
+          "int"
+        ],
+        "tab_name": [
+          "str"
+        ],
+        "tab_position": [
+          "int"
+        ],
+        "terminal_command": [
+          "null",
+          "str"
+        ],
+        "title": [
+          "str"
+        ]
+      },
+      "list_panes_table_header": [
+        "PANE_ID",
+        "TYPE",
+        "TITLE"
+      ],
+      "terminal_pane_example": {
+        "id": 3,
+        "is_plugin": false,
+        "is_focused": false,
+        "is_fullscreen": false,
+        "is_floating": false,
+        "is_suppressed": true,
+        "title": "out-agent",
+        "exited": false,
+        "exit_status": null,
+        "is_held": false,
+        "pane_x": 0,
+        "pane_content_x": 0,
+        "pane_y": 20,
+        "pane_content_y": 23,
+        "pane_rows": 20,
+        "pane_content_rows": 17,
+        "pane_columns": 30,
+        "pane_content_columns": 29,
+        "cursor_coordinates_in_pane": [
+          0,
+          3
+        ],
+        "terminal_command": "<python> -I <spike_tmp>/bin/agent.py <spike_tmp>/io out-agent",
+        "plugin_url": null,
+        "is_selectable": true,
+        "index_in_pane_group": {},
+        "default_fg": null,
+        "default_bg": null,
+        "tab_id": 0,
+        "tab_position": 0,
+        "tab_name": "agents",
+        "pane_command": "<python> -I <spike_tmp>/bin/agent.py <spike_tmp>/io out-agent",
+        "pane_cwd": "<spike_tmp>/cwd"
+      },
+      "list_clients_header": [
+        "CLIENT_ID",
+        "ZELLIJ_PANE_ID",
+        "RUNNING_COMMAND"
+      ],
+      "list_clients_row_widths": [
+        7
+      ],
+      "list_clients_rows": [
+        [
+          "1",
+          "terminal_4",
+          "<python>",
+          "-I",
+          "<spike_tmp>/bin/agent.py",
+          "<spike_tmp>/io",
+          "in-agent"
+        ]
+      ],
+      "list_sessions": {
+        "-n": {
+          "exit": 0,
+          "lines": [
+            "<token>-bg [Created 3s ago] ",
+            "<token>-main [Created 3s ago] ",
+            "<token>-opt [Created 3s ago]"
+          ],
+          "stderr": ""
+        },
+        "-s": {
+          "exit": 0,
+          "lines": [
+            "<token>-bg",
+            "<token>-opt",
+            "<token>-main"
+          ],
+          "stderr": ""
+        }
+      }
+    },
+    "exit": {
+      "exit3": {
+        "action_exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "pane_present_after_exit": true,
+        "pane_state": {
+          "exited": true,
+          "exit_status": 3,
+          "is_held": true,
+          "title": "exit3",
+          "terminal_command": "<python> -I <spike_tmp>/bin/agent.py <spike_tmp>/io exit3 3"
+        }
+      },
+      "exit0-close": {
+        "action_exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "pane_present_after_exit": false,
+        "pane_state": null
+      },
+      "missing": {
+        "action_exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "pane_present_after_exit": true,
+        "pane_state": {
+          "exited": true,
+          "exit_status": 2,
+          "is_held": true,
+          "title": "missing",
+          "terminal_command": "<spike_tmp>/bin/does-not-exist"
+        }
+      },
+      "missing-close": {
+        "action_exit": 0,
+        "stdout_shape": "",
+        "stderr": "",
+        "pane_present_after_exit": false,
+        "pane_state": null
+      },
+      "not-executable": {
+        "action_exit": 0,
+        "stdout_shape": "terminal_<digits>",
+        "stderr": "",
+        "pane_present_after_exit": true,
+        "pane_state": {
+          "exited": true,
+          "exit_status": null,
+          "is_held": true,
+          "title": "not-exec",
+          "terminal_command": "<spike_tmp>/bin/agent.py"
+        }
+      },
+      "block_until_exit": {
+        "action_exit": 5,
+        "stdout": "",
+        "stderr": ""
+      }
+    },
+    "focus": {
+      "watch_client_alive": true,
+      "list_clients_with_watch": {
+        "header": [
+          "CLIENT_ID",
+          "ZELLIJ_PANE_ID",
+          "RUNNING_COMMAND"
+        ],
+        "rows": [
+          [
+            "1",
+            "terminal_12",
+            "<spike_tmp>/bin/agent.py"
+          ]
+        ]
+      },
+      "after_sidebar_click": {
+        "1": "terminal_0"
+      },
+      "click_focused_sidebar": true,
+      "focus_from_sidebar": {
+        "argv": [
+          "zellij",
+          "action",
+          "focus-pane-id",
+          "terminal_<id>"
+        ],
+        "exit": 0,
+        "stderr": "",
+        "target_pane": 3,
+        "list_clients_after": {
+          "1": "terminal_3"
+        },
+        "clicking_client_moved": true,
+        "clicking_client_keystroke_routed_to": [
+          "out-agent"
+        ],
+        "watch_client_rows": []
+      },
+      "watch_client_input_routed_to": []
+    },
+    "resurrection": {
+      "kill_session": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "listing_after_kill": {
+        "-n": [
+          "<token>-main [Created 26s ago] ",
+          "<token>-bg [Created 25s ago] ",
+          "<token>-opt [Created 25s ago] ",
+          "<token>-ser [Created 2s ago] (EXITED - attach to resurrect)"
+        ],
+        "-s": [
+          "<token>-main",
+          "<token>-opt",
+          "<token>-bg",
+          "<token>-ser"
+        ]
+      },
+      "exited_marker_present": true,
+      "short_listing_includes_exited": true,
+      "action_against_exited": {
+        "exit": 0,
+        "stderr": "Session '<token>-ser' not found. The following sessions are active:"
+      },
+      "attach_without_force": {
+        "argv": [
+          "zellij",
+          "attach",
+          "<session>"
+        ],
+        "commands_rerun": {
+          "sidebar": false,
+          "main": false,
+          "tongs": false
+        },
+        "focused": {
+          "1": "terminal_0"
+        }
+      },
+      "after_enter_in_focused_pane": {
+        "commands_started": {
+          "sidebar": true,
+          "main": false,
+          "tongs": false
+        }
+      },
+      "attach_create_background_on_exited": {
+        "exit": 0,
+        "stderr": "",
+        "running_after": true,
+        "exited_marker_after": false,
+        "commands_rerun": {
+          "sidebar": false,
+          "main": false,
+          "tongs": false
+        }
+      },
+      "attach_force_run_commands": {
+        "argv": [
+          "zellij",
+          "attach",
+          "--force-run-commands",
+          "<session>"
+        ],
+        "commands_rerun": {
+          "sidebar": true,
+          "main": true,
+          "tongs": true
+        }
+      },
+      "delete_session": {
+        "exit": 0,
+        "stderr": ""
+      },
+      "listed_after_delete": false
+    },
+    "tmux": {
+      "tmux_start_exit": 0,
+      "tmux_stderr": "",
+      "pane_captured": true,
+      "zellij_pane_inside_tmux": {
+        "terminal": "zellij",
+        "terminal_env_keys": [
+          "ZELLIJ",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ],
+        "env_only_terminal": "tmux",
+        "markers_present": [
+          "TMUX",
+          "TMUX_PANE",
+          "ZELLIJ",
+          "ZELLIJ_CONFIG_DIR",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ]
+      },
+      "new_pane_from_tmux_caller_into_session_created_outside_tmux": {
+        "terminal": "zellij",
+        "terminal_env_keys": [
+          "ZELLIJ",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ],
+        "env_only_terminal": "zellij",
+        "markers_present": [
+          "ZELLIJ",
+          "ZELLIJ_CONFIG_DIR",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ]
+      },
+      "clean_tmux_window_exit": 0,
+      "clean_tmux_stderr": "",
+      "creator_env_stripped_of_tmux": {
+        "terminal": "zellij",
+        "terminal_env_keys": [
+          "ZELLIJ",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ],
+        "env_only_terminal": "zellij",
+        "markers_present": [
+          "ZELLIJ",
+          "ZELLIJ_CONFIG_DIR",
+          "ZELLIJ_PANE_ID",
+          "ZELLIJ_SESSION_NAME",
+          "ZELLIJ_SOCKET_DIR"
+        ]
+      }
+    }
+  },
+  "run": {
+    "platform": {
+      "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+      "kernel_release": "7.2.11-200.fc44.x86_64",
+      "desktop": "KDE",
+      "session_type": "wayland",
+      "python_version": "3.14.8"
+    },
+    "tested_commit": "60d616904dd2826d048d1bb823ac04eda6ce569c",
+    "cleanup": {
+      "tracked": 31,
+      "survivors": 0,
+      "marker_strays": 0,
+      "marker_strays_after_run": 0
+    },
+    "user_config_unchanged": true,
+    "user_zellij_cache_entries_for_run": 0
+  }
+}
