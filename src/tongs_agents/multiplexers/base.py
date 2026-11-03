@@ -29,6 +29,7 @@ class PaneInfo:
     command: str | None
     exited: bool
     focused: bool
+    exit_status: int | None = None
 
 
 class MultiplexerError(Exception):
