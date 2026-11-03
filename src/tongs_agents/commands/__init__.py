@@ -1,9 +1,11 @@
 """Subcommand modules for the ``tongs-agents`` CLI.
 
 Every module in this package whose name does not start with ``_`` is one
-subcommand. ``cli.main`` imports them with ``pkgutil`` in sorted order and adds
-each as a subparser next to the built-in verbs (install, uninstall, monitor,
-focus, status).
+subcommand. ``cli.main`` imports them with ``pkgutil`` and adds each as a
+subparser next to the built-in verbs (install, uninstall, monitor, focus,
+status). ``discover`` returns the commands sorted by command name, not by
+module file name, so the entries of a ``COMMANDS`` module interleave with the
+others in ``tongs-agents --help``. This order is part of the contract (#90).
 
 A command module defines:
 
@@ -60,7 +62,10 @@ def command_name(module: ModuleType) -> str:
 
 
 def discover(package: ModuleType | None = None) -> list[ModuleType]:
-    """Import every public module of ``package`` (this one by default), sorted."""
+    """Import every public module of ``package`` (this one by default).
+
+    Returns the commands sorted by command name.
+    """
     if package is None:
         package = importlib.import_module(__name__)
     modules = []

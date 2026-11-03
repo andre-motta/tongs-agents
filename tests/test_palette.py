@@ -1,6 +1,7 @@
 """The command palette of the monitor and the sidebar (mocked multiplexer)."""
 
 import sys
+import threading
 
 import pytest
 
@@ -144,6 +145,35 @@ def test_reload_profiles_rereads_the_file(tmp_path, profiles, tools, monkeypatch
     assert notes[-1][1]["severity"] == "error"
     assert not any(t.startswith("New agent") for t in _titles(app))
     assert "Last read failed" in _command(app, RELOAD_PROFILES).help
+
+
+def test_concurrent_profile_reads_load_the_file_once(profiles, monkeypatch):
+    app = _monitor(FakeMux())
+    entered = threading.Event()
+    release = threading.Event()
+    loads = []
+    real_load = palette.load_profiles
+
+    def slow_load():
+        loads.append(threading.current_thread().name)
+        entered.set()
+        assert release.wait(10)
+        return real_load()
+
+    monkeypatch.setattr(palette, "load_profiles", slow_load)
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(app.palette_profiles()))
+        for _ in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    assert entered.wait(10)
+    release.set()
+    for thread in threads:
+        thread.join(10)
+    assert len(loads) == 1
+    assert len(results) == 4 and all(result is results[0] for result in results)
 
 
 @pytest.mark.asyncio

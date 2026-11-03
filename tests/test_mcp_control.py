@@ -415,3 +415,11 @@ def test_an_invalid_config_is_an_audited_error(world):
     refused(lambda: world.tools().status(world.worker.launch_id), outcome="error",
             exit_code=1)
     assert last_audit()["outcome"] == "error"
+
+
+def test_an_agent_spawned_through_mcp_cannot_spawn_more(world):
+    world.processes[6000] = FakeProcess(6000, "9", ppid=5000)
+    env = {**world.env, control.CALLER_ENV: world.worker.launch_id}
+    detail = refused(lambda: world.tools(env, pid=6000).spawn("worker"))
+    assert "mcp_nested_spawn" in detail
+    assert world.mux.spawned == []

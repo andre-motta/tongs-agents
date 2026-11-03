@@ -72,6 +72,7 @@ SUBSCRIBE_EVENTS = 1000
 SUBSCRIBE_SECONDS = 60.0
 STOP_TIMEOUT = 2.0
 CAPTURE_DIR = "capture"
+MAX_DUMP_POLLS = 20
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]*\Z")
 _NEW_PANE = re.compile(r"terminal_([0-9]{1,12})")
 _SESSION_LINE = re.compile(r" \[Created [^\]\n]*\](?: \([^()\n]*\))*")
@@ -474,12 +475,8 @@ class ZellijMultiplexer:
                 session, socket_dir, "dump-screen", "--full", "--pane-id", pane,
                 "--path", name,
             )
+            _wait_for_dump(name)
             raw = _read_dump(name)
-            for _ in range(READBACK_ATTEMPTS - 1):
-                if raw:
-                    break
-                time.sleep(READBACK_INTERVAL)
-                raw = _read_dump(name)
         finally:
             try:
                 os.unlink(name)
@@ -549,6 +546,29 @@ def _keys(value) -> list[str]:
     ):
         raise MultiplexerError(f"refused zellij keys {value!r:.80}")
     return list(value)
+
+
+def _dump_size(name: str) -> int:
+    try:
+        return os.lstat(name).st_size
+    except OSError:
+        return -1
+
+
+def _wait_for_dump(name: str) -> None:
+    """Wait until the asynchronously written dump stops growing.
+
+    The size must be the same, and not zero, across two polls. A dump that
+    stays empty is given up after ``READBACK_ATTEMPTS`` polls (a blank pane),
+    one that keeps growing after ``MAX_DUMP_POLLS``.
+    """
+    size = _dump_size(name)
+    for attempt in range(1, MAX_DUMP_POLLS + 1):
+        time.sleep(READBACK_INTERVAL)
+        later = _dump_size(name)
+        if later == size and (later > 0 or attempt >= READBACK_ATTEMPTS - 1):
+            return
+        size = later
 
 
 def _read_dump(name: str) -> bytes:

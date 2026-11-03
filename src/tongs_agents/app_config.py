@@ -40,6 +40,7 @@ WORKSPACE_KEYS = frozenset({"session", "default_profiles", "tongs_tab", "multipl
 UI_KEYS = frozenset({"refresh_interval", "notify_level", "theme", "compact"})
 CONTROL_KEYS = frozenset({
     "mcp_enabled", "send_delay_ms", "mcp_any_target", "mcp_rate_per_minute",
+    "mcp_nested_spawn",
 })
 
 
@@ -69,6 +70,7 @@ class ControlSettings:
     send_delay_ms: int = DEFAULT_SEND_DELAY_MS
     mcp_any_target: bool = False
     mcp_rate_per_minute: int = DEFAULT_MCP_RATE_PER_MINUTE
+    mcp_nested_spawn: bool = False
 
 
 @dataclass(frozen=True)
@@ -185,6 +187,7 @@ def parse_control(section: dict) -> ControlSettings:
         send_delay_ms=delay,
         mcp_any_target=_bool(section, "mcp_any_target", where, False),
         mcp_rate_per_minute=rate,
+        mcp_nested_spawn=_bool(section, "mcp_nested_spawn", where, False),
     )
 
 

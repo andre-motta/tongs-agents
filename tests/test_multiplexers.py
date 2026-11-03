@@ -765,7 +765,36 @@ def test_capture_waits_briefly_for_a_late_dump(fake, runtime, monkeypatch):
 
     monkeypatch.setattr(mux_zellij.time, "sleep", late_write)
     assert _mux().capture(REF) == "prompt> hello"
-    assert len(sleeps) == 2
+    assert len(sleeps) == 3
+
+
+def test_capture_rereads_a_partial_dump_until_its_size_is_stable(fake, runtime, monkeypatch):
+    paths_seen = _dumping(fake, "line 1\n")
+    sleeps = []
+
+    def growing(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) <= 2:
+            with open(paths_seen[0], "a", encoding="utf-8") as handle:
+                handle.write(f"line {len(sleeps) + 1}\n")
+
+    monkeypatch.setattr(mux_zellij.time, "sleep", growing)
+    assert _mux().capture(REF) == "line 1\nline 2\nline 3"
+    assert len(sleeps) == 3
+
+
+def test_capture_of_an_ever_growing_dump_stops_polling(fake, runtime, monkeypatch):
+    paths_seen = _dumping(fake, "x\n")
+    sleeps = []
+
+    def growing(seconds):
+        sleeps.append(seconds)
+        with open(paths_seen[0], "a", encoding="utf-8") as handle:
+            handle.write("x\n")
+
+    monkeypatch.setattr(mux_zellij.time, "sleep", growing)
+    assert _mux().capture(REF, lines=1) == "x"
+    assert len(sleeps) == mux_zellij.MAX_DUMP_POLLS
 
 
 def test_capture_of_a_blank_pane_is_empty(fake, runtime):

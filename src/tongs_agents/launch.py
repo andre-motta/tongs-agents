@@ -84,8 +84,10 @@ def pane_from_env(env: Mapping[str, str]) -> PaneRef | None:
         and is_decimal_id(tmux_pane[1:])
     ):
         socket = env_socket(env)
-        if socket is not None and not _pane_text(socket):
-            socket = None
+        if socket is None or not _pane_text(socket):
+            # Without its server socket a tmux pane id is ambiguous across
+            # servers, so the launch stays unclaimed rather than guessed.
+            return None
         return PaneRef("tmux", "", tmux_pane, socket)
     return None
 

@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import subprocess
 import sys
 import time
 import uuid
@@ -35,11 +36,16 @@ from tongs_agents.models import (
 )
 
 _CREATING_EVENTS = frozenset({"session-start", "prompt-submit", "fleet-event"})
-# Mirrors launches.SCHEMA_VERSION and MAX_RECORD_BYTES; the hook never imports
-# launches (its import surface is pinned by tests).
+# Mirrors launches.SCHEMA_VERSION, MAX_RECORD_BYTES and MAX_TEXT_LENGTH; the
+# hook never imports launches (its import surface is pinned by tests).
 _LAUNCH_SCHEMA_VERSION = 1
 _MAX_LAUNCH_RECORD_BYTES = 64 * 1024
+_MAX_LAUNCH_TEXT = 1024
 MAX_LINEAGE_STEPS = 64
+# On macOS a full process lookup runs ps twice and lsof once; the lineage walk
+# needs only each ancestor's parent pid (#91).
+PPID_ONLY_WALK = sys.platform == "darwin"
+PPID_TIMEOUT = 5
 
 
 def _find_agent_pid(agent):
@@ -128,10 +134,13 @@ def process_descends_from(process, pid, start_token, lookup=None):
     Compares ``process`` and at most ``MAX_LINEAGE_STEPS - 1`` ancestors,
     stopping at pid 1 and on a cycle. A process found with ``pid`` but another
     start token is a reused pid and fails. Without a start token the pid
-    alone is compared.
+    alone is compared. On macOS, without a ``lookup``, the walk reads only
+    parent pids (``parent_pid``) and looks the matched process up once.
     """
     if process is None or type(pid) is not int or pid <= 0:
         return False
+    if lookup is None and PPID_ONLY_WALK:
+        return _descends_by_ppid(process, pid, start_token)
     lookup = lookup or discovery.get_process_info
     seen = set()
     current = process
@@ -147,12 +156,53 @@ def process_descends_from(process, pid, start_token, lookup=None):
             return False
 
 
+def parent_pid(pid):
+    """The parent pid of ``pid`` from one ``ps`` call, or None; never raises."""
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "ppid=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=PPID_TIMEOUT,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    text = (result.stdout or "").strip()
+    if result.returncode != 0 or not text.isascii() or not text.isdigit():
+        return None
+    return int(text)
+
+
+def _descends_by_ppid(process, pid, start_token, parent_of=None, lookup=None):
+    """``process_descends_from`` walking parent pids only.
+
+    The same limits apply; the start token is read only for the matched pid.
+    """
+    parent_of = parent_of or parent_pid
+    lookup = lookup or discovery.get_process_info
+    if process.pid == pid:
+        return not start_token or process.start_token == start_token
+    seen = {process.pid}
+    parent = process.ppid
+    while type(parent) is int and parent > 1 and parent not in seen:
+        if parent == pid:
+            if not start_token:
+                return True
+            found = lookup(pid)
+            return found is not None and found.start_token == start_token
+        seen.add(parent)
+        if len(seen) >= MAX_LINEAGE_STEPS:
+            return False
+        parent = parent_of(parent)
+    return False
+
+
 def _launch_claim(launch_id):
     """The claimed ``(pid, process_start)`` of a launch record, or None.
 
     A dependency-free reader for the two claim fields with the checks
     ``launches`` applies: no symlink, a regular file owned by this user, at
-    most 64 KiB, schema 1, named for its own id and claimed. Never raises.
+    most 64 KiB, schema 1, named for its own id and claimed, and a process
+    start of at most 1024 printable characters. Never raises.
     """
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
@@ -186,7 +236,11 @@ def _launch_claim(launch_id):
     start = data.get("process_start")
     if type(pid) is not int or pid <= 0:
         return None
-    if start is not None and not (isinstance(start, str) and start):
+    if start is not None and not (
+        isinstance(start, str)
+        and 0 < len(start) <= _MAX_LAUNCH_TEXT
+        and start.isprintable()
+    ):
         return None
     return pid, start
 

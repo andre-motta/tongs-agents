@@ -14,7 +14,7 @@ import pytest
 from tongs_agents import cli, hook
 from tongs_agents.discovery import read_stored_sessions
 from tongs_agents.profiles import load_profiles
-from tests.test_launch_identity import write_claim
+from tests.launch_helpers import write_claim
 
 ROOT = Path(__file__).parents[1]
 VALIDATION = ROOT / "validation"

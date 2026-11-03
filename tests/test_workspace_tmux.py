@@ -206,8 +206,8 @@ def test_alias_keeps_the_multiplexer_flag(env, capsys):
 @pytest.mark.parametrize("env_vars, expected", [
     ({"TMUX": "/tmp/tmux-1/a,b,99,0", "TMUX_PANE": "%7"},
      PaneRef("tmux", "", "%7", "/tmp/tmux-1/a,b")),
-    ({"TMUX": "relative,99,0", "TMUX_PANE": "%7"}, PaneRef("tmux", "", "%7", None)),
-    ({"TMUX": "", "TMUX_PANE": "%7"}, PaneRef("tmux", "", "%7", None)),
+    ({"TMUX": "relative,99,0", "TMUX_PANE": "%7"}, None),
+    ({"TMUX": "", "TMUX_PANE": "%7"}, None),
     ({"ZELLIJ": "0", "ZELLIJ_SESSION_NAME": "z", "ZELLIJ_PANE_ID": "2",
       "TMUX": "/s,1,0", "TMUX_PANE": "%7"}, PaneRef("zellij", "z", "2", None)),
 ])

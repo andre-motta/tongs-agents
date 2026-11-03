@@ -23,10 +23,10 @@ from tongs_agents.models import (
 from tongs_agents.terminal_apis import _env
 from tests import test_pi_extension
 from tests.conftest import write_session
+from tests.launch_helpers import HOOK_PID, HOOK_START, LAUNCH_ID, write_claim
 from tests.test_harness_contract import make_record
 from tests.test_hook import read_new_record, run_hook
 
-LAUNCH_ID = "0123456789abcdef0123456789abcdef"
 OTHER_LAUNCH_ID = "fedcba9876543210fedcba9876543210"
 PAYLOAD = {"session_id": "native-1", "cwd": "/tmp/repo"}
 
@@ -64,31 +64,6 @@ def _no_inherited_launch(monkeypatch):
 def set_launch(monkeypatch, launch_id=LAUNCH_ID, profile="reviewer"):
     monkeypatch.setenv(LAUNCH_ID_ENV, launch_id)
     monkeypatch.setenv(PROFILE_ID_ENV, profile)
-
-
-HOOK_PID = 12345
-HOOK_START = "100"
-
-
-def write_claim(launch_id=LAUNCH_ID, pid=HOOK_PID, start=HOOK_START, *,
-                harness="claude", profile="reviewer", state="running"):
-    """A launch record for ``launch_id`` claimed by ``pid`` (the launcher)."""
-    if start is None and state == "running":
-        info = discovery.get_process_info(pid)
-        start = info.start_token if info is not None else None
-    record = launches.LaunchRecord(
-        launch_id=launch_id,
-        profile=profile,
-        harness=harness,
-        multiplexer="zellij",
-        session="agents",
-        created=int(time.time()),
-        pane_id="1" if state == "running" else None,
-        pid=pid if state == "running" else None,
-        process_start=start if state == "running" else None,
-        state=state,
-    )
-    return launches._write(record)
 
 
 @pytest.fixture
@@ -484,6 +459,8 @@ UNVERIFIED = {
     "record pid is not an integer": _raw(_claim_payload(pid="12345")),
     "record pid is a bool": _raw(_claim_payload(pid=True)),
     "record start token is empty": _raw(_claim_payload(process_start="")),
+    "record start token is too long": _raw(_claim_payload(process_start="1" * 1025)),
+    "record start token is not printable": _raw(_claim_payload(process_start="1\n2")),
 }
 
 
@@ -536,6 +513,7 @@ def test_a_profile_without_a_launch_id_is_kept_unverified(fleet_dir, monkeypatch
 def test_hook_claim_reader_mirrors_the_launch_record_format():
     assert hook._LAUNCH_SCHEMA_VERSION == launches.SCHEMA_VERSION
     assert hook._MAX_LAUNCH_RECORD_BYTES == launches.MAX_RECORD_BYTES
+    assert hook._MAX_LAUNCH_TEXT == launches.MAX_TEXT_LENGTH
 
 
 def test_hook_claim_reader_never_raises_on_an_unusable_state_dir(monkeypatch):
@@ -587,6 +565,97 @@ def test_lineage_walk_stops_on_a_cycle_and_after_its_step_limit():
     assert len(calls) == hook.MAX_LINEAGE_STEPS - 1
     within = chain[hook.MAX_LINEAGE_STEPS - 1]
     assert hook.process_descends_from(chain[0], within.pid, within.start_token, table)
+
+
+def _ppid_walk(monkeypatch, *processes):
+    """Run the macOS walk on a fake table; returns the ppid and full lookups."""
+    table = {process.pid: process for process in processes}
+    calls = {"ppid": [], "full": []}
+
+    def parent_of(pid):
+        calls["ppid"].append(pid)
+        return table[pid].ppid if pid in table else None
+
+    def full(pid):
+        calls["full"].append(pid)
+        return table.get(pid)
+
+    monkeypatch.setattr(hook, "PPID_ONLY_WALK", True)
+    monkeypatch.setattr(hook, "parent_pid", parent_of)
+    monkeypatch.setattr(discovery, "get_process_info", full)
+    return calls
+
+
+def test_ppid_walk_looks_up_only_the_matched_process(monkeypatch):
+    root = ProcessInfo(10, 1, "launcher", "python", (), None, "a")
+    child = ProcessInfo(11, 10, "sh", "sh", (), None, "b")
+    leaf = ProcessInfo(12, 11, "claude", "claude", (), None, "c")
+    calls = _ppid_walk(monkeypatch, root, child)
+    assert hook.process_descends_from(leaf, 10, "a")
+    assert calls == {"ppid": [11], "full": [10]}
+    assert hook.process_descends_from(leaf, 12, "c")
+    assert hook.process_descends_from(leaf, 10, None)
+    assert not hook.process_descends_from(leaf, 10, "reused")
+    assert not hook.process_descends_from(leaf, 99, "a")
+    assert not hook.process_descends_from(leaf, True, "a")
+
+
+def test_ppid_walk_stops_on_a_cycle_and_after_its_step_limit(monkeypatch):
+    first = ProcessInfo(20, 21, "a", "a", (), None, "x")
+    second = ProcessInfo(21, 20, "b", "b", (), None, "y")
+    _ppid_walk(monkeypatch, first, second)
+    assert not hook.process_descends_from(first, 99, "z")
+
+    chain = [
+        ProcessInfo(1000 + step, 1000 + step + 1, "p", "p", (), None, str(step))
+        for step in range(hook.MAX_LINEAGE_STEPS + 1)
+    ]
+    calls = _ppid_walk(monkeypatch, *chain)
+    top = chain[-1]
+    assert not hook.process_descends_from(chain[0], top.pid, top.start_token)
+    assert len(calls["ppid"]) == hook.MAX_LINEAGE_STEPS - 2
+    assert calls["full"] == []
+    within = chain[hook.MAX_LINEAGE_STEPS - 1]
+    assert hook.process_descends_from(chain[0], within.pid, within.start_token)
+
+
+def test_ppid_walk_stops_when_a_parent_is_unknown(monkeypatch):
+    leaf = ProcessInfo(12, 11, "claude", "claude", (), None, "c")
+    calls = _ppid_walk(monkeypatch)
+    assert not hook.process_descends_from(leaf, 10, "a")
+    assert calls == {"ppid": [11], "full": []}
+
+
+def test_an_explicit_lookup_never_takes_the_ppid_walk(monkeypatch):
+    root = ProcessInfo(10, 1, "launcher", "python", (), None, "a")
+    leaf = ProcessInfo(11, 10, "claude", "claude", (), None, "c")
+    calls = _ppid_walk(monkeypatch)
+    assert hook.process_descends_from(leaf, 10, "a", lineage(root))
+    assert calls == {"ppid": [], "full": []}
+
+
+@pytest.mark.parametrize(
+    "stdout, code, expected",
+    [(" 4321\n", 0, 4321), ("", 1, None), ("abc\n", 0, None), ("\u0663\n", 0, None)],
+)
+def test_parent_pid_reads_one_ps_column(monkeypatch, stdout, code, expected):
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return subprocess.CompletedProcess(argv, code, stdout, "")
+
+    monkeypatch.setattr(hook.subprocess, "run", run)
+    assert hook.parent_pid(77) == expected
+    assert seen == [["ps", "-o", "ppid=", "-p", "77"]]
+
+
+def test_parent_pid_never_raises(monkeypatch):
+    def run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(argv, 5)
+
+    monkeypatch.setattr(hook.subprocess, "run", run)
+    assert hook.parent_pid(77) is None
 
 
 # Reader-side check: launches.claims_session

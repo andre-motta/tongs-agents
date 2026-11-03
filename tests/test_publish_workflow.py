@@ -9,7 +9,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 RELEASE_REQUIREMENTS = ROOT / ".github" / "release-requirements.txt"
-GATES = {"tests": "test.yml", "shells": "shells.yml", "pi": "pi.yml", "zellij": "zellij.yml"}
+GATES = {
+    "tests": "test.yml", "shells": "shells.yml", "pi": "pi.yml", "zellij": "zellij.yml",
+    "tmux": "tmux-mux.yml",
+}
 FULL_SHA_PIN = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*$")
 
 

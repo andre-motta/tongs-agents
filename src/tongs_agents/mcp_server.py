@@ -94,7 +94,12 @@ def fleet_sessions_needing_attention() -> str:
 
 def fleet_focus(query: str) -> str:
     """Focus the terminal running an agent session by repo, session ID, or PID."""
-    return json.dumps(focus_module.focus_session(query).to_dict())
+    result = focus_module.focus_session(query)
+    payload = result.to_dict()
+    # Keep the pre-0.10 reply keys for existing MCP consumers and prompts.
+    payload["success"] = result.successful
+    payload["message" if result.successful else "error"] = result.reason
+    return json.dumps(payload)
 
 
 def fleet_cleanup() -> str:

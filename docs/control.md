@@ -65,6 +65,14 @@ Every call checks, in this order, and refuses (exit 5) when any check fails:
    name fails here even when its pane id was reused by another program.
 5. No hook session record carrying the launch id names another pane.
 
+Step 3 runs before step 4 because an exited program has no process left
+to compare. That leaves one ambiguity: when a session was killed and recreated
+with the same name, and the pane that reuses the stale launch's pane id has
+already exited, the call reports that pane's exit (exit 4, and `ended` in
+`agent-status`) instead of refusing the stale launch (exit 5). Nothing is sent
+or read in either case. Zellij reports no pane start time to compare with the
+claim, so the two cases cannot be told apart.
+
 A pane started any other way (for example `zellij action new-pane`) has no
 launch record and is always refused.
 

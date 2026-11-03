@@ -173,6 +173,13 @@ records to panes by captured `ZELLIJ_PANE_ID` fails in the same way. This also
 affects the shipped monitor for any user running plain `codex` today; that is
 outside this item and should get its own issue.
 
+Added 2026-11-03 (#91): the launch identity check (#74) relies on the daemon
+being reparented away from the TUI that started it (to systemd in the run
+above), so a daemon-hosted hook's ancestry never contains the first launch's
+claimed launcher. If a later Codex release kept the daemon under the first
+TUI, hooks of later sessions would verify as the first launch; re-check the
+row above when the pinned Codex version changes.
+
 With a daemon already running, `--disable daemon_auto_start` does not simply
 run in-process: the TUI stops at an interactive dialog ("Background server has
 incompatible feature settings") offering to run without the daemon this time,
