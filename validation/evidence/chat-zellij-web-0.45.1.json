@@ -1,0 +1,164 @@
+{
+  "schema": "chat-zellij-web/1",
+  "date": "2026-11-03",
+  "issue": 29,
+  "provenance": "live",
+  "summary": "Zellij 0.45.1 web build on 127.0.0.1 only, isolated dirs. Unauthenticated API and websocket requests got 401. A read-only token watched a shared session (terminal output received) but typed input did not reach the pane; a read-write token's input did (positive control). A read-only login could not create a session. Revoking a token invalidated its existing browser session at once. The session cookie is HttpOnly, SameSite=Strict, Path=/, without Secure over HTTP; remember-me adds Max-Age 2419200 (28 days). The terminal websocket accepted a foreign Origin header from a non-browser client holding a valid cookie. Sessions are refused unless web sharing is on, and a session run by the no-web build was never offered and refused web connections. The installed no-web 0.45.1 cannot run the web server at all.",
+  "binaries": {
+    "web_build": {
+      "version": "0.45.1",
+      "asset": "zellij-x86_64-unknown-linux-musl.tar.gz",
+      "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-x86_64-unknown-linux-musl.tar.gz",
+      "tarball_sha256": "40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc",
+      "tarball_size": 18729165,
+      "binary_sha256": "d006c521dcb475a6005d741e9dd7c5758e5a23b28dd60a5c10cebfa4876319dd",
+      "binary_sha256_source": "matches the release's zellij-x86_64-unknown-linux-musl.sha256sum"
+    },
+    "no_web_build": {
+      "version": "0.45.1",
+      "note": "the pinned no-web build (zellij_pins.json) answered every web verb with 'This version of Zellij was compiled without web server support'"
+    }
+  },
+  "isolation": {
+    "dirs": "private HOME, XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_STATE_HOME, XDG_CACHE_HOME, XDG_RUNTIME_DIR, TMPDIR, ZELLIJ_CONFIG_DIR and a short private ZELLIJ_SOCKET_DIR (the scratch path exceeded the 107-byte socket limit)",
+    "bind": "127.0.0.1 on a free ephemeral port; no other address was used",
+    "sessions": "uniquely named probe sessions only (one shared, one created with web sharing off by config, one created with the CLI option, one run by the no-web build); one extra session that a stray 'zellij options' call started in the isolated socket dir was killed as well; every session was killed and the web server stopped at the end; no maintainer session was listed, attached or touched",
+    "secrets": "tokens and cookies were read by the probe and never written to this file"
+  },
+  "config": {
+    "web_sharing": "on (except where noted)",
+    "web_server": false,
+    "web_server_ip": "127.0.0.1"
+  },
+  "results": {
+    "unauthenticated": {
+      "GET /": 200,
+      "GET /session-list": 401,
+      "POST /session": 401,
+      "ws /ws/terminal": 401,
+      "ws /ws/control": 401
+    },
+    "security_headers_on_root": {
+      "x-content-type-options": "nosniff",
+      "x-frame-options": "DENY",
+      "referrer-policy": "strict-origin-when-cross-origin",
+      "content-security-policy": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' ws: wss:; img-src 'self' data:"
+    },
+    "bad_token_login_status": 401,
+    "read_only_token": {
+      "login_status": 200,
+      "cookie_attributes": [
+        {
+          "name": "session_token",
+          "attributes": [
+            "HttpOnly",
+            "Path",
+            "SameSite"
+          ]
+        }
+      ],
+      "session_bootstrap_status": 200,
+      "bootstrap_keys": [
+        "config",
+        "is_read_only",
+        "session_name",
+        "web_client_id"
+      ],
+      "ws_terminal_status": 101,
+      "ws_control_status": 101,
+      "bytes_received_before_typing": 3336,
+      "boot_is_read_only": true,
+      "ws_terminal_foreign_origin_status": 101,
+      "ws_terminal_same_origin_status": 101,
+      "list_clients_while_attached": [],
+      "bytes_received_after_typing": 9675,
+      "typed_command_reached_pane": false
+    },
+    "read_write_token": {
+      "login_status": 200,
+      "cookie_attributes": [
+        {
+          "name": "session_token",
+          "attributes": [
+            "HttpOnly",
+            "Path",
+            "SameSite"
+          ]
+        }
+      ],
+      "session_bootstrap_status": 200,
+      "bootstrap_keys": [
+        "config",
+        "is_read_only",
+        "session_name",
+        "web_client_id"
+      ],
+      "ws_terminal_status": 101,
+      "ws_control_status": 101,
+      "bytes_received_before_typing": 3363,
+      "boot_is_read_only": false,
+      "ws_terminal_foreign_origin_status": 101,
+      "ws_terminal_same_origin_status": 101,
+      "list_clients_while_attached": [
+        "2         terminal_0     N/A"
+      ],
+      "bytes_received_after_typing": 6506,
+      "typed_command_reached_pane": true
+    },
+    "read_only_create_new_session": {
+      "status": 200,
+      "bootstrap_is_read_only": true,
+      "session_created": false,
+      "note": "the bootstrap answered 200 with is_read_only true, but list-sessions showed no new session"
+    },
+    "session_cookie": {
+      "name": "session_token",
+      "attributes": "HttpOnly; SameSite=Strict; Path=/",
+      "secure_flag": false,
+      "remember_me_max_age_seconds": 2419200
+    },
+    "ws_control_invalid_client_id_with_origin": {
+      "foreign_origin": 403,
+      "same_origin": 403,
+      "note": "403 for a made-up web_client_id regardless of Origin; it does not test an Origin check"
+    },
+    "login_post_with_foreign_origin_and_bad_token": 401,
+    "read_only_cookie_after_revoke": {
+      "GET /session-list": 401,
+      "POST /session": 401
+    },
+    "read_only_token_login_after_revoke": 401,
+    "web_sharing_off_session": {
+      "in_session_list": false,
+      "terminal_websocket_upgrade": 101,
+      "control_message": "This session does not allow web connections.",
+      "closed": true
+    },
+    "session_created_with_cli_option_web_sharing_off_while_config_on": {
+      "watchable": true,
+      "note": "attach --create-background NAME options --web-sharing off did not stop watching; the config value applied. Not investigated further"
+    },
+    "session_run_by_no_web_build": {
+      "in_session_list": false,
+      "control_message": "This session does not allow web connections.",
+      "closed": true
+    },
+    "token_store": {
+      "file": "<XDG_DATA_HOME>/zellij/tokens.db",
+      "mode": "0600",
+      "format": "SQLite; tokens table holds token_hash, name, created_at, read_only; session_tokens holds hashed session tokens with expiry"
+    },
+    "cli_quirks": [
+      "--token-name was refused together with --create-token and with --create-read-only-token ('cannot be used with one or more of the other specified arguments')",
+      "after revoking token_1 of two tokens, the next --create-token failed: \"Token name 'token_2' already exists\"; revoke-all then worked"
+    ]
+  },
+  "not_tested": [
+    "HTTPS with a certificate",
+    "binding to any address other than 127.0.0.1",
+    "a real browser (cookie and Origin behaviour of browsers)",
+    "whether the web server counts as a unix-socket peer that makes zellij focus refuse parent activation",
+    "the share plugin toggling sharing at runtime",
+    "Zellij 0.44.2"
+  ]
+}
