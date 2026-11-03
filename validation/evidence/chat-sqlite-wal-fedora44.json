@@ -1,0 +1,215 @@
+{
+  "schema": "chat-sqlite-wal/1",
+  "date": "2026-11-03",
+  "issue": 29,
+  "provenance": "live",
+  "summary": "Proposed chat schema v1 in one WAL SQLite file on btrfs, 8 writer processes x 1000 messages plus 2 polling readers. synchronous=NORMAL: 8000 of 8000 stored, 0 errors, write p99 2.387 ms, max 429.033 ms; reader p99 0.727 ms. synchronous=FULL: 3 of 8000 transactions failed after waiting out the 5000 ms busy timeout (caught as sqlite3.Error; the message was not recorded) (max 5004.351 ms; the same 3 failures appeared in an earlier run with a draft schema), readers unaffected. Database, WAL and shm files were 0600 under umask 077. A connection authorizer refused writes to grants. A fresh python -I process opening the file and running the grant check plus mention digest took 9.44 ms median against 6.96 ms for a bare start.",
+  "method": {
+    "probe": "stdlib-only script kept outside the repository, run with python3 -I against a new 0700 directory on the btrfs filesystem that holds the home directory, removed afterwards",
+    "schema": "schema_sql below, which is the DDL proposed in docs/work/agent-chat.md, executed verbatim",
+    "write_transaction": "BEGIN IMMEDIATE; INSERT message (about 230 bytes); INSERT mention; COMMIT",
+    "reader_poll": "BEGIN; unread-mention digest query (LIMIT 5); SELECT count(*) FROM messages; COMMIT; sleep 10 ms",
+    "start": "all processes connect first, then start together on one event",
+    "hook_cold_path": "25 fresh python3 -I processes each: import sqlite3, connect with a 200 ms timeout, PRAGMA query_only, grant lookup, digest query",
+    "not_measured": "ancestry walk cost, the real tongs-agents-hook import set, macOS and Windows, network filesystems"
+  },
+  "platform": {
+    "os": "Fedora Linux 44",
+    "machine": "Linux x86_64",
+    "filesystem": "btrfs",
+    "python": "3.14.8",
+    "sqlite": "3.51.2"
+  },
+  "schema_sql": [
+    "CREATE TABLE participants (",
+    "  id TEXT PRIMARY KEY,",
+    "  kind TEXT NOT NULL CHECK (kind IN ('maintainer', 'agent')),",
+    "  profile TEXT,",
+    "  harness TEXT,",
+    "  created INTEGER NOT NULL",
+    ") WITHOUT ROWID;",
+    "CREATE TABLE grants (",
+    "  launch_id TEXT PRIMARY KEY REFERENCES participants(id),",
+    "  handle TEXT NOT NULL UNIQUE CHECK (length(handle) BETWEEN 1 AND 32 AND handle <> 'maintainer'),",
+    "  level TEXT NOT NULL CHECK (level IN ('chat', 'chat+wake')),",
+    "  process_start TEXT NOT NULL,",
+    "  pane_session TEXT NOT NULL,",
+    "  pane_id TEXT NOT NULL,",
+    "  socket_dir TEXT,",
+    "  granted_at INTEGER NOT NULL,",
+    "  granted_via TEXT NOT NULL CHECK (granted_via IN ('sidebar', 'cli'))",
+    ") WITHOUT ROWID;",
+    "CREATE TABLE channels (",
+    "  id INTEGER PRIMARY KEY,",
+    "  name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 32),",
+    "  created INTEGER NOT NULL,",
+    "  created_by TEXT NOT NULL REFERENCES participants(id),",
+    "  archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))",
+    ");",
+    "CREATE TABLE messages (",
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,",
+    "  channel_id INTEGER NOT NULL REFERENCES channels(id),",
+    "  thread_id INTEGER REFERENCES messages(id),",
+    "  author TEXT NOT NULL REFERENCES participants(id),",
+    "  author_handle TEXT NOT NULL,",
+    "  body TEXT NOT NULL CHECK (length(CAST(body AS BLOB)) BETWEEN 1 AND 8192),",
+    "  created INTEGER NOT NULL",
+    ");",
+    "CREATE INDEX messages_by_channel ON messages(channel_id, id);",
+    "CREATE INDEX messages_by_thread ON messages(thread_id, id) WHERE thread_id IS NOT NULL;",
+    "CREATE TABLE mentions (",
+    "  target TEXT NOT NULL REFERENCES participants(id),",
+    "  message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,",
+    "  PRIMARY KEY (target, message_id)",
+    ") WITHOUT ROWID;",
+    "CREATE TABLE read_cursors (",
+    "  participant TEXT NOT NULL REFERENCES participants(id),",
+    "  channel_id INTEGER NOT NULL REFERENCES channels(id),",
+    "  last_read INTEGER NOT NULL DEFAULT 0,",
+    "  PRIMARY KEY (participant, channel_id)",
+    ") WITHOUT ROWID;",
+    "CREATE TABLE deliveries (",
+    "  participant TEXT PRIMARY KEY REFERENCES participants(id),",
+    "  injected_through INTEGER NOT NULL DEFAULT 0,",
+    "  last_injected_at INTEGER,",
+    "  tools_listed_at INTEGER,",
+    "  last_wake INTEGER,",
+    "  wake_window_start INTEGER,",
+    "  wakes_in_window INTEGER NOT NULL DEFAULT 0",
+    ") WITHOUT ROWID;",
+    "PRAGMA user_version = 1;"
+  ],
+  "runs": {
+    "synchronous_normal": {
+      "settings": {
+        "synchronous": "NORMAL",
+        "busy_timeout_ms": 5000,
+        "foreign_keys": true,
+        "umask_at_create": "0o077"
+      },
+      "file_modes_while_open": {
+        "chat.db": "0o600",
+        "chat.db-wal": "0o600",
+        "chat.db-shm": "0o600"
+      },
+      "file_modes_after_last_close": {
+        "chat.db": "0o600",
+        "chat.db-wal": null,
+        "chat.db-shm": null
+      },
+      "concurrency": {
+        "writer_processes": 8,
+        "messages_per_writer": 1000,
+        "reader_processes": 2,
+        "write_wall_seconds": 0.46,
+        "writes_per_second": 17238.6,
+        "write_transaction": {
+          "n": 8000,
+          "p50_ms": 0.019,
+          "p95_ms": 0.129,
+          "p99_ms": 2.387,
+          "max_ms": 429.033
+        },
+        "write_errors": 0,
+        "ids_monotonic_per_writer": true,
+        "reader_poll": {
+          "n": 1902,
+          "p50_ms": 0.408,
+          "p95_ms": 0.678,
+          "p99_ms": 0.727,
+          "max_ms": 1.07
+        },
+        "reader_errors": 0,
+        "messages_stored": 8000,
+        "messages_expected": 8000,
+        "mentions_stored": 8000,
+        "integrity_check": "ok",
+        "foreign_key_violations": 0
+      },
+      "hook_cold_path": {
+        "python_baseline_exists_check": {
+          "runs": 25,
+          "median_ms": 6.96,
+          "p95_ms": 7.612
+        },
+        "python_import_sqlite_grant_and_digest": {
+          "runs": 25,
+          "median_ms": 9.44,
+          "p95_ms": 11.176
+        }
+      },
+      "authorizer": {
+        "insert_grant": "refused: not authorized",
+        "update_grant": "refused: not authorized",
+        "insert_message": "allowed",
+        "oversized_body": "refused: CHECK constraint failed: length(CAST(body AS BLOB)) BETWEEN 1 AND 8192"
+      }
+    },
+    "synchronous_full": {
+      "settings": {
+        "synchronous": "FULL",
+        "busy_timeout_ms": 5000,
+        "foreign_keys": true,
+        "umask_at_create": "0o077"
+      },
+      "file_modes_while_open": {
+        "chat.db": "0o600",
+        "chat.db-wal": "0o600",
+        "chat.db-shm": "0o600"
+      },
+      "file_modes_after_last_close": {
+        "chat.db": "0o600",
+        "chat.db-wal": null,
+        "chat.db-shm": null
+      },
+      "concurrency": {
+        "writer_processes": 8,
+        "messages_per_writer": 1000,
+        "reader_processes": 2,
+        "write_wall_seconds": 8.02,
+        "writes_per_second": 997.4,
+        "write_transaction": {
+          "n": 8000,
+          "p50_ms": 0.94,
+          "p95_ms": 1.107,
+          "p99_ms": 2.027,
+          "max_ms": 5004.351
+        },
+        "write_errors": 3,
+        "ids_monotonic_per_writer": true,
+        "reader_poll": {
+          "n": 1918,
+          "p50_ms": 0.38,
+          "p95_ms": 0.719,
+          "p99_ms": 0.781,
+          "max_ms": 1.004
+        },
+        "reader_errors": 0,
+        "messages_stored": 7997,
+        "messages_expected": 8000,
+        "mentions_stored": 7997,
+        "integrity_check": "ok",
+        "foreign_key_violations": 0
+      },
+      "hook_cold_path": {
+        "python_baseline_exists_check": {
+          "runs": 25,
+          "median_ms": 7.15,
+          "p95_ms": 8.0
+        },
+        "python_import_sqlite_grant_and_digest": {
+          "runs": 25,
+          "median_ms": 10.47,
+          "p95_ms": 11.333
+        }
+      },
+      "authorizer": {
+        "insert_grant": "refused: not authorized",
+        "update_grant": "refused: not authorized",
+        "insert_message": "allowed",
+        "oversized_body": "refused: CHECK constraint failed: length(CAST(body AS BLOB)) BETWEEN 1 AND 8192"
+      }
+    }
+  },
+  "tmpfs_note": "An earlier run of a draft schema on tmpfs (fsync is a no-op there) showed no errors in either mode; it is not recorded as evidence."
+}

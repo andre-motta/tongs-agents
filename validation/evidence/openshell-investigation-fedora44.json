@@ -1,0 +1,173 @@
+{
+  "schema": "openshell-investigation/1",
+  "date": "2026-11-03",
+  "issue": 34,
+  "item": "M7-0",
+  "repository_base": "0be4fedd44796aa1bc27b568b2bcfe2537f16150",
+  "summary": "Source and host facts behind docs/work/openshell-sandbox.md. Host facts and the Zellij default keybindings are live. Release assets were downloaded and checksum-verified but not executed: running the downloaded OpenShell binaries was refused by this session's permission policy, so every OpenShell behaviour below is unvalidated (read from source or docs at the pinned commits).",
+  "labels": {
+    "live": "Observed on this host in this run.",
+    "unvalidated": "Read from OpenShell source or published docs at a pinned commit; not exercised.",
+    "instrumented": "None produced in this run."
+  },
+  "platform": {
+    "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+    "kernel_release": "7.2.11-200.fc44.x86_64",
+    "arch": "x86_64",
+    "python_version": "3.14.8"
+  },
+  "sources": {
+    "upstream": {
+      "repository": "https://github.com/NVIDIA/OpenShell",
+      "main_commit": "ba302a6b0481ae02b647a5c84302aa201199f9da",
+      "main_commit_date": "2026-11-03T13:41:15Z",
+      "latest_stable_tag": "v0.1.6",
+      "latest_stable_commit": "ac7f615cd12d5cc49cb16eb1f5f10ffeb1e90f47",
+      "latest_stable_date": "2026-10-27T15:44:53Z",
+      "latest_prerelease_tag": "v0.1.7-pre.6"
+    },
+    "midstream": {
+      "repository": "https://github.com/opendatahub-io/openshell",
+      "main_commit": "71b5bdbf4222b593e397609821726abaa229fa9d",
+      "main_commit_date": "2026-11-02T20:05:43Z",
+      "latest_tag": "v0.1.6-rhaiv.4",
+      "latest_tag_commit": "71b5bdbf4222b593e397609821726abaa229fa9d",
+      "upstream_merge_base": "634ca7d8",
+      "upstream_merge_base_date": "2026-11-02T19:13:06Z",
+      "contains_upstream_v0.1.6": true,
+      "commits_behind_upstream_main": 14,
+      "non_merge_commits_not_upstream": 147,
+      "diff_vs_merge_base_under_crates_proto_python": "none",
+      "github_releases": 0
+    },
+    "local_clones": "The maintainer's existing clones were read only and found stale (upstream at 2026-07-22, midstream at 2026-10-09); fresh public clones of both repositories were used instead."
+  },
+  "release_assets": {
+    "provenance": "live download, checksum verified, not executed",
+    "release": "v0.1.6",
+    "assets": {
+      "openshell-x86_64-unknown-linux-musl.tar.gz": "2951c67366f3e3584ed9cec8d49b9f0b0eefc8cacea8b0582ac164590492f136",
+      "openshell-prover-x86_64-unknown-linux-musl.tar.gz": "791528b070b5241f025f3f7a310850d12e7cda46ea65cc825133fbf21a8b2fc8"
+    },
+    "checksum_files": [
+      "openshell-checksums-sha256.txt",
+      "openshell-prover-checksums-sha256.txt"
+    ],
+    "checksum_result": "OK for both",
+    "binaries": "static-pie x86-64 ELF, stripped",
+    "executed": false,
+    "not_executed_reason": "Running downloaded third-party binaries was refused by the session permission policy."
+  },
+  "host": {
+    "landlock": {
+      "provenance": "live",
+      "method": "landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) through ctypes",
+      "abi": 10,
+      "lsm_list_contains_landlock": true,
+      "openshell_minimum_abi": 3
+    },
+    "podman_version": {
+      "provenance": "live",
+      "value": "5.8.9"
+    },
+    "docker": {
+      "provenance": "live",
+      "value": "not installed"
+    },
+    "openshell_installed": {
+      "provenance": "live",
+      "value": false
+    }
+  },
+  "zellij_default_keybindings": {
+    "provenance": "live",
+    "zellij_version": "0.45.1",
+    "binary_sha256": "0ec6ef07b63c6355c02ce18343d40ef5ef5af19e25313ea9009c8fceda29e94f",
+    "method": "zellij setup --dump-config with private HOME, XDG and ZELLIJ_CONFIG_DIR; no session started",
+    "bindings": {
+      "shared_except locked": [
+        "bind \"Ctrl g\" { SwitchToMode \"Locked\"; }",
+        "bind \"Ctrl q\" { Quit; }"
+      ],
+      "shared_except pane locked": [
+        "bind \"Ctrl p\" { SwitchToMode \"Pane\"; }"
+      ],
+      "pane": [
+        "bind \"Ctrl p\" { SwitchToMode \"Normal\"; }"
+      ],
+      "Ctrl d": "unbound"
+    },
+    "not_checked": "Zellij 0.44.2 (the other pinned release) was not dumped."
+  },
+  "source_facts": [
+    {
+      "provenance": "unvalidated",
+      "fact": "The main-process attachment consumes Ctrl-D (0x04) as detach, holds Ctrl-P (0x10) until the next byte, and detaches on Ctrl-P Ctrl-Q (0x11); exec channels are not filtered.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-supervisor-process/src/ssh.rs#L44-L76",
+      "same_at": "v0.1.6"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "sandbox connect, upload and download run the host OpenSSH client (ssh) with an openshell ProxyCommand; connect forces TERM=xterm-256color. OpenSSH remains a host prerequisite because of upload and download.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/ssh.rs#L216-L294",
+      "also": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/ssh.rs#L1518-L1831"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "sandbox exec does not use ssh: main.rs dispatches it to run::sandbox_exec_grpc, which streams over the gateway ExecSandboxInteractive gRPC call when stdin is a terminal (unary ExecSandbox otherwise) while the openshell CLI process holds the local TTY in crossterm raw mode. ssh::sandbox_exec is re-exported but has no caller. The sandbox side sets TERM=xterm-256color for a PTY and dumb otherwise.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/run.rs#L1987-L2125",
+      "also": [
+        "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/main.rs#L3650-L3689",
+        "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/run.rs#L2580-L2851",
+        "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-sandbox/src/boundary_exec.rs#L160-L172"
+      ]
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "rule get has no --output flag and prints labelled human-readable lines only.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/run.rs#L6731-L6839"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "sandbox create --upload conflicts with a trailing command; sandboxes are kept by default; --approval-mode accepts manual or auto and defaults to manual.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-cli/src/main.rs#L1448-L1643"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "crates/openshell-cli/src/main.rs is byte-identical between v0.1.6 and upstream main ba302a6, and the midstream has no changes under crates/ relative to its upstream merge base.",
+      "where": "git diff v0.1.6 ba302a6 -- crates/openshell-cli/src/main.rs; git diff 634ca7d8 71b5bdbf -- crates proto python"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "Host-gateway aliases (host.openshell.internal, host.containers.internal, host.docker.internal) get a trusted SSRF exemption only for a link-local pinned address; loopback is always blocked by network policy.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/crates/openshell-supervisor-network/src/proxy.rs#L263-L268"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "The CLI source has no telemetry call sites; telemetry is a default-on gateway feature disabled with OPENSHELL_TELEMETRY_ENABLED=false or compiled out.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/docs/observability/telemetry.mdx"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "Midstream Konflux images build the gateway and supervisor with --no-default-features --features defaults-without-telemetry; the midstream Helm chart default stays telemetryEnabled: true.",
+      "where": "https://github.com/opendatahub-io/openshell/blob/71b5bdbf4222b593e397609821726abaa229fa9d/deploy/docker/Dockerfile.konflux.gateway#L77"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "The midstream CLI is built dynamically against glibc into a container image (odh-openshell-cli) rather than published as GitHub release binaries.",
+      "where": "https://github.com/opendatahub-io/openshell/blob/71b5bdbf4222b593e397609821726abaa229fa9d/deploy/docker/Dockerfile.konflux.cli#L85-L96"
+    },
+    {
+      "provenance": "unvalidated",
+      "fact": "The openshell Python package is Alpha and depends on cloudpickle, grpcio, googleapis-common-protos, httpx and protobuf.",
+      "where": "https://github.com/NVIDIA/OpenShell/blob/ba302a6b0481ae02b647a5c84302aa201199f9da/pyproject.toml#L16-L24"
+    }
+  ],
+  "not_run": [
+    "openshell or openshell-prover binaries (refused by the session permission policy)",
+    "an OpenShell gateway or any sandbox",
+    "a build of either repository",
+    "the midstream CLI container image",
+    "any agent or model session"
+  ]
+}
