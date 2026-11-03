@@ -1,6 +1,7 @@
 """MCP server exposing Claude Code, Codex and Pi sessions for Tongs Agents.
 
-The read-only ``fleet_*`` tools are always listed. The agent control tools
+The ``fleet_*`` tools are always listed. They only read the session store,
+except ``fleet_cleanup``, which runs ``session_store.maintain_store``. The agent control tools
 (``agents_spawn``, ``agents_send``, ``agents_status``, ``agents_wait``) are
 registered only when ``[control].mcp_enabled`` is true when the server starts;
 their policy lives in ``mcp_control`` and every call is audited by
@@ -21,9 +22,10 @@ from mcp.server.fastmcp import FastMCP
 from tongs_agents import control
 from tongs_agents import focus as focus_module
 from tongs_agents.app_config import AppConfigError, load_app_config
-from tongs_agents.discovery import cleanup_ended_sessions, read_sessions
+from tongs_agents.discovery import read_sessions
 from tongs_agents.mcp_chat import ChatGate, ChatServer
 from tongs_agents.mcp_control import McpControl, error_payload
+from tongs_agents.session_store import maintain_store
 
 SERVER_NAME = "tongs-agents"
 
@@ -109,8 +111,13 @@ def fleet_focus(query: str) -> str:
 
 
 def fleet_cleanup() -> str:
-    """Remove status files for ended sessions older than 5 minutes."""
-    return json.dumps({"removed": cleanup_ended_sessions()})
+    """Run session store maintenance now: record agent processes no hook
+    reported and remove ended, exited and stale session records."""
+    result = maintain_store(force=True)
+    payload: dict = {"removed": result.removed}
+    if not result.ran:
+        payload["skipped"] = result.skipped
+    return json.dumps(payload)
 
 
 def _control_call(call) -> str:

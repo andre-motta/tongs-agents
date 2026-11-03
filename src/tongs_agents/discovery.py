@@ -35,6 +35,11 @@ MAX_ENV_ITEMS = 32
 MAX_ENV_VALUE_LENGTH = 1024
 MAX_FUTURE_SECONDS = 300
 OTHER_HARNESS = "other"
+LOCK_TIMEOUT_SECONDS = 0.5
+ENDED_RETENTION_SECONDS = 300
+PIDLESS_RETENTION_SECONDS = 600
+IDLE_ATTENTION_SECONDS = 120
+MAINTENANCE_LOCK_NAME = ".fleet-maintenance.lock"
 
 
 @dataclass(frozen=True)
@@ -528,7 +533,7 @@ def _validate_record(data) -> dict | None:
 
 
 @contextmanager
-def _file_lock(path: Path):
+def _file_lock(path: Path, timeout: float = LOCK_TIMEOUT_SECONDS):
     if path.exists() and not _path_is_regular(path):
         raise OSError("unsafe lock entry")
     flags = os.O_RDWR | os.O_CREAT
@@ -537,7 +542,7 @@ def _file_lock(path: Path):
     descriptor = os.open(path, flags, 0o600)
     locked = False
     try:
-        deadline = time.monotonic() + 0.5
+        deadline = time.monotonic() + timeout
         if sys.platform == "win32":
             import msvcrt
             if os.fstat(descriptor).st_size == 0:
@@ -583,6 +588,17 @@ def _record_lock(canonical_id: str):
     digest = canonical_id.rsplit(":", 1)[-1]
     path = paths.sessions_dir() / f".fleet-v{SCHEMA_VERSION}-{digest}.lock"
     with _file_lock(path):
+        yield
+
+
+@contextmanager
+def store_maintenance_lock():
+    """The store-wide maintenance lock, taken without waiting.
+
+    Raises ``TimeoutError`` when another maintainer holds it. Hook writes never
+    take it: they are serialized with cleanup by the per-record lock alone.
+    """
+    with _file_lock(paths.sessions_dir() / MAINTENANCE_LOCK_NAME, timeout=0):
         yield
 
 
@@ -703,6 +719,7 @@ def delete_session_record(
 
 
 def discover_processes():
+    """Record agent processes no hook reported; only ``maintain_store`` calls it."""
     if not _store_available(create=True):
         return
     now = int(time.time())
@@ -786,45 +803,49 @@ def _launch_ended(data: dict) -> bool:
     )
 
 
-def _cleanup_stale_sessions():
+def _should_remove(data: dict, now: int) -> bool:
+    status_value = data.get("status", "")
+    age = now - data.get("ts", now)
+    return bool(
+        (status_value == "ended" and age > ENDED_RETENTION_SECONDS)
+        or (data.get("pid") and resolve_session_process(data) is None)
+        or (not data.get("pid") and age > PIDLESS_RETENTION_SECONDS)
+        or _launch_ended(data)
+    )
+
+
+def _unlink_if_unchanged(path: Path, seen: dict) -> bool:
+    """Remove ``path`` only while it still holds the record cleanup judged.
+
+    A schema 1 record is re-read under its record lock, the lock every writer
+    holds, so a hook write that lands after the judgement keeps its record.
+    Legacy schema 0 records have no writer left and no record lock.
+    """
+    def unlink() -> bool:
+        if _read_record(path) != seen:
+            return False
+        path.unlink()
+        return True
+
+    try:
+        if seen.get("schema_version") != SCHEMA_VERSION:
+            return unlink()
+        with _record_lock(seen["canonical_id"]):
+            return unlink()
+    except OSError:
+        return False
+
+
+def _cleanup_stale_sessions() -> int:
+    """Remove ended, exited and stale records; only ``maintain_store`` calls it."""
     now = int(time.time())
     removed = 0
     for path in _iter_record_paths():
         data = _read_record(path)
-        if data is None:
+        if data is None or not _should_remove(data, now):
             continue
-        status_value = data.get("status", "")
-        age = now - data.get("ts", now)
-        should_remove = (
-            (status_value == "ended" and age > 300)
-            or (data.get("pid") and resolve_session_process(data) is None)
-            or (not data.get("pid") and age > 600)
-            or _launch_ended(data)
-        )
-        if should_remove:
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                pass
-    return removed
-
-
-def cleanup_ended_sessions():
-    now = int(time.time())
-    removed = 0
-    for path in _iter_record_paths():
-        data = _read_record(path)
-        if (
-            data is not None
-            and data.get("status") == "ended"
-            and now - data.get("ts", now) > 300
-        ):
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                pass
+        if _unlink_if_unchanged(path, data):
+            removed += 1
     return removed
 
 
@@ -904,22 +925,32 @@ def read_session_records() -> list[dict]:
     return _deduplicate_records(read_stored_sessions())
 
 
-def read_sessions():
-    discover_processes()
-    _cleanup_stale_sessions()
-    records = read_session_records()
+def annotate_session(record: dict, now: int) -> dict:
+    """A copy of a stored record with the derived fields every consumer shows.
+
+    The one place that computes ``age_seconds`` and ``needs_attention``.
+    """
+    view = {
+        key: value for key, value in record.items()
+        if key not in ("_legacy", "_process")
+    }
+    view["age_seconds"] = max(0, now - view.get("ts", now))
+    status_value = view.get("status", "")
+    view["needs_attention"] = status_value == "waiting" or (
+        status_value == "idle" and view["age_seconds"] > IDLE_ATTENTION_SECONDS
+    )
+    launch = view.get("launch") or {}
+    view["launch_id"] = launch.get("launch_id", "")
+    view["profile_id"] = launch.get("profile_id", "")
+    return view
+
+
+def read_sessions() -> list[dict]:
+    """Every session in the store, sorted by repo. Never writes or unlinks.
+
+    Process discovery and cleanup belong to ``session_store.maintain_store``.
+    """
     now = int(time.time())
-    for record in records:
-        record.pop("_legacy", None)
-        record.pop("_process", None)
-        record["age_seconds"] = max(0, now - record.get("ts", now))
-        status_value = record.get("status", "")
-        record["needs_attention"] = (
-            status_value == "waiting"
-            or (status_value == "idle" and record["age_seconds"] > 120)
-        )
-        launch = record.get("launch") or {}
-        record["launch_id"] = launch.get("launch_id", "")
-        record["profile_id"] = launch.get("profile_id", "")
+    records = [annotate_session(record, now) for record in read_session_records()]
     records.sort(key=lambda record: record.get("repo", ""))
     return records
