@@ -185,6 +185,36 @@ def test_stop_is_idempotent(fake, capsys):
     ]
 
 
+@pytest.mark.parametrize("after", ["Mystery", "Error", "Stopped"])
+def test_start_never_reports_success_for_a_phase_it_does_not_know(fake, monkeypatch, capsys,
+                                                                  after):
+    create_sandbox(fake, "tongs-boxed", profile="boxed", phases="Stopped")
+    monkeypatch.setenv("FAKE_OPENSHELL_LIFECYCLE_PHASE", after)
+    assert run("start", "tongs-boxed") == 1
+    captured = capsys.readouterr()
+    assert "Started" not in captured.out
+    assert f"phase '{after}'" in captured.err and "not reporting success" in captured.err
+
+
+def test_start_reports_a_sandbox_still_provisioning(fake, monkeypatch, capsys):
+    create_sandbox(fake, "tongs-boxed", profile="boxed", phases="Stopped")
+    monkeypatch.setenv("FAKE_OPENSHELL_LIFECYCLE_PHASE", "Provisioning")
+    assert run("start", "tongs-boxed") == 0
+    assert "Starting sandbox tongs-boxed (Provisioning)" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("after", ["Mystery", "Ready", "Unknown"])
+def test_stop_never_reports_success_for_a_phase_it_does_not_know(fake, monkeypatch, capsys,
+                                                                 after):
+    create_sandbox(fake, "tongs-boxed", profile="boxed", phases="Mystery")
+    monkeypatch.setenv("FAKE_OPENSHELL_LIFECYCLE_PHASE", after)
+    assert run("stop", "tongs-boxed") == 1
+    captured = capsys.readouterr()
+    assert "already stopped" not in captured.out and "Stopped sandbox" not in captured.out
+    assert f"phase '{after}'" in captured.err
+    assert mutating_calls(fake) == [["sandbox", "stop", "tongs-boxed"]]
+
+
 def test_stop_and_delete_refuse_a_sandbox_an_agent_runs_in(fake, pane_process, capsys,
                                                          no_tty):
     _process, info = pane_process
@@ -486,10 +516,27 @@ def test_doctor_warns_on_unreachable_gateway_old_cli_and_old_landlock(fake, monk
 
 
 def test_doctor_refuses_a_cli_older_than_0_1_0(fake, monkeypatch):
+    write_config(profile_config())
     monkeypatch.setenv("FAKE_OPENSHELL_VERSION", "0.0.9")
     checks = sandbox_command.doctor_checks()
     assert ("openshell", "error") in {(check.name, check.level) for check in checks}
     assert ["status", "-o", "json"] not in fake.calls()
+
+
+@pytest.mark.parametrize("version", ["0.0.9", "not a version"])
+def test_doctor_only_warns_on_an_unsupported_cli_no_profile_uses(fake, monkeypatch, version):
+    monkeypatch.setenv("FAKE_OPENSHELL_VERSION", version)
+    checks = sandbox_command.doctor_checks()
+    openshell = [check for check in checks if check.name == "openshell"]
+    assert [check.level for check in openshell] == ["warn"]
+    assert all(check.level != "error" for check in checks)
+    assert ["status", "-o", "json"] not in fake.calls()
+
+
+def test_doctor_only_warns_when_an_unused_cli_cannot_report_its_version(fake, monkeypatch):
+    monkeypatch.setenv("FAKE_OPENSHELL_FAIL", "version")
+    [check] = [check for check in sandbox_command.doctor_checks() if check.name == "openshell"]
+    assert check.level == "warn" and "version" in check.message
 
 
 def test_landlock_abi_never_raises():

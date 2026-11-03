@@ -8,25 +8,30 @@ with ``n`` and raises the panel's desktop notification.
 ``ApprovalActions`` is the host mixin. It polls the sandboxes of the listed
 rows in a worker thread, notifies once per new request, and on ``a`` (or the
 palette's "Review access requests") opens ``ApprovalScreen`` with the full
-proposal text, Security and Prover lines included. Approving needs a second
-yes in a confirmation dialog; rejecting needs a reason. Output the parser
+proposal text, Security and Prover lines included. Approving needs the Yes
+button of ``ApproveScreen``, which shows the whole proposal again (Security
+and Prover first) in a capped, scrollable body with its buttons always on
+screen; no single key approves. Rejecting needs a reason. Output the parser
 does not recognise is shown raw and cannot be approved here. Polling only
-reads; nothing approves without those key presses (row 14), and there is no
-approve-all.
+reads, one poll at a time; nothing approves without those actions (row 14),
+and there is no approve-all.
 """
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 
 from rich.text import Text
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Input, OptionList, Static
+from textual.widgets import Button, Input, OptionList, Static
 from textual.widgets.option_list import Option
+from textual.worker import Worker, get_current_worker
 
 from tongs_agents.attention import with_access_requests
 from tongs_agents.models import FleetSession, SessionStatus
@@ -35,7 +40,6 @@ from tongs_agents.sandbox import approvals
 from tongs_agents.sandbox import state as sandbox_state
 from tongs_agents.sandbox.approvals import ApprovalError, Proposal, RuleListing
 from tongs_agents.sandbox.openshell import OpenShell, OpenShellError
-from tongs_agents.widgets.chat_panel import ConfirmScreen
 
 Key = tuple[str | None, str]
 
@@ -43,6 +47,7 @@ APPROVAL_POLL_SECONDS = 5.0
 REVIEW_ACCESS = "Review access requests"
 NOTE_LIMIT = 160
 FLAG_LABELS = ("Security:", "Prover:", "Validation:", "Application:")
+FIRST_LABELS = ("Security:", "Prover:", "Validation:")
 
 
 def launch_sandboxes() -> dict[str, Key]:
@@ -101,6 +106,14 @@ def proposal_text(proposal: Proposal) -> Text:
         style = "bold yellow" if line.startswith(FLAG_LABELS) else None
         text.append(line, style=style)
     return text
+
+
+def approval_text(proposal: Proposal) -> Text:
+    """Every line of the proposal, Security and Prover lines first."""
+    lines = proposal.text.split("\n")
+    first = [line for line in lines if line.startswith(FIRST_LABELS)]
+    rest = [line for line in lines if not line.startswith(FIRST_LABELS)]
+    return proposal_text(replace(proposal, text="\n".join(first + rest)))
 
 
 def _short(value: str, limit: int = NOTE_LIMIT) -> str:
@@ -249,6 +262,113 @@ class ReasonScreen(ModalScreen[str | None]):
         self.dismiss(None)
 
 
+class ApproveScreen(ModalScreen[bool]):
+    """The final yes or no on one access request, showing all of it.
+
+    The title and the buttons are docked, so they stay on screen however
+    long the proposal is; the body between them scrolls. Only the Yes button
+    approves (a click, or Enter once it has focus); no key binding does, so a
+    stray key never approves text that is still scrolled out of view.
+    """
+
+    DEFAULT_CSS = """
+    ApproveScreen {
+        align: center middle;
+    }
+    ApproveScreen > Vertical {
+        width: 100;
+        max-width: 100%;
+        height: auto;
+        max-height: 100%;
+        border: thick $error;
+        background: $surface;
+        padding: 0 1;
+    }
+    ApproveScreen #approve-title {
+        dock: top;
+        height: auto;
+    }
+    ApproveScreen #approve-body {
+        height: auto;
+        max-height: 100%;
+    }
+    ApproveScreen #approve-buttons {
+        dock: bottom;
+        height: auto;
+    }
+    """
+
+    BINDINGS = [
+        Binding("n", "answer_no", "No"),
+        Binding("escape", "answer_no", "Cancel"),
+    ]
+
+    def __init__(self, sandbox: str, gateway: str | None, proposal: Proposal) -> None:
+        super().__init__()
+        self.sandbox = sandbox
+        self.gateway = gateway
+        self.proposal = proposal
+
+    def compose(self) -> ComposeResult:
+        where = f" (gateway {self.gateway})" if self.gateway else ""
+        title = Text("Approve this network access?", style="bold")
+        title.append(f"\nSandbox {self.sandbox}{where}", style=None)
+        title.append("\nScroll to read all of it; only the Yes button approves.", style="dim")
+        with Vertical():
+            yield Static(title, id="approve-title")
+            with VerticalScroll(id="approve-body"):
+                yield Static(approval_text(self.proposal), id="approve-text")
+            with Horizontal(id="approve-buttons"):
+                # No comes first, so a reflexive Tab then Enter declines.
+                yield Button("No", id="approve-no", variant="primary")
+                yield Button("Yes, approve", id="approve-yes", variant="error")
+
+    def on_mount(self) -> None:
+        self.query_one("#approve-body", VerticalScroll).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.dismiss(event.button.id == "approve-yes")
+
+    def action_answer_no(self) -> None:
+        self.dismiss(False)
+
+
+class ApprovalPoll:
+    """One approvals poll and whether its thread can still be running.
+
+    A cancelled worker either never starts its thread or runs it to the end,
+    so ``busy`` stays true until the thread is done, unless it is abandoned
+    before it starts (``claim`` and ``busy`` agree under one lock).
+    """
+
+    def __init__(self) -> None:
+        self.worker: Worker | None = None
+        self.done = threading.Event()
+        self._lock = threading.Lock()
+        self._started = False
+        self._abandoned = False
+
+    def claim(self) -> bool:
+        """Called first in the worker thread; False when the poll was abandoned."""
+        with self._lock:
+            if self._abandoned:
+                return False
+            self._started = True
+            return True
+
+    def busy(self) -> bool:
+        if self.done.is_set():
+            return False
+        if self.worker is not None and self.worker.is_cancelled:
+            with self._lock:
+                if not self._started:
+                    self._abandoned = True
+                    self.done.set()
+                    return False
+        return True
+
+
 class ApprovalActions:
     """Host mixin: poll, show and decide OpenShell access requests.
 
@@ -263,6 +383,8 @@ class ApprovalActions:
         self.approval_listings: dict[Key, RuleListing] = {}
         self.approval_interval = interval
         self.approval_feed = ApprovalFeed(feed, lambda: self.approval_listings)
+        self.approval_run: ApprovalPoll | None = None
+        self.approval_poll_again = False
         return self.approval_feed
 
     def mount_approvals(self) -> None:
@@ -273,15 +395,58 @@ class ApprovalActions:
                                "Approve or reject a sandbox's pending network access",
                                self.action_review_access)]
 
-    @work(thread=True, exclusive=True, group="approvals")
+    @property
+    def approval_polling(self) -> bool:
+        """A poll's ``openshell rule get`` calls may still be running."""
+        run = self.approval_run
+        return run is not None and run.busy()
+
     def poll_approvals(self) -> None:
+        """Start one poll unless one is running; then it runs again once that one ends.
+
+        A thread worker cannot be stopped, so a slow or unreachable gateway
+        would otherwise stack ``openshell rule get`` processes and let an
+        older result land after a newer one.
+        """
+        if self.approval_polling:
+            self.approval_poll_again = True
+            return
         targets = self.approval_feed.targets()
         if not targets and not self.approval_listings:
             return
-        listings = approvals.poll(targets, self.approval_client_for)
-        self.call_from_thread(self._approvals_polled, listings)
+        self.approval_poll_again = False
+        run = ApprovalPoll()
+        self.approval_run = run
+        run.worker = self._poll_approvals_worker(run, targets)
 
-    def _approvals_polled(self, listings: dict[Key, RuleListing]) -> None:
+    @work(thread=True, exclusive=True, group="approvals")
+    def _poll_approvals_worker(self, run: ApprovalPoll, targets: set[Key]) -> None:
+        if not run.claim():
+            return
+        worker = get_current_worker()
+        listings = None
+        try:
+            listings = approvals.poll(targets, self.approval_client_for)
+        finally:
+            try:
+                if not worker.is_cancelled:
+                    self.call_from_thread(self._approvals_polled, run, listings)
+            except RuntimeError:
+                pass  # the app stopped meanwhile; nothing is left to update
+            finally:
+                run.done.set()
+
+    def _approvals_polled(self, run: ApprovalPoll,
+                          listings: dict[Key, RuleListing] | None) -> None:
+        run.done.set()
+        if run is not self.approval_run:
+            return
+        if listings is not None:
+            self._apply_approvals(listings)
+        if self.approval_poll_again:
+            self.poll_approvals()
+
+    def _apply_approvals(self, listings: dict[Key, RuleListing]) -> None:
         before = self.approval_listings
         self.approval_listings = listings
         fresh = approvals.new_proposals(before, listings)
@@ -330,11 +495,10 @@ class ApprovalActions:
     def _access_decided(self, listing: RuleListing, action: str, proposal: Proposal) -> None:
         if action == "approve":
             def confirmed(answer: bool | None) -> None:
-                if answer:
+                if answer is True:
                     self.access_approve(listing.key, proposal)
 
-            message = f"Sandbox {listing.sandbox}\n{proposal.text}"
-            self.push_screen(ConfirmScreen("Approve this network access?", message),
+            self.push_screen(ApproveScreen(listing.sandbox, listing.gateway, proposal),
                              confirmed)
             return
 
