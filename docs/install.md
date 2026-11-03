@@ -38,10 +38,18 @@ tongs-agents doctor                           # read-only report of what is miss
 
 `install` writes Claude Code hooks to `settings.json` and Codex hooks to
 `hooks.json` in each config home, registers the `tongs-agents` MCP server
-through `claude mcp add --scope user` and `codex mcp add` when those CLIs are
-on `PATH`, and with Pi installs the packaged extension ([Pi](pi.md)). It is
-idempotent. Restart running agent sessions afterwards; in Codex, review and
-trust the new hooks with `/hooks`.
+when that harness's CLI is on `PATH`, and with Pi installs the packaged
+extension ([Pi](pi.md)). Claude Code gets the server through
+`claude mcp add --scope user`. Codex gets one `[mcp_servers.tongs-agents]`
+table in its `config.toml`, written by tongs-agents itself (see
+[Codex config.toml](#codex-configtoml)). It is idempotent. The summary at
+the end names the harnesses actually set up, and any that got hooks only
+because their CLI was missing. Restart running agent sessions afterwards; in
+Codex, review and trust the new hooks with `/hooks`.
+
+A profile with a `sandbox` table is skipped: its agent runs inside OpenShell,
+whose image carries its own hooks ([sandbox](sandbox.md)), so install,
+uninstall and doctor do not treat the host config home as its home.
 
 Session records go to `$XDG_STATE_HOME/tongs-agents/sessions/`
 (`~/.local/state/tongs-agents/sessions/` by default), a private 0700
@@ -72,9 +80,10 @@ what is left behind.
    `hooks.json`, in the default homes, in `--claude-config-dir` and
    `--codex-home` dirs and in the config home of every profile) is staged
    into one change set and committed as one unit.
-2. Then, per target, the `tongs-agents` MCP server is registered through
-   `claude mcp add --scope user` or `codex mcp add`, when that CLI is on
-   `PATH`.
+2. Then, per target, the `tongs-agents` MCP server is registered, when that
+   harness's CLI is on `PATH`: through `claude mcp add --scope user` for
+   Claude Code, and as the `[mcp_servers.tongs-agents]` table in Codex's
+   `config.toml`.
 3. Then the Pi extension, for Pi targets.
 4. Finally the install record (`installs.json` in the state directory) is
    saved.
@@ -89,12 +98,48 @@ only some of them. Running `tongs-agents install` again finishes the job; it
 is idempotent.
 
 `uninstall` follows the same order: every hook file is edited in one change
-set, then MCP entries are removed per target.
+set, then MCP entries are removed per target. Our Codex tables are removed
+from `config.toml` whether or not the Codex CLI is on `PATH`.
+
+## Codex config.toml
+
+Codex keeps MCP servers as `[mcp_servers.<name>]` tables in
+`$CODEX_HOME/config.toml` (`~/.codex/config.toml` by default). `install`
+and `uninstall` never run `codex mcp add` or `codex mcp remove`, which drop
+every user comment in all `[mcp_servers.*]` tables. They edit only these
+tables, with the same owned-table writer `config apply` uses:
+
+- `[mcp_servers.tongs-agents]`, added or replaced when it starts
+  `python -m tongs_agents.mcp_server` and differs from what install writes,
+  and removed by `uninstall`; an `enabled = false` in it is kept;
+- `[mcp_servers.fleet]`, removed when it starts the claude-fleet-monitor
+  server.
+
+A `tongs-agents` table that starts anything else is the user's: install
+keeps it and says so. Every other byte of the file, comments included, stays
+as it was. When the file defines our table in a form the writer cannot edit
+exactly (an inline table or dotted keys), install leaves the file alone and
+prints `Could not register the Codex MCP server: <path>: <reason>`.
+
+Codex starts a stdio MCP server with only `HOME`, `LANG`, `PATH`, `TMPDIR`
+and `USER` plus the variables named in its `env_vars`. The table therefore
+lists the variables the server reads:
+
+| Variables | Why |
+| --- | --- |
+| `TONGS_AGENTS_LAUNCH_ID`, `TONGS_AGENTS_PROFILE` | Launch identity for the chat tools and the `agents_*` caller |
+| `ZELLIJ_SESSION_NAME`, `ZELLIJ_SOCKET_DIR`, `TMUX`, `TMUX_PANE` | The workspace pane and session the agent runs in |
+| `XDG_STATE_HOME`, `TONGS_AGENTS_STATE_DIR` | The sessions and launches the hooks write |
+| `XDG_CONFIG_HOME`, `TONGS_AGENTS_CONFIG_DIR` | Profiles and `[control]` settings |
+| `XDG_RUNTIME_DIR` | Control locks and rate limits shared with the CLI |
+
+`config apply` writes the same table, so either command adopts what the
+other wrote.
 
 ## Backups
 
-Before the first edit of an existing `settings.json` or `hooks.json`, the
-owned-file writer keeps a copy of it next to the file as
+Before the first edit of an existing `settings.json`, `hooks.json` or Codex
+`config.toml`, the owned-file writer keeps a copy of it next to the file as
 `<name>.tongs-agents.bak` (mode 0600). The copy is taken only once:
 
 - a later `install`, or a `config apply` that edits the same file, never

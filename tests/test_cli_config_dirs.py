@@ -170,17 +170,17 @@ def test_uninstall_keeps_sessions_while_a_recorded_dir_has_hooks(home, monkeypat
     assert "still has tongs-agents hooks" in capsys.readouterr().out
 
 
-def test_codex_mcp_calls_carry_codex_home(home, monkeypatch):
+def test_codex_mcp_table_lands_in_codex_home(home, monkeypatch):
     c = home.root / "c"
     _run(monkeypatch, "install", "--codex-home", str(c))
     assert _owned_groups(c / "hooks.json", "codex") == _all_events("codex")
-    codex = [call for call in home.calls if call.argv[0].endswith("codex")]
-    assert codex and all(call.codex_home == str(c) for call in codex)
-    assert [call.argv[1:3] for call in codex][-1] == ["mcp", "add"]
+    assert "tongs-agents" in (c / "config.toml").read_text()
+    assert not (home.home / ".codex").exists()
+    assert not [call for call in home.calls if call.argv[0].endswith("codex")]
 
-    home.calls.clear()
     _run(monkeypatch, "uninstall", "--codex-home", str(c))
-    assert all(call.codex_home == str(c) for call in home.calls)
+    assert "tongs-agents" not in (c / "config.toml").read_text()
+    assert not [call for call in home.calls if call.argv[0].endswith("codex")]
 
 
 def test_default_install_never_follows_env_homes(home, monkeypatch):

@@ -5,35 +5,28 @@
 - MCP: our ``[mcp_servers.<name>]`` tables in ``$CODEX_HOME/config.toml``
   through the owned-table writer (option C), with ``env_vars`` naming the
   variables a server needs; Codex passes nothing else through. The
-  tongs-agents server also gets ``XDG_STATE_HOME`` and
-  ``TONGS_AGENTS_STATE_DIR`` so it reads the sessions the hooks write.
+  tongs-agents server is the same table ``install`` writes
+  (``cli.codex_mcp_table``): its ``env_vars`` carry the launch identity, the
+  multiplexer pane and the state, config and runtime dirs, so chat, control
+  and the sessions it reads match the hooks.
 - Hooks: our keyed entries in ``$CODEX_HOME/hooks.json``, as ``install`` writes.
 """
 
 from __future__ import annotations
 
 import shutil
-import sys
 from pathlib import Path
 from typing import Any
 
-from tongs_agents import cli, owned, paths, toml_tables
+from tongs_agents import cli, owned, toml_tables
 from tongs_agents.config_layer.emitters import _common
 from tongs_agents.config_layer.emitters.base import BaseEmitter
 from tongs_agents.config_layer.emitters.claude import skill_tree_files
 from tongs_agents.config_layer.protocol import CanonicalFragment, Change, ProfileTarget
 
-STATE_ENV = ("XDG_STATE_HOME", paths.STATE_DIR_ENV)
-
 
 def skills_dir(directory: Path) -> Path:
     return directory / "skills" / _common.BUNDLE
-
-
-def _without_enabled(value: Any) -> tuple[Any, bool]:
-    if isinstance(value, dict) and value.get("enabled") is False:
-        return {key: item for key, item in value.items() if key != "enabled"}, True
-    return value, False
 
 
 class CodexEmitter(BaseEmitter):
@@ -77,11 +70,7 @@ class CodexEmitter(BaseEmitter):
 
     def _desired(self, plan, canonical, target) -> dict[str, dict[str, Any]]:
         desired = {
-            _common.RESERVED_SERVER: {
-                "command": sys.executable,
-                "args": ["-m", cli.MCP_MODULE],
-                "env_vars": list(STATE_ENV),
-            },
+            _common.RESERVED_SERVER: cli.codex_mcp_table(),
         }
         for server in _common.selected_servers(canonical, target):
             if server.url is not None:
@@ -115,7 +104,7 @@ class CodexEmitter(BaseEmitter):
             entry_id = f"toml-table:{name}"
             recorded = previous.get(entry_id)
             raw = current_tables.get(name)
-            current, disabled = _without_enabled(raw)
+            current, disabled = cli._without_enabled(raw)
             want = desired.get(name)
             action = _common.decide_server(
                 plan, path, want, current if name in current_tables else None, recorded,

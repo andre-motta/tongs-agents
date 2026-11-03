@@ -1,11 +1,13 @@
 import json
 import os
 import stat
+import tomllib
 from types import SimpleNamespace
 
 import pytest
 
 from tongs_agents import cli, legacy, owned, paths
+from tongs_agents.profiles import load_profiles
 
 
 LEGACY_HOOK = legacy.LEGACY_HOOK_COMMANDS[0]
@@ -183,40 +185,6 @@ def test_uninstall_claude_mcp_removes_only_owned(tmp_path, monkeypatch):
         ["mcp", "remove", "--scope", "user", "tongs-agents"],
         ["mcp", "remove", "--scope", "user", OLD_KEY],
     ]
-
-
-def _codex_lookup(servers):
-    return lambda command, name, directory=None: servers.get(name)
-
-
-def test_install_codex_mcp_uses_codex_cli(monkeypatch):
-    from tongs_agents import cli
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({}))
-    calls = []
-
-    def fake_run(command, **kwargs):
-        calls.append(command)
-        return SimpleNamespace(returncode=0, stderr="")
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == [[
-        "/usr/bin/codex", "mcp", "add", "tongs-agents", "--", cli.sys.executable,
-        "-m", "tongs_agents.mcp_server",
-    ]]
-
-
-def test_install_codex_mcp_preserves_name_conflict(monkeypatch):
-    from tongs_agents import cli
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({
-        "tongs-agents": {"transport": {"command": "other", "args": []}},
-        OLD_KEY: {"transport": {"command": "node", "args": ["fleet.js"]}},
-    }))
-    def fail_run(*args, **kwargs):
-        raise AssertionError("Codex MCP config should not be replaced")
-
-    monkeypatch.setattr(cli.subprocess, "run", fail_run)
-    cli._install_codex_mcp("/usr/bin/codex")
 
 
 def test_install_idempotent(settings_file, monkeypatch):
@@ -485,114 +453,222 @@ def test_install_drops_owned_settings_mcp_and_keeps_foreign(settings_file, monke
     assert json.loads(settings_file.read_text())["mcpServers"] == {OLD_KEY: foreign}
 
 
-def _codex_runner(calls, returncode=0):
-    def fake_run(command, **kwargs):
-        calls.append(command[1:])
-        return SimpleNamespace(returncode=returncode, stderr="failed")
-    return fake_run
+USER_CODEX_CONFIG = """\
+# Personal Codex settings
+model = "gpt-5"  # pinned
+
+# GitHub, read only
+[mcp_servers.github]
+command = "github-mcp"  # local build
+args = ["--read-only"]
+
+# Jira (work account)
+[mcp_servers.jira]
+command = "jira-mcp"
+env_vars = ["JIRA_TOKEN"]
+# end of Jira
+"""
 
 
-def test_install_codex_mcp_removes_legacy_entry(monkeypatch):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({OLD_KEY: {"transport": {
-        "command": "/old/bin/python3", "args": ["-m", LEGACY_MODULE],
-    }}}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == [
-        ["mcp", "remove", OLD_KEY],
-        ["mcp", "add", "tongs-agents", "--", cli.sys.executable, "-m", "tongs_agents.mcp_server"],
+def _codex_tables(directory):
+    return tomllib.loads((directory / "config.toml").read_text())["mcp_servers"]
+
+
+def _write_codex_config(directory, text):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / "config.toml"
+    path.write_text(text)
+    path.chmod(0o640)
+    return path
+
+
+def test_codex_mcp_table_carries_the_identity_and_dir_names():
+    table = cli.codex_mcp_table()
+    assert table["command"] == cli.sys.executable
+    assert table["args"] == ["-m", "tongs_agents.mcp_server"]
+    assert table["env_vars"] == [
+        "TONGS_AGENTS_LAUNCH_ID", "TONGS_AGENTS_PROFILE", "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_SOCKET_DIR", "TMUX", "TMUX_PANE", "XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR",
+        "XDG_CONFIG_HOME", "TONGS_AGENTS_CONFIG_DIR", "XDG_RUNTIME_DIR",
     ]
 
 
-def test_install_codex_mcp_skips_current_entry(monkeypatch):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": {"transport": {
-        "command": cli.sys.executable, "args": ["-m", "tongs_agents.mcp_server"],
-    }}}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == []
+def test_install_codex_mcp_creates_a_private_config(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    assert cli._install_codex_mcp(tmp_path / "codex")
+    path = tmp_path / "codex" / "config.toml"
+    assert _codex_tables(tmp_path / "codex") == {"tongs-agents": cli.codex_mcp_table()}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert not owned.backup_path(path).exists()
 
 
-def _codex_script(calls, results):
-    def fake_run(command, **kwargs):
-        calls.append(command[1:])
-        return SimpleNamespace(returncode=results.pop(0), stderr="failed")
-    return fake_run
+def _never_run(*args, **kwargs):
+    raise AssertionError("install must not run the codex CLI")
 
 
-OUTDATED_CODEX = {"transport": {
-    "type": "stdio", "command": "/old/bin/python3", "args": ["-m", "tongs_agents.mcp_server"],
-    "env": {"EXAMPLE": "1"},
-}}
+def test_install_codex_mcp_keeps_every_user_comment(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    path = _write_codex_config(tmp_path / "codex", USER_CODEX_CONFIG)
+    assert cli._install_codex_mcp(tmp_path / "codex")
+    text = path.read_text()
+    assert text.startswith(USER_CODEX_CONFIG)
+    assert set(_codex_tables(tmp_path / "codex")) == {"github", "jira", "tongs-agents"}
+    assert owned.backup_path(path).read_text() == USER_CODEX_CONFIG
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+    assert cli._install_codex_mcp(tmp_path / "codex")
+    assert path.read_text() == text
+
+    assert cli._uninstall_codex_mcp(tmp_path / "codex")
+    assert path.read_text().rstrip("\n") == USER_CODEX_CONFIG.rstrip("\n")
+    assert owned.backup_path(path).read_text() == USER_CODEX_CONFIG
 
 
-@pytest.mark.parametrize("restore_code, message", [
-    (0, "Restored the previous Codex MCP server tongs-agents; "
-        "run 'tongs-agents install --agent codex' to retry the update"),
-    (1, "was removed and could not be restored; "
-        "run 'tongs-agents install --agent codex' to register it again"),
-])
-def test_install_codex_mcp_restores_entry_when_add_fails(monkeypatch, capsys, restore_code,
-                                                         message):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": OUTDATED_CODEX}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_script(calls, [0, 1, restore_code]))
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == [
-        ["mcp", "remove", "tongs-agents"],
-        ["mcp", "add", "tongs-agents", "--", cli.sys.executable, "-m", "tongs_agents.mcp_server"],
-        ["mcp", "add", "tongs-agents", "--env", "EXAMPLE=1", "--",
-         "/old/bin/python3", "-m", "tongs_agents.mcp_server"],
-    ]
-    assert message in capsys.readouterr().out
+def test_install_codex_mcp_adopts_and_updates_an_m1_entry(tmp_path):
+    path = _write_codex_config(tmp_path / "codex", USER_CODEX_CONFIG + (
+        "\n[mcp_servers.tongs-agents]\n"
+        'command = "/old/venv/bin/python3"\n'
+        'args = ["-m", "tongs_agents.mcp_server"]\n'
+        "enabled = false\n"
+        "\n[mcp_servers.tongs-agents.env]\n"
+        'EXAMPLE = "1"\n'
+    ))
+    assert cli._install_codex_mcp(tmp_path / "codex")
+    tables = _codex_tables(tmp_path / "codex")
+    assert tables["tongs-agents"] == {**cli.codex_mcp_table(), "enabled": False}
+    assert path.read_text().startswith(USER_CODEX_CONFIG)
 
 
-def test_install_codex_mcp_restore_names_the_config_home(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": OUTDATED_CODEX}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_script(calls, [0, 1, 1]))
-    cli._install_codex_mcp("/usr/bin/codex", tmp_path / "codex-alt")
-    rerun = cli._command_string(
-        ["tongs-agents", "install", "--codex-home", str(tmp_path / "codex-alt")]
+def test_install_codex_mcp_removes_legacy_and_keeps_foreign(tmp_path, capsys):
+    foreign = (
+        "[mcp_servers.tongs-agents]\n"
+        'command = "node"\n'
+        'args = ["agents.js"]\n'
     )
-    assert f"run '{rerun}' to register it again" in capsys.readouterr().out
+    path = _write_codex_config(tmp_path / "codex", foreign + (
+        f"\n[mcp_servers.{OLD_KEY}]\n"
+        'command = "/old/bin/python3"\n'
+        f'args = ["-m", "{LEGACY_MODULE}"]\n'
+    ))
+    assert cli._install_codex_mcp(tmp_path / "codex")
+    assert path.read_text() == foreign
+    assert "Kept existing Codex MCP server named tongs-agents" in capsys.readouterr().out
 
 
-def test_install_codex_mcp_fresh_add_failure_does_not_restore(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_script(calls, [1]))
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert len(calls) == 1
-    assert "restore" not in capsys.readouterr().out
+def test_install_codex_mcp_leaves_a_current_entry_untouched(tmp_path):
+    directory = tmp_path / "codex"
+    assert cli._install_codex_mcp(directory)
+    path = directory / "config.toml"
+    before = path.stat().st_mtime_ns, path.read_bytes()
+    assert cli._install_codex_mcp(directory)
+    assert (path.stat().st_mtime_ns, path.read_bytes()) == before
+    assert not owned.backup_path(path).exists()
 
 
-def test_install_codex_mcp_does_not_add_when_remove_fails(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": {
-        "command": "/old/bin/python", "args": ["-m", "tongs_agents.mcp_server"],
-    }}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls, returncode=1))
-    cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == [["mcp", "remove", "tongs-agents"]]
-    assert "Could not replace Codex MCP server" in capsys.readouterr().out
+@pytest.mark.parametrize("text", [
+    'mcp_servers = { tongs-agents = { command = "/usr/bin/python3", '
+    'args = ["-m", "tongs_agents.mcp_server"] } }\n',
+    '[mcp_servers]\ntongs-agents.command = "/usr/bin/python3"\n'
+    'tongs-agents.args = ["-m", "tongs_agents.mcp_server"]\n',
+    "[mcp_servers\n",
+])
+def test_install_codex_mcp_refuses_what_it_cannot_edit_exactly(tmp_path, capsys, text):
+    path = _write_codex_config(tmp_path / "codex", text)
+    assert cli._install_codex_mcp(tmp_path / "codex") is False
+    assert path.read_text() == text
+    assert not owned.backup_path(path).exists()
+    output = capsys.readouterr().out
+    assert f"Could not register the Codex MCP server: {path}" in output
 
 
-@pytest.mark.parametrize("existing, removed", [
-    ({"transport": {"command": "/x/python3", "args": ["-m", LEGACY_MODULE]}}, True),
-    ({"transport": {"command": "/x/python3", "args": ["-m", "tongs_agents.mcp_server"]}}, True),
-    ({"transport": {"command": "node", "args": ["fleet.js"]}}, False),
-    (None, False),
+@pytest.mark.parametrize("table, removed", [
+    (f'command = "/x/python3"\nargs = ["-m", "{LEGACY_MODULE}"]\n', True),
+    ('command = "/x/python3"\nargs = ["-m", "tongs_agents.mcp_server"]\n'
+     'env_vars = ["XDG_STATE_HOME"]\n', True),
+    ('command = "node"\nargs = ["fleet.js"]\n', False),
 ])
 @pytest.mark.parametrize("name", ["tongs-agents", OLD_KEY])
-def test_uninstall_codex_mcp_removes_only_owned(monkeypatch, existing, removed, name):
-    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({name: existing}))
-    calls = []
-    monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
-    cli._uninstall_codex_mcp("/usr/bin/codex")
-    assert calls == ([["mcp", "remove", name]] if removed else [])
+def test_uninstall_codex_mcp_removes_only_owned(tmp_path, table, removed, name):
+    original = USER_CODEX_CONFIG + f"\n[mcp_servers.{name}]\n" + table
+    path = _write_codex_config(tmp_path / "codex", original)
+    assert cli._uninstall_codex_mcp(tmp_path / "codex")
+    assert (name in _codex_tables(tmp_path / "codex")) is not removed
+    assert path.read_text().startswith(USER_CODEX_CONFIG.rstrip("\n"))
+    if not removed:
+        assert path.read_text() == original
+
+
+def test_uninstall_codex_mcp_without_config_writes_nothing(tmp_path):
+    assert cli._uninstall_codex_mcp(tmp_path / "codex")
+    assert not (tmp_path / "codex").exists()
+
+
+def test_install_writes_codex_mcp_only_with_the_codex_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli, "SETTINGS_FILE", tmp_path / "claude" / "settings.json")
+    monkeypatch.setattr(cli, "CLAUDE_DIR", tmp_path / "claude")
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", tmp_path / ".claude.json")
+    monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")
+    monkeypatch.setattr(cli, "CODEX_HOOKS_FILE", tmp_path / "codex" / "hooks.json")
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_uninstall_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli.subprocess, "run", _never_run)
+    config = tmp_path / "codex" / "config.toml"
+
+    monkeypatch.setattr("shutil.which", lambda x: None if x == "codex" else f"/usr/bin/{x}")
+    cli.cmd_install(None)
+    assert not config.exists()
+    output = capsys.readouterr().out
+    assert "Codex CLI not found; skipped Codex MCP registration" in output
+    assert "Tongs Agents installed for Claude Code and Codex!" in output
+    assert "Hooks only for Codex (CLI not found; no MCP server registered)" in output
+    assert "(MCP tools available in Claude Code sessions)" in output
+
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    cli.cmd_install(None)
+    assert tomllib.loads(config.read_text())["mcp_servers"] == {
+        "tongs-agents": cli.codex_mcp_table(),
+    }
+    output = capsys.readouterr().out
+    assert "Hooks only" not in output
+    assert "(MCP tools available in Claude Code and Codex sessions)" in output
+
+    cli.cmd_uninstall(SimpleNamespace(keep_data=True))
+    assert "mcp_servers" not in tomllib.loads(config.read_text())
+
+
+def test_install_summary_names_what_was_installed(settings_file, monkeypatch, capsys):
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    monkeypatch.setattr(cli, "install_pi", lambda *args: True)
+    cli.cmd_install(SimpleNamespace(agent="all"))
+    output = capsys.readouterr().out
+    assert "Tongs Agents installed for Claude Code, Codex and Pi!" in output
+    for line in ("tongs-agents doctor", "tongs-agents workspace", "tongs-agents monitor"):
+        assert line in output
+    assert "In Codex, review the installed hooks with /hooks." in output
+
+    cli.cmd_install(SimpleNamespace(agent="claude"))
+    output = capsys.readouterr().out
+    assert "Tongs Agents installed for Claude Code!" in output
+    assert "/hooks" not in output
+
+
+def test_sandboxed_profiles_have_no_host_targets(tmp_path):
+    path = tmp_path / "profiles.toml"
+    path.write_text(
+        "[profiles.claude-boxed]\n"
+        'command = ["claude"]\n'
+        'cwd = "/srv/project"\n'
+        "[profiles.claude-boxed.sandbox]\n"
+        'providers = ["anthropic"]\n'
+        "[profiles.codex-local]\n"
+        'command = ["codex"]\n'
+    )
+    path.chmod(0o600)
+    targets = cli.profile_targets(load_profiles(path))
+    assert [(target.harness, target.sources) for target in targets] == [
+        ("codex", ("profile codex-local",)),
+    ]
 
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX modes and symlinks")

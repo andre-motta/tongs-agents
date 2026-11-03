@@ -1,9 +1,11 @@
 """Byte-for-byte install output, pinned from the installer before owned.py.
 
 Synthetic: HOME, the state and config dirs are temporary; the harness CLIs
-are absent, so only settings.json and hooks.json are written. Each scenario
-also pins their file modes and the ``*.tongs-agents.bak`` side files next to
-them (name and mode).
+are absent, so only settings.json and hooks.json are written, except in the
+``codex_config`` scenarios, where a Codex CLI is found (never run) and the
+``[mcp_servers.tongs-agents]`` table is written into a commented config.toml.
+Each scenario also pins their file modes and the ``*.tongs-agents.bak`` side
+files next to them (name and mode).
 """
 
 import json
@@ -115,6 +117,32 @@ def _uninstall(**options):
     cli.cmd_uninstall(SimpleNamespace(**values))
 
 
+CODEX_CONFIG_INPUT = """\
+# Personal Codex settings
+model = "gpt-5"  # pinned
+
+# GitHub, read only
+[mcp_servers.github]
+command = "github-mcp"  # local build
+args = ["--read-only"]
+
+# Jira (work account)
+[mcp_servers.jira]
+command = "jira-mcp"
+env_vars = ["JIRA_TOKEN"]
+"""
+
+
+def _codex_cli_found(monkeypatch):
+    tools = {"tongs-agents-hook": HOOK, "codex": "/fake/bin/codex"}
+    monkeypatch.setattr(cli.shutil, "which", tools.get)
+
+    def never_run(*args, **kwargs):
+        raise AssertionError("install must not run the codex CLI")
+
+    monkeypatch.setattr(cli.subprocess, "run", never_run)
+
+
 def run_scenario(name, root, monkeypatch):
     """Run one installer scenario under ``root``; return {label: bytes}, modes and backups."""
     home = _environment(root, monkeypatch)
@@ -140,6 +168,15 @@ def run_scenario(name, root, monkeypatch):
                  codex_homes=[str(homes / "codex")])
         files = {"settings": homes / "claude" / "settings.json",
                  "hooks": homes / "codex" / "hooks.json"}
+    elif name in ("codex_config", "codex_config_uninstall"):
+        _codex_cli_found(monkeypatch)
+        cli.CODEX_HOOKS_FILE.parent.mkdir(parents=True)
+        _write_seed(cli.CODEX_HOOKS_FILE, CODEX_INPUT)
+        _write_seed(cli.CODEX_DIR / "config.toml", CODEX_CONFIG_INPUT)
+        _install(agent="codex")
+        if name == "codex_config_uninstall":
+            _uninstall(agent="codex")
+        files = {"hooks": cli.CODEX_HOOKS_FILE, "config": cli.CODEX_DIR / "config.toml"}
     else:
         raise ValueError(name)
     result = {label: path.read_bytes() for label, path in files.items()}
@@ -148,7 +185,10 @@ def run_scenario(name, root, monkeypatch):
     return result
 
 
-SCENARIOS = ("fresh", "existing", "reinstall", "uninstall", "config_dirs")
+SCENARIOS = (
+    "fresh", "existing", "reinstall", "uninstall", "config_dirs",
+    "codex_config", "codex_config_uninstall",
+)
 
 FRESH_SETTINGS = r'''{
   "hooks": {
@@ -591,6 +631,20 @@ BACKUPS = {
     "hooks.json" + owned.BACKUP_SUFFIX: 0o600,
 }
 
+CODEX_CONFIG = (CODEX_CONFIG_INPUT + f"""
+[mcp_servers.tongs-agents]
+command = {json.dumps(sys.executable)}
+args = ["-m", "tongs_agents.mcp_server"]
+env_vars = ["TONGS_AGENTS_LAUNCH_ID", "TONGS_AGENTS_PROFILE", "ZELLIJ_SESSION_NAME", \
+"ZELLIJ_SOCKET_DIR", "TMUX", "TMUX_PANE", "XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR", \
+"XDG_CONFIG_HOME", "TONGS_AGENTS_CONFIG_DIR", "XDG_RUNTIME_DIR"]
+""").encode()
+CODEX_BACKUPS = {
+    "hooks.json" + owned.BACKUP_SUFFIX: 0o600,
+    "config.toml" + owned.BACKUP_SUFFIX: 0o600,
+}
+CODEX_MODES = {"hooks": SEED_MODE, "config": SEED_MODE}
+
 EXPECTED = {
     "fresh": {"settings": FRESH_SETTINGS, "hooks": FRESH_HOOKS,
               "modes": NEW_MODES, "backups": {}},
@@ -602,6 +656,10 @@ EXPECTED = {
                   "modes": KEPT_MODES, "backups": BACKUPS},
     "config_dirs": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS,
                     "modes": KEPT_MODES, "backups": BACKUPS},
+    "codex_config": {"hooks": EXISTING_HOOKS, "config": CODEX_CONFIG,
+                     "modes": CODEX_MODES, "backups": CODEX_BACKUPS},
+    "codex_config_uninstall": {"hooks": UNINSTALL_HOOKS, "config": CODEX_CONFIG_INPUT.encode(),
+                               "modes": CODEX_MODES, "backups": CODEX_BACKUPS},
 }
 
 

@@ -1,8 +1,9 @@
 """Upgrade from a synthetic claude-fleet-monitor 0.9.x install.
 
 Hand-written fixtures follow the documented Claude settings.json and
-`.claude.json`, Codex hooks.json and `codex mcp get --json`, and Pi package
-shapes. The Claude, Codex and Pi CLIs are fake scripts.
+`.claude.json`, Codex hooks.json and config.toml `[mcp_servers.*]` tables, and
+Pi package shapes. The Claude, Codex and Pi CLIs are fake scripts; install
+must not run the Codex one, which rewrites config.toml without its comments.
 """
 
 import json
@@ -10,10 +11,11 @@ import os
 import shlex
 import shutil
 import sys
+import tomllib
 
 import pytest
 
-from tongs_agents import cli, legacy, paths, pi_install
+from tongs_agents import cli, legacy, paths, pi_install, toml_tables
 
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="fake CLIs are POSIX scripts")
@@ -187,7 +189,7 @@ def upgrade(tmp_path, monkeypatch):
     (bin_dir / "tongs-agents-hook").write_text("#!/bin/sh\nexit 0\n")
     for script in bin_dir.iterdir():
         script.chmod(0o755)
-    codex_state = tmp_path / "codex-mcp.json"
+    codex_state = codex_dir / "config.toml"
     codex_log = tmp_path / "codex-calls.jsonl"
     claude_log = tmp_path / "claude-calls.jsonl"
     pi_state = tmp_path / "pi-packages.json"
@@ -204,7 +206,7 @@ def upgrade(tmp_path, monkeypatch):
         "numStartups": 7,
         "mcpServers": {"docs": {"type": "stdio", **DOCS_MCP, "env": {}}},
     }))
-    codex_state.write_text(json.dumps({"fleet": LEGACY_MCP, "docs": DOCS_MCP}))
+    _write_codex_servers(codex_state, {"fleet": LEGACY_MCP, "docs": DOCS_MCP})
     pi_state.write_text(json.dumps(["npm:other-pi-package", LEGACY_PI_EXTENSION]))
     legacy_pi_config = pi_dir / legacy.LEGACY_PI_CONFIG_NAME
     legacy_pi_config.write_text(json.dumps({
@@ -254,6 +256,14 @@ def upgrade(tmp_path, monkeypatch):
 def _run(monkeypatch, *argv):
     monkeypatch.setattr(sys, "argv", ["tongs-agents", *argv])
     cli.main()
+
+
+def _write_codex_servers(path, servers):
+    path.write_text("# my Codex servers\n" + toml_tables.render_tables("", servers))
+
+
+def _codex_servers(upgrade):
+    return tomllib.loads(upgrade.state.read_text()).get("mcp_servers", {})
 
 
 def _doctor(monkeypatch, *argv):
@@ -332,10 +342,12 @@ def test_install_cleans_up_legacy_install(upgrade, monkeypatch, capsys):
     assert owned_matcher(codex_hooks) == "startup|resume|clear"
     assert "say done" in _commands(codex_hooks["hooks"]["Stop"])
 
-    assert json.loads(upgrade.state.read_text()) == {
-        "tongs-agents": {"command": sys.executable, "args": CURRENT_MCP_ARGS},
+    assert _codex_servers(upgrade) == {
+        "tongs-agents": cli.codex_mcp_table(),
         "docs": DOCS_MCP,
     }
+    assert upgrade.state.read_text().startswith("# my Codex servers\n")
+    assert upgrade.codex_calls() == []
 
     assert json.loads(upgrade.pi_packages.read_text()) == [
         "npm:other-pi-package", upgrade.current_extension,
@@ -361,9 +373,7 @@ def test_second_install_is_byte_identical(upgrade, monkeypatch):
     _run(monkeypatch, "install", "--agent", "all")
 
     assert upgrade.files() == first
-    assert [call[:2] for call in upgrade.codex_calls()[codex_before:]] == [
-        ["mcp", "get"], ["mcp", "get"],
-    ]
+    assert upgrade.codex_calls()[codex_before:] == []
     assert upgrade.claude_calls()[claude_before:] == []
 
 
@@ -375,7 +385,7 @@ def test_uninstall_removes_legacy_entries(upgrade, monkeypatch):
     assert settings["mcpServers"] == {"docs": DOCS_MCP}
     codex_hooks = json.loads(upgrade.codex_hooks.read_text())
     assert codex_hooks == {"hooks": {"Stop": [_group("say done")]}}
-    assert json.loads(upgrade.state.read_text()) == {"docs": DOCS_MCP}
+    assert _codex_servers(upgrade) == {"docs": DOCS_MCP}
     assert json.loads(upgrade.pi_packages.read_text()) == ["npm:other-pi-package"]
     assert not upgrade.old_pi_config.exists()
     assert upgrade.old_sessions.is_dir()
@@ -389,7 +399,7 @@ def test_uninstall_after_upgrade_removes_new_entries(upgrade, monkeypatch):
     assert sorted(_all_commands(settings)) == [USER_MENTION, "other-hook --check"]
     assert settings["mcpServers"] == {"docs": DOCS_MCP}
     assert _all_commands(json.loads(upgrade.codex_hooks.read_text())) == ["say done"]
-    assert json.loads(upgrade.state.read_text()) == {"docs": DOCS_MCP}
+    assert _codex_servers(upgrade) == {"docs": DOCS_MCP}
     assert list(_claude_servers(upgrade)) == ["docs"]
     assert json.loads(upgrade.pi_packages.read_text()) == ["npm:other-pi-package"]
     assert not upgrade.pi_config.exists()
@@ -406,7 +416,7 @@ def test_foreign_entries_are_kept(upgrade, monkeypatch, capsys):
     upgrade.claude_config.write_text(json.dumps({"mcpServers": {
         "fleet": foreign_claude, "tongs-agents": foreign_claude,
     }}))
-    upgrade.state.write_text(json.dumps({"fleet": foreign_codex, "tongs-agents": foreign_codex}))
+    _write_codex_servers(upgrade.state, {"fleet": foreign_codex, "tongs-agents": foreign_codex})
 
     _run(monkeypatch, "install")
     output = capsys.readouterr().out
@@ -416,12 +426,12 @@ def test_foreign_entries_are_kept(upgrade, monkeypatch, capsys):
     expected_claude = {"fleet": foreign_claude, "tongs-agents": foreign_claude}
     expected_codex = {"fleet": foreign_codex, "tongs-agents": foreign_codex}
     assert _claude_servers(upgrade) == expected_claude
-    assert json.loads(upgrade.state.read_text()) == expected_codex
+    assert _codex_servers(upgrade) == expected_codex
 
     _run(monkeypatch, "uninstall", "--keep-data")
     assert json.loads(upgrade.settings.read_text())["mcpServers"]["fleet"] == foreign_claude
     assert _claude_servers(upgrade) == expected_claude
-    assert json.loads(upgrade.state.read_text()) == expected_codex
+    assert _codex_servers(upgrade) == expected_codex
     assert not any(call[1] in ("add", "remove") for call in upgrade.codex_calls())
     assert upgrade.claude_calls() == []
 
