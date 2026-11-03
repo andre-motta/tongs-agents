@@ -11,11 +11,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import legacy, paths
-from tongs_agents.pi_install import PI_CONFIG_NAME, install_pi, pi_config_dir, uninstall_pi
+from tongs_agents import commands, legacy, paths
+from tongs_agents.pi_install import (
+    PI_CONFIG_NAME,
+    install_pi,
+    pi_config_dir,
+    pi_environment,
+    uninstall_pi,
+)
+from tongs_agents.profiles import CONFIG_DIR_ENV_BY_HARNESS, ProfileError, load_profiles
 
 
 CLAUDE_DIR = Path.home() / ".claude"
@@ -159,14 +167,15 @@ def load_json(path):
     return data
 
 
-def save_json(path, data):
+def save_json(path, data, mode=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink():
         raise ConfigError(f"{path}: refusing to modify a symlinked file")
-    try:
-        mode = stat.S_IMODE(path.stat().st_mode)
-    except FileNotFoundError:
-        mode = 0o600
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(path.stat().st_mode)
+        except FileNotFoundError:
+            mode = 0o600
     descriptor, temporary = tempfile.mkstemp(
         dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
     )
@@ -259,16 +268,236 @@ def _remove_settings_mcp(settings):
         del settings["mcpServers"]
 
 
-def _claude_environment():
+KINDS = ("claude", "codex", "pi")
+DIR_OPTIONS = {
+    "claude": ("--claude-config-dir", "claude_config_dirs"),
+    "codex": ("--codex-home", "codex_homes"),
+    "pi": ("--pi-agent-dir", "pi_agent_dirs"),
+}
+INSTALLS_FILE_NAME = "installs.json"
+INSTALLS_SCHEMA = 1
+
+
+@dataclass(frozen=True)
+class Target:
+    """One harness config home: ``directory`` None means the harness default."""
+
+    harness: str
+    directory: Path | None = None
+    sources: tuple[str, ...] = field(default=(), compare=False)
+
+    @property
+    def config_file(self) -> Path:
+        if self.harness == "claude":
+            return SETTINGS_FILE if self.directory is None else self.directory / "settings.json"
+        if self.harness == "codex":
+            return CODEX_HOOKS_FILE if self.directory is None else self.directory / "hooks.json"
+        return self.pi_dir / PI_CONFIG_NAME
+
+    @property
+    def pi_dir(self) -> Path:
+        return pi_config_dir() if self.directory is None else self.directory
+
+    @property
+    def claude_user_config(self) -> Path:
+        if self.directory is None:
+            return CLAUDE_USER_CONFIG
+        return self.directory / ".claude.json"
+
+    @property
+    def codex_home(self) -> Path:
+        return CODEX_DIR if self.directory is None else self.directory
+
+    def install_command(self) -> str:
+        if any(source.startswith("profile ") for source in self.sources):
+            return "tongs-agents install"
+        if self.directory is None:
+            return f"tongs-agents install --agent {self.harness}"
+        flag = DIR_OPTIONS[self.harness][0]
+        return _command_string(["tongs-agents", "install", flag, str(self.directory)])
+
+    def describe(self) -> str:
+        where = "default" if self.directory is None else str(self.directory)
+        return f"{self.harness} ({where})"
+
+
+def _normalize_dir(value) -> Path:
+    return Path(os.path.abspath(Path(value).expanduser()))
+
+
+def _make_target(harness, directory, source) -> Target:
+    if directory is not None:
+        directory = _normalize_dir(directory)
+        if harness == "codex" and directory == _normalize_dir(CODEX_DIR):
+            directory = None
+        elif harness == "pi" and directory == _normalize_dir(pi_config_dir()):
+            directory = None
+    return Target(harness, directory, (source,))
+
+
+def _merge_targets(targets):
+    merged = {}
+    for target in targets:
+        key = (target.harness, target.directory)
+        if key in merged:
+            previous = merged[key]
+            sources = tuple(dict.fromkeys(previous.sources + target.sources))
+            merged[key] = Target(target.harness, target.directory, sources)
+        else:
+            merged[key] = target
+    return list(merged.values())
+
+
+def profile_home(profile):
+    """The config home a profile's harness uses: (harness, dir or None, problem).
+
+    ``dir`` None is the harness default. ``problem`` is set when the profile
+    names a home tongs-agents cannot use, such as a relative env value.
+    """
+    variable = CONFIG_DIR_ENV_BY_HARNESS.get(profile.harness)
+    if variable is None:
+        return None, None, "harness other has no hooks"
+    if profile.config_dir is not None:
+        return profile.harness, _normalize_dir(profile.config_dir), None
+    value = profile.env.get(variable)
+    if value is None:
+        return profile.harness, None, None
+    if not os.path.isabs(value):
+        return profile.harness, None, f"env.{variable} is not an absolute path: {value!r}"
+    return profile.harness, _normalize_dir(value), None
+
+
+def profile_targets(profiles, harnesses=KINDS):
+    targets = []
+    for profile in profiles.values():
+        harness, directory, problem = profile_home(profile)
+        if harness is None or harness not in harnesses or problem is not None:
+            continue
+        targets.append(_make_target(harness, directory, f"profile {profile.name}"))
+    return _merge_targets(targets)
+
+
+def installs_path() -> Path:
+    return paths.state_dir() / INSTALLS_FILE_NAME
+
+
+def load_installs():
+    """Config homes installed beyond the defaults, from ``installs.json``."""
+    path = installs_path()
+    data = load_json(path)
+    if not data:
+        return {kind: [] for kind in KINDS}
+    dirs = data.get("dirs")
+    if data.get("schema_version") != INSTALLS_SCHEMA or not isinstance(dirs, dict):
+        raise ConfigError(f"{path}: unrecognized install record")
+    installs = {}
+    for kind in KINDS:
+        entries = dirs.get(kind, [])
+        if not isinstance(entries, list) or not all(
+            isinstance(item, str) and os.path.isabs(item) for item in entries
+        ):
+            raise ConfigError(f"{path}: unrecognized install record")
+        installs[kind] = list(dict.fromkeys(entries))
+    return installs
+
+
+def save_installs(installs):
+    path = installs_path()
+    if not any(installs.get(kind) for kind in KINDS):
+        if path.is_symlink():
+            raise ConfigError(f"{path}: refusing to modify a symlinked file")
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    try:
+        paths.state_dir(create=True)
+    except OSError as error:
+        raise ConfigError(f"cannot use the state directory: {error}") from None
+    data = {
+        "schema_version": INSTALLS_SCHEMA,
+        "dirs": {kind: sorted(set(installs.get(kind, []))) for kind in KINDS},
+    }
+    save_json(path, data, mode=0o600)
+
+
+def recorded_targets(installs, harnesses=KINDS):
+    return [
+        _make_target(kind, directory, "recorded")
+        for kind in harnesses
+        for directory in installs.get(kind, [])
+    ]
+
+
+def _selected_harnesses(agent):
+    if agent is None:
+        return ("claude", "codex")
+    if agent == "all":
+        return KINDS
+    return (agent,)
+
+
+def _flag_targets(args):
+    targets = []
+    for kind, (_, attribute) in DIR_OPTIONS.items():
+        for directory in getattr(args, attribute, None) or []:
+            targets.append(_make_target(kind, directory, "option"))
+    return _merge_targets(targets)
+
+
+def _load_profiles_or_raise():
+    try:
+        return load_profiles()
+    except ProfileError as error:
+        raise ConfigError(str(error)) from None
+
+
+def _plan(args, *, uninstall=False):
+    """The targets install or uninstall acts on, and whether options chose them."""
+    agent = getattr(args, "agent", None)
+    explicit = _flag_targets(args)
+    if explicit:
+        if agent is not None:
+            raise ConfigError("--agent cannot be combined with config dir options")
+        return explicit, True
+    selected = _selected_harnesses(agent)
+    profile_harnesses = KINDS if agent is None else selected
+    targets = [_make_target(kind, None, "default") for kind in selected]
+    if uninstall:
+        try:
+            profiles = load_profiles()
+        except ProfileError as error:
+            print(f"  Skipped profiles: {error}")
+            profiles = {}
+        targets += profile_targets(profiles, profile_harnesses)
+        targets += recorded_targets(load_installs(), profile_harnesses)
+    else:
+        targets += profile_targets(_load_profiles_or_raise(), profile_harnesses)
+    return _merge_targets(targets), False
+
+
+def _claude_environment(directory=None):
     environment = os.environ.copy()
     environment.pop("CLAUDE_CONFIG_DIR", None)
+    if directory is not None:
+        environment["CLAUDE_CONFIG_DIR"] = str(directory)
     return environment
 
 
-def _claude_user_servers():
+def _codex_environment(directory=None):
+    environment = os.environ.copy()
+    environment.pop("CODEX_HOME", None)
+    if directory is not None:
+        environment["CODEX_HOME"] = str(directory)
+    return environment
+
+
+def _claude_user_servers(config=None):
     """User-scope MCP servers, read without editing Claude's own file."""
+    config = CLAUDE_USER_CONFIG if config is None else config
     try:
-        data = json.loads(CLAUDE_USER_CONFIG.read_text(encoding="utf-8"))
+        data = json.loads(config.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError, RecursionError):
         return {}
     servers = data.get("mcpServers") if isinstance(data, dict) else None
@@ -289,18 +518,25 @@ def _run_mcp_cli(label, argv, action, environment=None, timeout=10):
     return True
 
 
-def _run_claude_mcp(claude_cmd, arguments, action):
+def _run_claude_mcp(claude_cmd, arguments, action, directory=None):
     return _run_mcp_cli(
         "Claude Code", [claude_cmd, "mcp", *arguments], action,
-        _claude_environment(), timeout=60,
+        _claude_environment(directory), timeout=60,
     )
 
 
-def _install_claude_mcp(claude_cmd):
-    servers = _claude_user_servers()
+def _claude_servers_for(directory):
+    if directory is None:
+        return _claude_user_servers()
+    return _claude_user_servers(directory / ".claude.json")
+
+
+def _install_claude_mcp(claude_cmd, directory=None):
+    servers = _claude_servers_for(directory)
     if _is_owned_mcp(servers.get(legacy.LEGACY_MCP_NAME)):
         _run_claude_mcp(
-            claude_cmd, ["remove", "--scope", "user", legacy.LEGACY_MCP_NAME], "remove"
+            claude_cmd, ["remove", "--scope", "user", legacy.LEGACY_MCP_NAME], "remove",
+            directory,
         )
     existing = servers.get(MCP_NAME)
     if existing is not None:
@@ -310,28 +546,32 @@ def _install_claude_mcp(claude_cmd):
         if _is_current_mcp(existing):
             return
         if not _run_claude_mcp(
-            claude_cmd, ["remove", "--scope", "user", MCP_NAME], "replace"
+            claude_cmd, ["remove", "--scope", "user", MCP_NAME], "replace", directory
         ):
             return
     _run_claude_mcp(
         claude_cmd,
         ["add", "--scope", "user", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
         "add",
+        directory,
     )
 
 
-def _uninstall_claude_mcp(claude_cmd):
-    servers = _claude_user_servers()
+def _uninstall_claude_mcp(claude_cmd, directory=None):
+    servers = _claude_servers_for(directory)
     for name in MCP_NAMES:
         if _is_owned_mcp(servers.get(name)):
-            _run_claude_mcp(claude_cmd, ["remove", "--scope", "user", name], "remove")
+            _run_claude_mcp(
+                claude_cmd, ["remove", "--scope", "user", name], "remove", directory
+            )
 
 
-def _get_codex_mcp(codex_cmd, name):
+def _get_codex_mcp(codex_cmd, name, directory=None):
     try:
         result = subprocess.run(
             [codex_cmd, "mcp", "get", name, "--json"],
             capture_output=True, text=True, timeout=10,
+            env=_codex_environment(directory),
         )
     except (OSError, subprocess.TimeoutExpired):
         return {}
@@ -343,50 +583,89 @@ def _get_codex_mcp(codex_cmd, name):
         return {}
 
 
-def _run_codex_mcp(codex_cmd, arguments, action):
-    return _run_mcp_cli("Codex", [codex_cmd, "mcp", *arguments], action)
+def _run_codex_mcp(codex_cmd, arguments, action, directory=None):
+    return _run_mcp_cli(
+        "Codex", [codex_cmd, "mcp", *arguments], action, _codex_environment(directory)
+    )
 
 
-def _remove_legacy_codex_mcp(codex_cmd):
-    existing = _get_codex_mcp(codex_cmd, legacy.LEGACY_MCP_NAME)
+def _remove_legacy_codex_mcp(codex_cmd, directory=None):
+    existing = _get_codex_mcp(codex_cmd, legacy.LEGACY_MCP_NAME, directory)
     if existing is not None and _is_owned_mcp(existing):
-        _run_codex_mcp(codex_cmd, ["remove", legacy.LEGACY_MCP_NAME], "remove")
+        _run_codex_mcp(codex_cmd, ["remove", legacy.LEGACY_MCP_NAME], "remove", directory)
 
 
-def _install_codex_mcp(codex_cmd):
-    _remove_legacy_codex_mcp(codex_cmd)
-    existing = _get_codex_mcp(codex_cmd, MCP_NAME)
+def _install_codex_mcp(codex_cmd, directory=None):
+    _remove_legacy_codex_mcp(codex_cmd, directory)
+    existing = _get_codex_mcp(codex_cmd, MCP_NAME, directory)
     if existing is not None:
         if not _is_owned_mcp(existing):
             print(f"  Kept existing Codex MCP server named {MCP_NAME}")
             return
         if _is_current_mcp(existing):
             return
-        if not _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "replace"):
+        if not _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "replace", directory):
             return
     _run_codex_mcp(
         codex_cmd,
         ["add", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
         "add",
+        directory,
     )
 
 
-def _uninstall_codex_mcp(codex_cmd):
-    _remove_legacy_codex_mcp(codex_cmd)
-    existing = _get_codex_mcp(codex_cmd, MCP_NAME)
+def _uninstall_codex_mcp(codex_cmd, directory=None):
+    _remove_legacy_codex_mcp(codex_cmd, directory)
+    existing = _get_codex_mcp(codex_cmd, MCP_NAME, directory)
     if existing is not None and _is_owned_mcp(existing):
-        _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "remove")
+        _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "remove", directory)
 
 
-def _remove_session_data():
+def has_owned_hooks(path):
+    """True when ``path`` holds any tongs-agents (or legacy) hook command.
+
+    An unreadable file counts as holding hooks, so callers stay conservative.
+    """
+    try:
+        config = load_json(path)
+    except ConfigError:
+        return True
+    return any(
+        _is_owned_hook(hook)
+        for groups in config.get("hooks", {}).values()
+        for group in groups
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list)
+        for hook in group["hooks"]
+    )
+
+
+def _remaining_monitoring(installs):
+    """A description of monitoring that is still installed, or None."""
+    homes = [Target("claude"), Target("codex"), *recorded_targets(installs, ("claude", "codex"))]
+    for target in homes:
+        if os.path.lexists(target.config_file) and has_owned_hooks(target.config_file):
+            return f"{target.config_file} still has tongs-agents hooks"
+    for target in [Target("pi"), *recorded_targets(installs, ("pi",))]:
+        if os.path.lexists(target.config_file):
+            return "Pi monitoring is still installed"
+    return None
+
+
+def _remove_session_data(installs=None):
     directory = paths.sessions_dir()
     if directory.is_symlink():
         print(f"  Kept {directory} because it is a symlink")
         return
     if not directory.is_dir():
         return
-    if os.path.lexists(pi_config_dir() / PI_CONFIG_NAME):
-        print(f"  Kept {directory} because Pi monitoring is still installed")
+    try:
+        installs = load_installs() if installs is None else installs
+    except ConfigError as error:
+        print(f"  Kept {directory} because {error}")
+        return
+    remaining = _remaining_monitoring(installs)
+    if remaining is not None:
+        print(f"  Kept {directory} because {remaining}")
         return
     for entry in directory.iterdir():
         if not any(fnmatch.fnmatch(entry.name, pattern) for pattern in FLEET_FILE_PATTERNS):
@@ -408,137 +687,190 @@ def _remove_session_data():
         pass
 
 
+def _hook_events(harness):
+    return CLAUDE_HOOK_EVENTS if harness == "claude" else CODEX_HOOK_EVENTS
+
+
+def _describe_sources(target):
+    profiles = [source for source in target.sources if source.startswith("profile ")]
+    return f" (for {', '.join(profiles)})" if profiles else ""
+
+
+def _record(installs, target, installed):
+    if target.directory is None:
+        return
+    entries = installs.setdefault(target.harness, [])
+    value = str(target.directory)
+    if installed and value not in entries:
+        entries.append(value)
+    if not installed and value in entries:
+        entries.remove(value)
+
+
 def cmd_install(args):
     agent = getattr(args, "agent", None)
-    selected = {"claude", "codex"} if agent is None else {agent}
-    if "all" in selected:
-        selected = {"claude", "codex", "pi"}
+    targets, explicit = _plan(args)
+    installs = load_installs()
     hook_cmd = shutil.which("tongs-agents-hook") or "tongs-agents-hook"
+    hook_targets = [target for target in targets if target.harness != "pi"]
+    pi_targets = [target for target in targets if target.harness == "pi"]
 
-    if "claude" in selected:
-        settings = load_settings()
-    if "codex" in selected:
-        codex_hooks = load_json(CODEX_HOOKS_FILE)
+    for target in hook_targets:
+        load_json(target.config_file)
 
-    if "claude" in selected or "codex" in selected:
+    if hook_targets:
         try:
             paths.sessions_dir(create=True)
         except OSError as error:
             raise ConfigError(f"cannot use the session directory: {error}") from None
-    if "claude" in selected:
-        _install_hooks(settings, CLAUDE_HOOK_EVENTS, hook_cmd, "claude")
-        _remove_settings_mcp(settings)
-        save_settings(settings)
-        print(f"  Updated {SETTINGS_FILE}")
-        claude_cmd = shutil.which("claude")
-        if claude_cmd:
-            _install_claude_mcp(claude_cmd)
+    commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
+    skipped = set()
+    for target in hook_targets:
+        config = load_json(target.config_file)
+        _install_hooks(config, _hook_events(target.harness), hook_cmd, target.harness)
+        if target.harness == "claude":
+            _remove_settings_mcp(config)
+        save_json(target.config_file, config)
+        _record(installs, target, True)
+        print(f"  Updated {target.config_file}{_describe_sources(target)}")
+        command = commands_found[target.harness]
+        if target.harness == "claude":
+            if command:
+                _install_claude_mcp(command, target.directory)
+            elif "claude" not in skipped:
+                skipped.add("claude")
+                print("  Claude Code CLI not found; skipped Claude Code MCP registration")
         else:
-            print("  Claude Code CLI not found; skipped Claude Code MCP registration")
-    if "codex" in selected:
-        _install_hooks(codex_hooks, CODEX_HOOK_EVENTS, hook_cmd, "codex")
-        save_json(CODEX_HOOKS_FILE, codex_hooks)
-        print(f"  Updated {CODEX_HOOKS_FILE}")
+            if command:
+                _install_codex_mcp(command, target.directory)
+            elif "codex" not in skipped:
+                skipped.add("codex")
+                print("  Codex CLI not found; skipped Codex MCP registration")
 
-        codex_cmd = shutil.which("codex")
-        if codex_cmd:
-            _install_codex_mcp(codex_cmd)
-        else:
-            print("  Codex CLI not found; skipped Codex MCP registration")
-    if "pi" in selected:
+    pi_failed = False
+    if pi_targets:
         pi_cmd = shutil.which("pi")
         if pi_cmd is None or not Path(hook_cmd).is_absolute():
             print("  Pi and tongs-agents-hook must be installed before enabling Pi")
-            raise SystemExit(1)
-        if not install_pi(pi_cmd, hook_cmd):
-            raise SystemExit(1)
+            pi_failed = True
+        else:
+            for target in pi_targets:
+                environment = None if target.directory is None else pi_environment(
+                    target.directory
+                )
+                if install_pi(pi_cmd, hook_cmd, environment):
+                    _record(installs, target, True)
+                else:
+                    pi_failed = True
+    save_installs(installs)
+    if pi_failed:
+        raise SystemExit(1)
 
+    harnesses = {target.harness for target in targets}
     print()
-    if agent is None:
+    if agent is None and not explicit:
         print("Tongs Agents installed for Claude Code and Codex!")
     else:
-        names = ", ".join(name.title() for name in sorted(selected))
+        names = ", ".join(name.title() for name in sorted(harnesses))
         print(f"Tongs Agents installed for {names}!")
     print()
     print("Usage:")
     print("  tongs-agents monitor          # TUI dashboard")
     print("  tongs-agents focus <repo>     # Focus terminal tab")
-    if "claude" in selected or "codex" in selected:
+    if hook_targets:
         print("  (MCP tools available in Claude Code and Codex sessions)")
     if os.path.lexists(legacy.legacy_sessions_dir()):
         print()
         print(f"{legacy.legacy_sessions_dir()} is no longer used; "
               "see 'tongs-agents doctor' to remove it.")
     print()
-    if agent is None:
+    if agent is None and not explicit:
         print("Restart agent sessions to activate hooks. In Codex, review them with /hooks.")
     else:
         print("Restart selected agent sessions to activate monitoring.")
-        if "codex" in selected:
+        if "codex" in harnesses:
             print("In Codex, review installed hooks with /hooks.")
+
+
+def _remove_legacy_claude_files():
+    bin_dir = CLAUDE_DIR / "bin"
+    mcp_dir = CLAUDE_DIR / "fleet-mcp"
+    for name in ("fleet-hook.sh", "fleet-monitor.sh", "fleet-focus.sh"):
+        f = bin_dir / name
+        if f.exists():
+            f.unlink()
+            print(f"  Removed legacy {f}")
+    if mcp_dir.exists():
+        shutil.rmtree(mcp_dir)
+        print(f"  Removed legacy {mcp_dir}")
 
 
 def cmd_uninstall(args):
     agent = getattr(args, "agent", None)
-    selected = {"claude", "codex"} if agent is None else {agent}
-    if "all" in selected:
-        selected = {"claude", "codex", "pi"}
-    if "claude" in selected:
-        settings = load_settings()
-    if "codex" in selected:
-        codex_hooks = load_json(CODEX_HOOKS_FILE)
+    targets, explicit = _plan(args, uninstall=True)
+    installs = load_installs()
+    hook_targets = [target for target in targets if target.harness != "pi"]
+    pi_targets = [target for target in targets if target.harness == "pi"]
+    for target in hook_targets:
+        if target.directory is None or os.path.lexists(target.config_file):
+            load_json(target.config_file)
 
-    # Clean up legacy bash scripts and MCP dir from older versions
-    if "claude" in selected:
-        bin_dir = CLAUDE_DIR / "bin"
-        mcp_dir = CLAUDE_DIR / "fleet-mcp"
-        for name in ("fleet-hook.sh", "fleet-monitor.sh", "fleet-focus.sh"):
-            f = bin_dir / name
-            if f.exists():
-                f.unlink()
-                print(f"  Removed legacy {f}")
-        if mcp_dir.exists():
-            shutil.rmtree(mcp_dir)
-            print(f"  Removed legacy {mcp_dir}")
-        _remove_hooks(settings)
-        _remove_settings_mcp(settings)
-        save_settings(settings)
-        print(f"  Updated {SETTINGS_FILE}")
-        claude_cmd = shutil.which("claude")
-        if claude_cmd:
-            _uninstall_claude_mcp(claude_cmd)
-    if "codex" in selected:
-        _remove_hooks(codex_hooks)
-        save_json(CODEX_HOOKS_FILE, codex_hooks)
-        print(f"  Updated {CODEX_HOOKS_FILE}")
-        codex_cmd = shutil.which("codex")
-        if codex_cmd:
-            _uninstall_codex_mcp(codex_cmd)
-    if "pi" in selected:
+    commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
+    for target in hook_targets:
+        if target.directory is None and target.harness == "claude":
+            _remove_legacy_claude_files()
+        if target.directory is None or os.path.lexists(target.config_file):
+            config = load_json(target.config_file)
+            _remove_hooks(config)
+            if target.harness == "claude":
+                _remove_settings_mcp(config)
+            save_json(target.config_file, config)
+            print(f"  Updated {target.config_file}{_describe_sources(target)}")
+        _record(installs, target, False)
+        command = commands_found[target.harness]
+        if command and target.harness == "claude":
+            _uninstall_claude_mcp(command, target.directory)
+        elif command:
+            _uninstall_codex_mcp(command, target.directory)
+
+    pi_failed = False
+    if pi_targets:
         pi_cmd = shutil.which("pi")
-        if not uninstall_pi(pi_cmd):
-            raise SystemExit(1)
+        for target in pi_targets:
+            environment = None if target.directory is None else pi_environment(
+                target.directory
+            )
+            if uninstall_pi(pi_cmd, environment):
+                _record(installs, target, False)
+            else:
+                pi_failed = True
+    save_installs(installs)
+    if pi_failed:
+        raise SystemExit(1)
 
-    if (agent is None or selected == {"claude", "codex", "pi"}) and not args.keep_data:
-        _remove_session_data()
+    full = agent is None or agent == "all" or explicit
+    if full and not getattr(args, "keep_data", False):
+        _remove_session_data(installs)
 
+    harnesses = {target.harness for target in targets}
     print()
-    if agent is None:
+    if agent is None and not explicit:
         print("Tongs Agents uninstalled from Claude Code and Codex.")
     else:
-        names = ", ".join(name.title() for name in sorted(selected))
+        names = ", ".join(name.title() for name in sorted(harnesses))
         print(f"Tongs Agents uninstalled from {names}.")
-    if "pi" in selected:
+    if "pi" in harnesses:
         print("Restart running Pi sessions to finish removing monitoring.")
 
 
-def _remove_directory_command(path):
+def remove_directory_command(path):
     if _is_windows():
         return _command_string(["rmdir", "/s", "/q", str(path)])
     return _command_string(["rm", "-r", "--", str(path)])
 
 
-def _legacy_installed():
+def legacy_installed():
+    """claude-fleet-monitor distributions and commands still present."""
     found = []
     try:
         version = metadata.version(legacy.LEGACY_DISTRIBUTION)
@@ -553,71 +885,39 @@ def _legacy_installed():
     return found
 
 
-def _legacy_config_entries():
-    findings = []
-    for path in (SETTINGS_FILE, CODEX_HOOKS_FILE):
-        try:
-            config = load_json(path)
-        except ConfigError as error:
-            findings.append(f"Cannot check {error}")
-            continue
-        commands = [
-            hook
-            for groups in config.get("hooks", {}).values()
-            for group in groups
-            if isinstance(group, dict) and isinstance(group.get("hooks"), list)
-            for hook in group["hooks"]
-            if _is_owned_hook(hook)
-            and _executable_name(_command_argv(hook["command"])[0]) != HOOK_COMMAND
-        ]
-        if commands:
-            findings.append(f"{path} has {len(commands)} claude-fleet-monitor hook command(s)")
-        servers = config.get("mcpServers", {})
-        stale = [name for name in MCP_NAMES if _is_owned_mcp(servers.get(name))]
-        if stale:
-            findings.append(f"{path} has unused MCP entries: {', '.join(stale)}")
-    if _is_owned_mcp(_claude_user_servers().get(legacy.LEGACY_MCP_NAME)):
-        findings.append(
-            f"{CLAUDE_USER_CONFIG} registers the old MCP server "
-            f"'{legacy.LEGACY_MCP_NAME}'"
-        )
-    if os.path.lexists(pi_config_dir() / legacy.LEGACY_PI_CONFIG_NAME):
-        findings.append(
-            f"{pi_config_dir() / legacy.LEGACY_PI_CONFIG_NAME} manages the "
-            "claude-fleet-monitor Pi extension"
-        )
-    return findings
+def hook_report(config, harness):
+    """What a loaded hook config holds: current events, legacy and stale commands."""
+    events = {}
+    legacy_commands = 0
+    stale = []
+    expected = dict(_hook_events(harness))
+    for event, groups in config.get("hooks", {}).items():
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+                continue
+            for hook in group["hooks"]:
+                if not _is_owned_hook(hook):
+                    continue
+                argv = _command_argv(hook["command"])
+                if _executable_name(argv[0]) != HOOK_COMMAND:
+                    legacy_commands += 1
+                    continue
+                if event in expected and expected[event] in argv[1:2]:
+                    events[event] = argv[0]
+                if os.path.isabs(argv[0]) and not os.path.exists(argv[0]):
+                    stale.append(argv[0])
+    missing = [event for event in expected if event not in events]
+    return {
+        "present": sorted(events),
+        "missing": missing,
+        "legacy": legacy_commands,
+        "stale": sorted(set(stale)),
+    }
 
 
-def cmd_doctor(args):
-    print(f"Session directory: {paths.sessions_dir()}")
-    problems = 0
-    legacy_dir = legacy.legacy_sessions_dir()
-    if os.path.lexists(legacy_dir):
-        problems += 1
-        print()
-        print(f"Unused claude-fleet-monitor session directory: {legacy_dir}")
-        print("  tongs-agents never reads or deletes it. Its records are stale; remove it with:")
-        print(f"    {_remove_directory_command(legacy_dir)}")
-    installed = _legacy_installed()
-    if installed:
-        problems += 1
-        print()
-        print("claude-fleet-monitor is still installed:")
-        for item in installed:
-            print(f"  {item}")
-        print("  Uninstall it with the tool that installed it, for example:")
-        print(f"    pip uninstall {legacy.LEGACY_DISTRIBUTION}")
-    entries = _legacy_config_entries()
-    if entries:
-        problems += 1
-        print()
-        print("Leftover claude-fleet-monitor configuration:")
-        for item in entries:
-            print(f"  {item}")
-        print("  Run 'tongs-agents install' (add '--agent pi' for Pi) to clean it up.")
-    if not problems:
-        print("No claude-fleet-monitor leftovers found.")
+def owned_settings_mcp(config):
+    servers = config.get("mcpServers", {})
+    return [name for name in MCP_NAMES if _is_owned_mcp(servers.get(name))]
 
 
 def cmd_monitor(args):
@@ -656,7 +956,29 @@ def cmd_status(args):
         )
 
 
-def main():
+def _add_dir_options(parser, verb):
+    for kind, (flag, attribute) in DIR_OPTIONS.items():
+        parser.add_argument(
+            flag, dest=attribute, action="append", default=None, metavar="DIR",
+            help=f"{verb} {kind} monitoring in DIR instead of the defaults (repeatable)",
+        )
+
+
+BUILTIN_COMMANDS = {
+    "install": cmd_install,
+    "uninstall": cmd_uninstall,
+    "monitor": cmd_monitor,
+    "focus": cmd_focus,
+    "status": cmd_status,
+}
+
+
+def build_parser(modules=None):
+    """The argument parser with built-in verbs and every command module.
+
+    Returns the parser and the handler for each verb. A command module whose
+    name collides with a built-in verb or another module raises.
+    """
     parser = argparse.ArgumentParser(
         prog="tongs-agents",
         description="Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions",
@@ -666,15 +988,17 @@ def main():
     p_install = sub.add_parser("install", help="Install agent monitoring")
     p_install.add_argument(
         "--agent", choices=["claude", "codex", "pi", "all"],
-        help="Install one agent integration; default: Claude Code and Codex",
+        help="Install one agent integration; default: Claude Code, Codex and every profile",
     )
+    _add_dir_options(p_install, "Install")
 
     p_uninstall = sub.add_parser("uninstall", help="Remove agent monitoring")
     p_uninstall.add_argument("--keep-data", action="store_true", help="Keep session status data")
     p_uninstall.add_argument(
         "--agent", choices=["claude", "codex", "pi", "all"],
-        help="Remove one agent integration; default: Claude Code and Codex",
+        help="Remove one agent integration; default: Claude Code, Codex and every profile",
     )
+    _add_dir_options(p_uninstall, "Remove")
 
     p_monitor = sub.add_parser("monitor", help="Launch TUI dashboard")
     p_monitor.add_argument("--refresh", type=int, default=2, help="Refresh interval in seconds")
@@ -685,26 +1009,36 @@ def main():
     p_focus.add_argument("query", help="Repo name, session ID, or PID")
 
     sub.add_parser("status", help="Print fleet status (no TUI)")
-    sub.add_parser("doctor", help="Report claude-fleet-monitor leftovers")
 
+    handlers = dict(BUILTIN_COMMANDS)
+    modules = commands.discover() if modules is None else modules
+    for module in modules:
+        name = commands.command_name(module)
+        if name in handlers:
+            raise commands.CommandCollisionError(
+                f"command module {module.__name__} defines {name!r}, "
+                "which is already a tongs-agents command"
+            )
+        command_parser = sub.add_parser(name, help=getattr(module, "HELP", None))
+        module.add_arguments(command_parser)
+        handlers[name] = module.run
+    return parser, handlers
+
+
+def main():
+    parser, handlers = build_parser()
     args = parser.parse_args()
     if args.command is None:
         parser.print_help()
         sys.exit(1)
 
-    cmds = {
-        "install": cmd_install,
-        "uninstall": cmd_uninstall,
-        "monitor": cmd_monitor,
-        "focus": cmd_focus,
-        "status": cmd_status,
-        "doctor": cmd_doctor,
-    }
     try:
-        cmds[args.command](args)
+        status = handlers[args.command](args)
     except ConfigError as error:
         print(f"tongs-agents: {error}", file=sys.stderr)
         sys.exit(1)
+    if status:
+        sys.exit(status)
 
 
 if __name__ == "__main__":

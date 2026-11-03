@@ -91,7 +91,7 @@ def test_pi_install_handles_paths_and_preserves_owned_history(tmp_path, monkeypa
     monkeypatch.setattr(
         pi_install,
         "_run_pi_package",
-        lambda command, operation, path: calls.append((operation, path)) or completed(),
+        lambda command, operation, path, env=None: calls.append((operation, path)) or completed(),
     )
 
     assert pi_install.install_pi("/path/pi", str(hook))
@@ -124,7 +124,7 @@ def test_failed_upgrade_removal_is_retained_for_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(pi_install, "detect_pi_version", lambda command: (0, 85, 0))
     monkeypatch.setattr(pi_install, "pi_extension_path", lambda: extension)
 
-    def run(command, operation, path):
+    def run(command, operation, path, env=None):
         if operation == "remove":
             return completed(1, stderr="busy")
         return completed()
@@ -138,7 +138,7 @@ def test_failed_upgrade_removal_is_retained_for_retry(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pi_install,
         "_run_pi_package",
-        lambda command, operation, path: calls.append((operation, path)) or completed(),
+        lambda command, operation, path, env=None: calls.append((operation, path)) or completed(),
     )
     assert pi_install.install_pi("/path/pi", str(hook))
     assert calls == [("install", extension), ("remove", old)]
@@ -251,7 +251,7 @@ def test_uninstall_removes_only_owned_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pi_install,
         "_run_pi_package",
-        lambda command, operation, path: calls.append((operation, str(path)))
+        lambda command, operation, path, env=None: calls.append((operation, str(path)))
         or completed(1, stderr="No matching package found"),
     )
     assert pi_install.uninstall_pi("/path/pi")
@@ -275,7 +275,7 @@ def test_partial_uninstall_preserves_valid_retry_state(tmp_path, monkeypatch):
     attempts = []
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
 
-    def first_attempt(command, operation, path):
+    def first_attempt(command, operation, path, env=None):
         attempts.append(str(path))
         return completed(1, stderr="busy") if str(path) == "/old" else completed()
 
@@ -289,7 +289,7 @@ def test_partial_uninstall_preserves_valid_retry_state(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pi_install,
         "_run_pi_package",
-        lambda command, operation, path: attempts.append(str(path)) or completed(),
+        lambda command, operation, path, env=None: attempts.append(str(path)) or completed(),
     )
     assert pi_install.uninstall_pi("/path/pi")
     assert attempts == ["/current", "/old"]
@@ -321,7 +321,7 @@ def test_cli_pi_selection_does_not_touch_other_agents(settings_file, monkeypatch
     hook = Path(settings_file).parent / "tongs-agents-hook"
     hook.write_text("")
     monkeypatch.setattr(cli.shutil, "which", lambda name: str(hook) if name == "tongs-agents-hook" else "/usr/bin/pi")
-    monkeypatch.setattr(cli, "install_pi", lambda pi, hook_path: True)
+    monkeypatch.setattr(cli, "install_pi", lambda pi, hook_path, env=None: True)
     cli.cmd_install(SimpleNamespace(agent="pi"))
     assert json.loads(settings_file.read_text()) == {}
     assert not cli.CODEX_HOOKS_FILE.exists()
@@ -333,7 +333,7 @@ def test_cli_pi_uninstall_instructs_running_sessions_to_restart(
     from tongs_agents import cli
 
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/pi")
-    monkeypatch.setattr(cli, "uninstall_pi", lambda command: True)
+    monkeypatch.setattr(cli, "uninstall_pi", lambda command, env=None: True)
 
     cli.cmd_uninstall(SimpleNamespace(agent="pi", keep_data=True))
 
@@ -387,7 +387,7 @@ def pi_env(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pi_install,
         "_run_pi_package",
-        lambda command, operation, path: calls.append((operation, str(path))) or completed(),
+        lambda command, operation, path, env=None: calls.append((operation, str(path))) or completed(),
     )
     return SimpleNamespace(
         config_dir=config_dir, extension=extension, hook=hook, calls=calls,
@@ -414,7 +414,7 @@ def test_failed_legacy_pi_removal_is_kept_for_retry(pi_env, monkeypatch, capsys)
     legacy_config = _legacy_pi(pi_env.config_dir, "/old/site/pi_extension")
     monkeypatch.setattr(
         pi_install, "_run_pi_package",
-        lambda command, operation, path: completed(1 if operation == "remove" else 0, stderr="busy"),
+        lambda command, operation, path, env=None: completed(1 if operation == "remove" else 0, stderr="busy"),
     )
     assert not pi_install.install_pi("/path/pi", str(pi_env.hook))
     assert legacy_config.exists()
@@ -464,3 +464,37 @@ def test_python_and_javascript_markers_change_in_lockstep():
     assert pi_install.PI_CONFIG_OWNER == "tongs-agents"
     assert pi_install.PI_CONFIG_NAME == "tongs-agents.json"
     assert json.loads((package / "package.json").read_text())["name"] == "tongs-agents-pi"
+
+
+def test_install_and_uninstall_follow_the_env_agent_dir(pi_env, tmp_path, monkeypatch):
+    from tongs_agents import legacy, pi_install
+
+    other = tmp_path / "pi-alt"
+    seen = []
+    monkeypatch.setattr(
+        pi_install, "_run_pi_package",
+        lambda command, operation, path, env=None: seen.append(
+            (operation, env["PI_CODING_AGENT_DIR"])) or completed(),
+    )
+    _legacy_pi(pi_env.config_dir, "/old/ext")
+    env = pi_install.pi_environment(other)
+    assert pi_install.install_pi("/path/pi", str(pi_env.hook), env)
+    assert (other / pi_install.PI_CONFIG_NAME).exists()
+    assert not pi_env.config.exists()
+    assert (pi_env.config_dir / legacy.LEGACY_PI_CONFIG_NAME).exists()
+    assert seen == [("install", str(other))]
+
+    assert pi_install.uninstall_pi("/path/pi", env)
+    assert not (other / pi_install.PI_CONFIG_NAME).exists()
+    assert seen[-1] == ("remove", str(other))
+
+
+def test_pi_config_dir_reads_the_given_env(tmp_path, monkeypatch):
+    from tongs_agents import pi_install
+
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "process"))
+    assert pi_install.pi_config_dir() == tmp_path / "process"
+    assert pi_install.pi_config_dir({"PI_CODING_AGENT_DIR": str(tmp_path / "x")}) == tmp_path / "x"
+    env = pi_install.pi_environment(tmp_path / "y")
+    assert env["PI_CODING_AGENT_DIR"] == str(tmp_path / "y")
+    assert pi_install.pi_config_dir() == tmp_path / "process"

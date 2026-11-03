@@ -15,6 +15,7 @@ MINIMUM_PI_VERSION = (0, 84, 4)
 PI_CONFIG_NAME = "tongs-agents.json"
 PI_CONFIG_OWNER = "tongs-agents"
 PI_CONFIG_SCHEMA = 1
+PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR"
 _MAX_CONFIG_BYTES = 16 * 1024
 _VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$")
 
@@ -30,11 +31,20 @@ def _absolute_path(value):
     return Path(value).is_absolute()
 
 
-def pi_config_dir() -> Path:
-    configured = os.environ.get("PI_CODING_AGENT_DIR")
+def pi_config_dir(env=None) -> Path:
+    """Pi's agent dir: ``PI_CODING_AGENT_DIR`` from ``env`` (default os.environ)."""
+    source = os.environ if env is None else env
+    configured = source.get(PI_AGENT_DIR_ENV)
     if configured:
         return Path(configured).expanduser()
     return Path.home() / ".pi" / "agent"
+
+
+def pi_environment(directory) -> dict:
+    """The current environment with Pi pointed at ``directory``."""
+    environment = os.environ.copy()
+    environment[PI_AGENT_DIR_ENV] = str(directory)
+    return environment
 
 
 def pi_extension_path() -> Path:
@@ -128,13 +138,14 @@ def detect_pi_version(pi_command: str):
     return tuple(int(part) for part in match.groups())
 
 
-def _run_pi_package(pi_command: str, operation: str, package_path: Path):
+def _run_pi_package(pi_command: str, operation: str, package_path: Path, env=None):
     try:
         return subprocess.run(
             [pi_command, operation, str(package_path), "--no-approve"],
             capture_output=True,
             text=True,
             timeout=30,
+            env=env,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"  Could not {operation} Pi extension: {error}")
@@ -147,9 +158,9 @@ def _remove_succeeded(result):
     return result.returncode == 0 or "No matching package found" in result.stderr
 
 
-def _remove_legacy_pi(pi_command: str | None, keep: str = "") -> bool:
+def _remove_legacy_pi(pi_command: str | None, keep: str = "", env=None) -> bool:
     """Remove the extension a claude-fleet-monitor install registered with Pi."""
-    config_path = pi_config_dir() / legacy.LEGACY_PI_CONFIG_NAME
+    config_path = pi_config_dir(env) / legacy.LEGACY_PI_CONFIG_NAME
     try:
         config = _read_owned_config(config_path, legacy.LEGACY_PI_CONFIG_OWNER)
     except ValueError:
@@ -165,7 +176,7 @@ def _remove_legacy_pi(pi_command: str | None, keep: str = "") -> bool:
     for value in dict.fromkeys(candidates):
         if value == keep:
             continue
-        if not _remove_succeeded(_run_pi_package(pi_command, "remove", Path(value))):
+        if not _remove_succeeded(_run_pi_package(pi_command, "remove", Path(value), env)):
             remaining.append(value)
     if remaining:
         print("  Could not remove the claude-fleet-monitor Pi extension; kept "
@@ -180,8 +191,9 @@ def _remove_legacy_pi(pi_command: str | None, keep: str = "") -> bool:
     return True
 
 
-def install_pi(pi_command: str, hook_command: str) -> bool:
-    config_path = pi_config_dir() / PI_CONFIG_NAME
+def install_pi(pi_command: str, hook_command: str, env=None) -> bool:
+    """Install the Pi extension; ``env`` (see pi_environment) selects the agent dir."""
+    config_path = pi_config_dir(env) / PI_CONFIG_NAME
     try:
         previous = _read_owned_config(config_path)
     except ValueError as error:
@@ -229,7 +241,7 @@ def install_pi(pi_command: str, hook_command: str) -> bool:
         print(f"  Could not write Pi extension config: {error}")
         return False
 
-    result = _run_pi_package(pi_command, "install", extension_path)
+    result = _run_pi_package(pi_command, "install", extension_path, env)
     if result is None or result.returncode != 0:
         if previous is None:
             try:
@@ -250,7 +262,7 @@ def install_pi(pi_command: str, hook_command: str) -> bool:
     for old_path in dict.fromkeys(old_paths):
         if old_path == str(extension_path):
             continue
-        removal = _run_pi_package(pi_command, "remove", Path(old_path))
+        removal = _run_pi_package(pi_command, "remove", Path(old_path), env)
         if not _remove_succeeded(removal):
             remaining.append(old_path)
             print(f"  Kept previous Pi extension reference for retry: {old_path}")
@@ -260,14 +272,15 @@ def install_pi(pi_command: str, hook_command: str) -> bool:
     except OSError as error:
         print(f"  Pi installed, but its config could not be finalized: {error}")
         return False
-    print(f"  Installed Pi extension from {extension_path}")
-    return _remove_legacy_pi(pi_command, keep=str(extension_path))
+    print(f"  Installed Pi extension from {extension_path} into {config_path.parent}")
+    return _remove_legacy_pi(pi_command, keep=str(extension_path), env=env)
 
 
-def uninstall_pi(pi_command: str | None) -> bool:
-    if not _remove_legacy_pi(pi_command):
+def uninstall_pi(pi_command: str | None, env=None) -> bool:
+    """Remove the Pi extension; ``env`` (see pi_environment) selects the agent dir."""
+    if not _remove_legacy_pi(pi_command, env=env):
         return False
-    config_path = pi_config_dir() / PI_CONFIG_NAME
+    config_path = pi_config_dir(env) / PI_CONFIG_NAME
     try:
         config = _read_owned_config(config_path)
     except ValueError as error:
@@ -288,7 +301,7 @@ def uninstall_pi(pi_command: str | None) -> bool:
         paths.append(extension_path)
     remaining = []
     for value in dict.fromkeys(item for item in paths if isinstance(item, str)):
-        result = _run_pi_package(pi_command, "remove", Path(value))
+        result = _run_pi_package(pi_command, "remove", Path(value), env)
         if not _remove_succeeded(result):
             remaining.append(value)
     if remaining:
@@ -306,5 +319,5 @@ def uninstall_pi(pi_command: str | None) -> bool:
     except OSError as error:
         print(f"  Could not remove Pi extension config: {error}")
         return False
-    print("  Removed Pi extension")
+    print(f"  Removed Pi extension from {config_path.parent}")
     return True
