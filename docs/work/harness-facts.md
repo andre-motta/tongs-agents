@@ -199,7 +199,7 @@ from inside the harness finds a match. All rows are live.
 | `claude` on PATH, or env-only profile `argv ['claude', ...]` with `CLAUDE_CONFIG_DIR` | `claude` / `2.1.317` / `claude` | yes (comm, argv0) | yes | yes |
 | Exec wrapper script (`exec claude "$@"`) | `claude` / `2.1.317` / `claude` | yes | yes | yes |
 | Non-exec wrapper script (`claude "$@"`) | `claude-plain` / `bash` / `sh` | **no** | **no** (harness is a child) | yes, at the child |
-| Differently named symlink `claude-personal` | `claude-personal` / `2.1.317` / `claude-personal` | **no** | n/a | **no** |
+| Differently named symlink `claude-alt` | `claude-alt` / `2.1.317` / `claude-alt` | **no** | n/a | **no** |
 | Resolved binary `versions/2.1.317` | `2.1.317` / `2.1.317` / `2.1.317` | **no** | n/a | **no** |
 | Shell alias (`bash -c` with an alias to `claude`) | `claude` / `2.1.317` / `claude` (bash execs the last command) | yes | yes | yes |
 | `codex` on PATH, env-only profile, exec wrapper, alias | `codex` / `codex` / `codex` | yes | yes | yes |

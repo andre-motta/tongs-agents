@@ -1255,7 +1255,7 @@ def probe_identity(lab, results):
             f"#!/bin/sh\n{variable}={shlex.quote(str(config))} {harness} \"$@\"\n")
         for script in (exec_wrapper, plain_wrapper):
             script.chmod(0o755)
-        alias_link = wrappers / f"{harness}-personal"
+        alias_link = wrappers / f"{harness}-alt"
         alias_link.symlink_to(os.path.realpath(binary))
         alias_line = (f"shopt -s expand_aliases; alias {harness}-alias="
                       f"'{variable}={shlex.quote(str(config))} {harness}'\n"
