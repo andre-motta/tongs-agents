@@ -338,3 +338,51 @@ def test_exit_code_is_the_worst_level():
     assert doctor.exit_code([doctor.Check("a", "info", "")]) == 0
     assert doctor.exit_code([doctor.Check("a", "warn", ""), doctor.Check("b", "ok", "")]) == 1
     assert doctor.exit_code([doctor.Check("a", "warn", ""), doctor.Check("b", "error", "")]) == 2
+
+
+def _doctor_text(monkeypatch, capsys, *argv):
+    capsys.readouterr()
+    monkeypatch.setattr(sys, "argv", ["tongs-agents", "doctor", *argv])
+    try:
+        cli.main()
+        code = 0
+    except SystemExit as raised:
+        code = raised.code
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_fix_names_must_be_known(home, monkeypatch, capsys):  # noqa: F811
+    code, _, err = _doctor_text(monkeypatch, capsys, "--fix", "nope")
+    assert code == 2
+    assert "no fix named 'nope'; available: zellij" in err
+
+
+def test_fix_cannot_print_json(home, monkeypatch, capsys):  # noqa: F811
+    code, _, err = _doctor_text(monkeypatch, capsys, "--fix", "zellij", "--json")
+    assert code == 2
+    assert "--fix cannot be combined with --json" in err
+
+
+def test_fix_runs_only_the_named_fix_once(home, monkeypatch, capsys):  # noqa: F811
+    calls = []
+    monkeypatch.setattr(doctor, "available_fixes", lambda: {"zellij": calls.append})
+    monkeypatch.setattr(doctor, "collect", lambda args: pytest.fail("checks ran"))
+    code, _, _ = _doctor_text(monkeypatch, capsys, "--fix", "zellij", "--fix", "zellij")
+    assert code == 0
+    assert len(calls) == 1
+
+
+def test_fix_exit_status_is_the_fix_result(home, monkeypatch, capsys):  # noqa: F811
+    monkeypatch.setattr(doctor, "available_fixes", lambda: {"zellij": lambda args: 2})
+    code, _, _ = _doctor_text(monkeypatch, capsys, "--fix", "zellij")
+    assert code == 2
+
+
+def test_missing_zellij_check_offers_the_fix_as_info(home, monkeypatch, capsys):  # noqa: F811
+    _, checks = _doctor(monkeypatch, capsys)
+    managed = _find(checks, name="zellij-managed")
+    assert managed and managed[0]["level"] == "info"
+    assert managed[0]["remediation"] in (
+        "tongs-agents doctor --fix zellij", "",
+    )
