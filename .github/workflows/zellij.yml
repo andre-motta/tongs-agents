@@ -28,7 +28,9 @@ jobs:
     outputs:
       versions: ${{ steps.read.outputs.versions }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Read the Zellij pin table
         id: read
@@ -64,9 +66,10 @@ jobs:
     env:
       ZELLIJ_VERSION: ${{ matrix.zellij-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Record checkout metadata
         run: |
@@ -139,7 +142,7 @@ jobs:
             printf 'zellij_reported_version=%s\n' "$reported"
           } >> "$RUNNER_TEMP/zellij-validation/metadata.txt"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -244,7 +247,7 @@ jobs:
 
       - name: Upload Zellij validation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: zellij-validation-evidence-${{ matrix.zellij-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/zellij-validation/
@@ -264,9 +267,10 @@ jobs:
     env:
       ZELLIJ_VERSION: ${{ matrix.zellij-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Record checkout metadata
         run: |
@@ -340,7 +344,7 @@ jobs:
             printf 'zellij_reported_version=%s\n' "$reported"
           } >> "$RUNNER_TEMP/workspace-validation/metadata.txt"
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.12"
 
@@ -409,7 +413,7 @@ jobs:
 
       - name: Upload workspace validation evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: workspace-validation-evidence-${{ matrix.zellij-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/workspace-validation/

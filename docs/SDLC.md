@@ -17,7 +17,7 @@ active initiative until a migration is agreed again.
 | Setup | `python3 -m venv .venv`, then `.venv/bin/python -m pip install -e ".[dev]"`; Windows uses `.venv/Scripts/python.exe` |
 | Focused checks | Relevant pytest modules, applicable functional checks and `git diff --check` |
 | Integrated checks | Full pytest and available local Python matrix; `.[dev,tongs]` when changing Tongs integration; actual affected CLI/MCP/harness journeys |
-| Hosted gates | Workflow semantic lint, Python matrix with headless TUI journey, Python 3.12 run with the `tongs` extra, strict Podman shell validation, real Pi lifecycle/tmux validation, and `zellij-validation` plus `workspace-validation` on each pinned Zellij release, on PRs into `main` and `feat/**`, plus pushes to `main` |
+| Hosted gates | Workflow semantic lint, Python matrix with headless TUI journey, Python 3.12 run with the `tongs` extra, a Python 3.11 run on the lowest supported textual, strict Podman shell validation, real Pi lifecycle/tmux validation, and `zellij-validation` plus `workspace-validation` on each pinned Zellij release, on PRs into `main` and `feat/**`, plus pushes to `main` |
 | Documentation checks | Relative links, command accuracy, policy consistency and `git diff --check` |
 | Platforms | Preserve Linux/macOS/Windows behavior using platform mocks; require live evidence for newly claimed terminal or desktop capabilities |
 | Commit rules | Imperative title under 50 characters, blank line, one-line why body, issue reference and trailers; `git commit -s`; `Co-Authored-By` naming the actual Claude model without context-size annotation |
