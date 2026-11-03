@@ -43,7 +43,7 @@ a successful command alone is never reported as focus. Evidence labels:
 **live** (real program observed on Fedora 44 KDE Plasma Wayland),
 **instrumented** (real program with tongs-agents calls recorded), **mocked** (pytest
 with substituted OS calls), **inspected** (source or documentation only) and
-**unverified** (not observed).
+**unvalidated** (not observed).
 
 | Terminal | Tab or pane selection | Window raise | Nested support | Evidence |
 |----------|:---:|:---:|:---:|---|
@@ -142,15 +142,15 @@ at capture. Without remote control or a `unix:` listen_on socket, focus reports
 "kitty remote control unavailable: needs allow_remote_control and a unix:
 listen_on socket" and changes nothing.
 
-Selection also needs `KITTY_PID`, which the hook captures since this release:
+Selection also needs `KITTY_PID`, which the hook captures:
 the kitty process it names must be an ancestor of the agent process and of
 the target window's child process that `kitten @ ls` reports. This keeps
 kitty variables leaked into another terminal, or a nested kitty that
 inherited an outer `KITTY_LISTEN_ON`, from selecting a same-numbered window
-in the wrong kitty. Sessions recorded earlier have no `KITTY_PID` and report
+in the wrong kitty. Sessions recorded by older hooks have no `KITTY_PID` and report
 "restart the agent session to enable kitty focus" without selecting.
 
-**Upgrade note:** kitty sessions recorded before this release lose selection
+**Upgrade note:** kitty sessions recorded by older hooks lose selection
 until the agent session is restarted, and kitty versions that do not export
 `KITTY_PID` lose selection.
 

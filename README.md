@@ -3,17 +3,17 @@
 [![Tests](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
 
-tongs-agents gives you one workspace for many coding agents, whichever harness
-they run in. Claude Code, Codex and pi each keep their own sessions, terminals
-and status. tongs-agents collects that status from the harnesses' own hooks,
-shows every session in one list, tells you which one needs input, and takes you
-to the right terminal. It is a standalone, harness-agnostic companion app in the
+tongs-agents shows your Claude Code, Codex and pi sessions in one list, tells
+you which one needs input, and takes you to its terminal. It reads status from
+each harness's own hooks, so it works whichever harness an agent runs in. It is
+growing into a Zellij agent workspace (in progress). It is a standalone,
+harness-agnostic companion app in the
 [tongs](https://github.com/andre-motta/tongs) family: it runs on its own, and
 tongs is optional.
 
 > **Status: pre-release.** tongs-agents is not on PyPI yet; install it from
-> source. v0.10.0 will be the first release and ships milestones M0 to M5 (no
-> date).
+> source. v0.10.0 will be the first release and will ship milestones M0 to M5
+> (no date).
 >
 > - **Works today:** hook-based status for Claude Code, Codex and pi, the
 >   `monitor` TUI, `focus`, `status`, `doctor`, an MCP server and an optional
@@ -30,7 +30,10 @@ tongs is optional.
 ## How it fits with tongs
 
 [tongs](https://github.com/andre-motta/tongs) is the MR and CI terminal UI.
-tongs-agents is its neighbour for agent sessions. The planned shape is:
+tongs-agents works without it. Today, with the `[tongs]` extra, tongs gets an
+Agents screen (see [tongs plugin](#tongs-plugin)).
+
+The planned shape, part of milestone M1 and not available yet:
 
 - tongs-agents owns its own Textual sidebar app and a Zellij session in which
   Claude Code, Codex and pi run as real panes. There is no terminal emulation
@@ -40,9 +43,6 @@ tongs-agents is its neighbour for agent sessions. The planned shape is:
   and an "Open agent workspace" action to tongs. No tongs core changes are
   needed.
 - Status comes from harness hooks. No daemon, no telemetry.
-
-Today the plugin provides the agents screen only; the workspace, sidebar and
-plugin action are part of milestone M1.
 
 ## Quick start (from source)
 
@@ -54,7 +54,7 @@ cd tongs-agents
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .              # or: pip install -e ".[tongs]" for the tongs plugin
-tongs-agents install          # Claude Code and Codex; add --agent pi or --agent all
+tongs-agents install          # Claude Code and Codex; then --agent pi for Pi, or use --agent all
 ```
 
 Restart your agent sessions after the first install. Codex asks you to review
@@ -62,7 +62,7 @@ and trust the installed hooks through `/hooks` before they run. Then:
 
 ```bash
 tongs-agents monitor          # live list of sessions; Enter focuses one
-tongs-agents focus autofix    # jump to a session by repo, session ID or PID
+tongs-agents focus my-repo    # jump to a session by repo, session ID or PID
 ```
 
 `tongs-agents install` writes:
@@ -72,8 +72,9 @@ tongs-agents focus autofix    # jump to a session by repo, session ID or PID
 - The `tongs-agents` MCP server through `claude mcp add --scope user` and
   `codex mcp add`, only when those CLIs are on `PATH`.
 - With `--agent pi` (Pi 0.84.4 or newer), a dependency-free Pi lifecycle
-  extension. It needs `pi` and an absolute `tongs-agents-hook` on `PATH`,
-  keeps your other Pi extensions and registers no MCP server. See the
+  extension. It needs `pi` on `PATH` and `tongs-agents-hook` resolvable to
+  an absolute path, keeps your other Pi extensions and registers no MCP
+  server. See the
   [Pi integration guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/pi.md).
 
 Session records go to `$XDG_STATE_HOME/tongs-agents/sessions/`
@@ -96,15 +97,15 @@ has the reproduction commands.
 | Command or part | What it does | Evidence |
 | --- | --- | --- |
 | `install [--agent claude\|codex\|pi\|all]` | Installs hooks and MCP registration; cleans up claude-fleet-monitor 0.9.x entries | mocked |
-| `uninstall [--keep-data] [--agent ...]` | Removes hooks and MCP entries, including legacy ones; deletes session records for the default or `all` selection unless `--keep-data` | mocked |
+| `uninstall [--keep-data] [--agent ...]` | Removes hooks and MCP entries, including legacy ones; deletes session records for the default or `all` selection unless `--keep-data`; session records are kept while the Pi extension is installed | mocked |
 | `monitor [--refresh N] [--notify all\|waiting\|none]` | Textual list of sessions with search, sort, status filters, details, attention jumping and focus; compact layout on narrow terminals | instrumented (headless Textual check in CI) |
-| `focus <query>` | Matches exactly, then by substring, over session ID, repo and PID, and focuses the captured terminal; reports complete, partial, unavailable or failed | per terminal, see [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md#supported-terminals) |
+| `focus <query>` | Matches exactly, then by substring, over session ID, repo and PID, and focuses the captured terminal; reports complete, partial, unavailable or failed, or lists the candidates when several sessions match | per terminal, see [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md#supported-terminals) |
 | In-session Zellij focus | When you run `focus` inside the agent's Zellij session, selects its pane directly | mocked |
-| `status` | Plain table of agent, repo, status, detail and age | live |
-| `doctor` | Read-only report of claude-fleet-monitor leftovers | live |
+| `status` | Plain table of agent, repo, status, detail and age | unvalidated |
+| `doctor` | Read-only report of claude-fleet-monitor leftovers | mocked |
 | `tongs-agents-hook` | Hook entry point for Claude Code, Codex and pi events | instrumented (nine shells in Podman, synthetic payloads) |
 | MCP server `tongs-agents` | Five tools for agents to read and focus sessions (below) | instrumented (real server over stdio, synthetic session), mocked |
-| Pi extension | Lifecycle events from pi | live process, no GUI (real Pi 0.85.0, synthetic provider, tmux) |
+| Pi extension | Lifecycle events from pi | instrumented (real Pi 0.85.0 in hosted CI, synthetic provider, tmux pane selection; no GUI) |
 | tongs plugin | Palette command "Agents" opens the agents screen | mocked (CI job against tongs) |
 
 Process discovery also finds running `claude` and `codex` processes before any
@@ -175,7 +176,7 @@ are in the
 From the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md):
 
 - **M0, release safety foundations:** upgrade adoption, publish hardening, plan record, harness facts. Merged.
-- **M1, thin usable workspace:** runtime rename, agents panel, multiplexer protocol and pinned Zellij CI merged; launch profiles, `tongs-agents workspace`, sidebar and plugin action in progress.
+- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol and pinned Zellij CI merged; launch profiles, `tongs-agents workspace`, sidebar and plugin action in progress.
 - **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. In progress.
 - **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. Planned.
 - **M4, session store hardening:** read-only readers and one cleanup owner. Planned.
@@ -195,13 +196,16 @@ within minutes. Issue and PR numbers from before the rename refer to the
 [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
 See the [migration guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/migration.md).
 
-To remove tongs-agents:
+## Uninstall
 
 ```bash
 tongs-agents uninstall              # hooks, MCP entries and session records
 tongs-agents uninstall --keep-data  # keep the sessions directory
-tongs-agents uninstall --agent pi   # only the Pi extension tongs-agents owns
+tongs-agents uninstall --agent pi   # only the Pi extension (and any claude-fleet-monitor Pi leftovers)
 ```
+
+Session records are kept while the Pi extension is still installed. Then run
+`pip uninstall tongs-agents`.
 
 ## Contributing
 

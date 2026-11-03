@@ -15,15 +15,19 @@ nothing in them is carried over.
 | Codex MCP | `fleet` via `codex mcp add` | `tongs-agents` via `codex mcp add` |
 | Pi config and marker | `claude-fleet-monitor.json`, owner `claude-fleet-monitor` | `tongs-agents.json`, owner `tongs-agents` |
 | Pi runtime symbol and package | `claude-fleet-monitor.pi.runtime.v1`, `claude-fleet-monitor-pi` | `tongs-agents.pi.runtime.v1`, `tongs-agents-pi` |
-| tongs entry point | `fleet-monitor` (`[plugins.fleet-monitor]`) | `agents` (`[plugins.agents]`) |
+| tongs entry point | `fleet-monitor` (`[plugins.fleet-monitor]`) | `agents` (`[plugins.agents]`; known issue: the plugin still reads `[plugins.fleet-monitor]`) |
 | Python module | `claude_fleet_monitor` | `tongs_agents` |
 
 The MCP tool names (`fleet_status`, `fleet_focus`, ...) are unchanged.
 
 ## Steps
 
+tongs-agents is not on PyPI yet, so install it from source:
+
 ```bash
-pip install tongs-agents
+git clone https://github.com/andre-motta/tongs-agents.git
+cd tongs-agents
+pip install -e .                    # once released: pip install tongs-agents
 tongs-agents install                # or: tongs-agents install --agent all
 pip uninstall claude-fleet-monitor  # or pipx uninstall, matching how you installed it
 tongs-agents doctor
@@ -73,5 +77,6 @@ yet. It only reads; it changes nothing.
 
 ## tongs
 
-If you load the plugin in tongs, rename its configuration section from
-`[plugins.fleet-monitor]` to `[plugins.agents]`.
+The tongs plugin entry point is now `agents`. Known issue: the plugin still
+reads its settings from `[plugins.fleet-monitor]`, so keep that section until
+this is fixed; `[plugins.agents]` is the intended name.
