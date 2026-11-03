@@ -13,6 +13,13 @@ const CONFIG_NAME = "tongs-agents.json";
 const MAX_QUEUE = 128;
 const SEND_TIMEOUT_MS = 1500;
 const MAX_CONFIG_BYTES = 16 * 1024;
+// Agent chat (#32): the hook prints a digest for a granted launched session.
+// The event and return shapes below are unvalidated against a live Pi.
+const CHAT_CUSTOM_TYPE = "tongs-agents-chat";
+const CHAT_DIGEST_TIMEOUT_MS = 500;
+const CHAT_MAX_DIGEST_BYTES = 4096;
+const CHAT_TOOL_SPACING_MS = 10000;
+const LAUNCH_ID_PATTERN = /^[0-9a-f]{32}$/;
 const CURRENT_EXTENSION_PATH = realpathSync(
   dirname(dirname(fileURLToPath(import.meta.url))),
 );
@@ -179,6 +186,98 @@ function enqueue(payload, final = false) {
   });
 }
 
+// Only a pane tongs-agents launched on Linux can be granted chat; any other
+// session never spawns the digest.
+const chatPossible = Boolean(config)
+  && process.platform === "linux"
+  && LAUNCH_ID_PATTERN.test(process.env.TONGS_AGENTS_LAUNCH_ID ?? "");
+const chatState = { toolInFlight: false, lastToolRequest: 0 };
+
+function chatDigest(point) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let child;
+    let timer;
+    const chunks = [];
+    let size = 0;
+    const finish = (text) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(text);
+    };
+    try {
+      child = spawn(
+        config.hook_path,
+        ["chat-digest", "--agent", "pi"],
+        { stdio: ["pipe", "pipe", "ignore"], env: process.env },
+      );
+    } catch {
+      resolve("");
+      return;
+    }
+    timer = setTimeout(() => {
+      try { child.kill(); } catch {}
+      finish("");
+    }, CHAT_DIGEST_TIMEOUT_MS);
+    child.once("error", () => finish(""));
+    child.stdout.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > CHAT_MAX_DIGEST_BYTES) {
+        try { child.kill(); } catch {}
+        finish("");
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.once("close", (code) => {
+      finish(code === 0 ? Buffer.concat(chunks).toString("utf8") : "");
+    });
+    child.stdin.once("error", () => {
+      try { child.kill(); } catch { finish(""); }
+    });
+    try {
+      child.stdin.end(JSON.stringify({ point }));
+    } catch {
+      try { child.kill(); } catch { finish(""); }
+    }
+  });
+}
+
+function chatMessage(content) {
+  return { customType: CHAT_CUSTOM_TYPE, content, display: true };
+}
+
+function chatOnPrompt() {
+  return chatDigest("before_agent_start")
+    .catch(() => "")
+    .then((content) => (content ? { message: chatMessage(content) } : undefined));
+}
+
+function chatOnToolEnd(pi) {
+  const now = Date.now();
+  if (
+    chatState.toolInFlight
+    || now - chatState.lastToolRequest < CHAT_TOOL_SPACING_MS
+    || typeof pi.sendMessage !== "function"
+  ) {
+    return;
+  }
+  chatState.toolInFlight = true;
+  chatState.lastToolRequest = now;
+  chatDigest("tool_execution_end")
+    .catch(() => "")
+    .then((content) => {
+      if (!content) return;
+      try {
+        pi.sendMessage(chatMessage(content), { deliverAs: "steer" });
+      } catch {}
+    })
+    .finally(() => {
+      chatState.toolInFlight = false;
+    });
+}
+
 function stateFor(id) {
   let state = runtime.stateBySession.get(id);
   if (!state) {
@@ -262,12 +361,19 @@ export default function tongsAgents(pi) {
     if (!id) return;
     stateFor(id).pendingOutcome = null;
     transition(ctx, "before-agent-start", "running", "processing prompt");
+    if (chatPossible) return chatOnPrompt();
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
     const tool = safeToolName(event?.toolName);
     transition(ctx, "tool-execution-start", "running", `using ${tool || "tool"}`, tool);
   });
+
+  if (chatPossible) {
+    pi.on("tool_execution_end", () => {
+      chatOnToolEnd(pi);
+    });
+  }
 
   pi.on("agent_end", (event, ctx) => {
     const id = sessionId(ctx);
