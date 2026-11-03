@@ -49,12 +49,17 @@ tongs-agents agent-status LAUNCH_ID --json
 | Code | Meaning |
 | --- | --- |
 | 0 | ok (for `wait`: the state was reached) |
-| 1 | error (bad arguments, text refused, multiplexer call failed) |
+| 1 | error (usage errors and bad arguments, text refused, multiplexer call failed) |
 | 2 | timeout (`wait`) |
 | 3 | blocked: the agent needs you (`wait --until done`) |
 | 4 | the agent exited |
 | 5 | refused: not a pane tongs-agents spawned and verified |
 | 6 | the launch's multiplexer has no pane control |
+
+A usage error, such as an unknown option, a missing launch id or an invalid
+`--until` value, prints the usage line and exits 1, never 2, so 2 always
+means a `wait` timeout. Every `tongs-agents` verb follows this rule: no verb
+uses argparse's usual exit 2 for usage errors.
 
 ## What is verified
 

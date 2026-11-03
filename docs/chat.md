@@ -93,7 +93,7 @@ replying to a reply or across channels is refused.
 Every `chat` verb, and the pane, refuses inside an agent process tree (when
 `TONGS_AGENTS_LAUNCH_ID` is set or a live launched agent is an ancestor):
 agents use their tools, which keeps one audited agent path. Exit codes: 0 ok,
-1 error, 5 refused.
+1 error (a usage error such as an unknown option exits 1 too), 5 refused.
 
 ## Mention delivery
 

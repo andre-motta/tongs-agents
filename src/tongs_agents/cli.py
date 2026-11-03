@@ -1087,7 +1087,7 @@ def build_parser(modules=None):
     Returns the parser and the handler for each verb. A command module whose
     name collides with a built-in verb or another module raises.
     """
-    parser = argparse.ArgumentParser(
+    parser = commands.CommandParser(
         prog="tongs-agents",
         description="Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions",
     )
