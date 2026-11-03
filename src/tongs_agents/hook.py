@@ -203,7 +203,14 @@ def _verified_launch(launch, process):
     if launch is None or "launch_id" not in launch:
         return launch
     claim = _launch_claim(launch["launch_id"])
-    if claim is None or not process_descends_from(process, *claim):
+    if claim is None:
+        return None
+    if process is None:
+        # The agent process could not be resolved (a renamed binary, hidepid):
+        # verify the hook's own ancestry instead. A daemon-hosted hook still
+        # fails, because the daemon is not under the launcher.
+        process = discovery.get_process_info(os.getppid())
+    if not process_descends_from(process, *claim):
         return None
     return launch
 

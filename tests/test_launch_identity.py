@@ -513,6 +513,20 @@ def test_an_unresolved_process_records_no_launch(fleet_dir, monkeypatch, claimed
     assert "launch" not in record
 
 
+def test_an_unresolved_process_under_the_launcher_keeps_its_launch(fleet_dir, monkeypatch):
+    launcher = ProcessInfo(800, 1, "python3", "python3", ("python3",), None, "9")
+    hook_parent = ProcessInfo(801, 800, "sh", "sh", ("sh",), None, "10")
+    table = {process.pid: process for process in (launcher, hook_parent)}
+    monkeypatch.setattr(discovery, "get_process_info", table.get)
+    monkeypatch.setattr(hook.os, "getppid", lambda: hook_parent.pid)
+    write_claim(LAUNCH_ID, launcher.pid, launcher.start_token)
+    set_launch(monkeypatch)
+    assert run_hook(monkeypatch, "session-start", PAYLOAD, resolved=False)
+    record = read_new_record(fleet_dir)
+    assert record["process_identity"] == "unresolved"
+    assert record["launch"]["launch_id"] == LAUNCH_ID
+
+
 def test_a_profile_without_a_launch_id_is_kept_unverified(fleet_dir, monkeypatch):
     set_launch(monkeypatch, "not-a-launch")
     assert run_hook(monkeypatch, "session-start", PAYLOAD)
