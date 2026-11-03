@@ -13,6 +13,8 @@ import pytest
 
 from tongs_agents import multiplexers
 from tongs_agents.multiplexers import (
+    SESSION_EXITED,
+    SESSION_RUNNING,
     Multiplexer,
     MultiplexerError,
     PaneRef,
@@ -283,6 +285,8 @@ def test_bad_session_names_are_refused_before_any_call(fake, session):
         lambda: mux.spawn(session, ["claude"]),
         lambda: mux.list_panes(session),
         lambda: mux.session_exists(session),
+        lambda: mux.session_state(session),
+        lambda: mux.delete_session(session),
         lambda: mux.focus(PaneRef("zellij", session, "3")),
     ):
         with pytest.raises(MultiplexerError, match="refused"):
@@ -415,6 +419,49 @@ def test_session_exists_refuses_unparseable_output(fake, response):
     fake.responses["list-sessions"] = response
     with pytest.raises(MultiplexerError):
         _mux().session_exists("agents")
+
+
+def test_session_state_tells_running_exited_and_absent_apart(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    mux = _mux()
+    assert mux.session_state("agents") == SESSION_RUNNING
+    assert mux.session_state("scratch") == SESSION_EXITED
+    assert mux.session_state("scratc") is None
+    assert mux.session_state("missing") is None
+    fake.responses["list-sessions"] = (1, "", "No active zellij sessions found.\n")
+    assert mux.session_state("agents") is None
+
+
+def test_delete_session_deletes_only_the_named_exited_session(fake):
+    listings = iter([LIST_SESSIONS, "agents [Created 2m 5s ago] \n"])
+    fake.responses["list-sessions"] = lambda: (0, next(listings), "")
+    _mux().delete_session("scratch")
+    deletes = [argv for argv, _ in fake.calls if argv[1] == "delete-session"]
+    assert deletes == [[ZELLIJ, "delete-session", "scratch"]]
+    _, kwargs = fake.calls[1]
+    assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+    assert kwargs["stdin"] is subprocess.DEVNULL
+
+
+@pytest.mark.parametrize("session", ["agents", "missing"])
+def test_delete_session_refuses_a_running_or_absent_session(fake, session):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    with pytest.raises(MultiplexerError, match="not deleting"):
+        _mux().delete_session(session)
+    assert [argv[1] for argv, _ in fake.calls] == ["list-sessions"]
+
+
+def test_delete_session_reports_a_failure(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    fake.responses["delete-session"] = (1, "", "Session scratch not found\n")
+    with pytest.raises(MultiplexerError, match="delete-session scratch exited 1: Session"):
+        _mux().delete_session("scratch")
+
+
+def test_delete_session_checks_that_the_session_is_gone(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    with pytest.raises(MultiplexerError, match="still listed"):
+        _mux().delete_session("scratch")
 
 
 def test_socket_dir_defaults_to_the_callers_environment(fake, monkeypatch):

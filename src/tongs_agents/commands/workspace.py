@@ -4,8 +4,10 @@ Inside Zellij it spawns the requested profiles into the current session and
 adds a sidebar pane when none is listed; it never execs. Outside Zellij it
 either spawns into a running session and attaches to it, or writes a spawn
 request plus a rendered layout and execs Zellij to create the session, whose
-sidebar then spawns the profiles. Every agent pane goes through
-``workspace_spawn``.
+sidebar then spawns the profiles. An EXITED session of the same name is
+deleted first, or with ``--resurrect`` attached to as it is. Launch records
+and runtime files written for a new session are removed again when anything
+fails before the exec. Every agent pane goes through ``workspace_spawn``.
 """
 
 from __future__ import annotations
@@ -21,7 +23,12 @@ from importlib import resources
 from tongs_agents import workspace_spawn
 from tongs_agents.commands.doctor import Check
 from tongs_agents.launches import LaunchError
-from tongs_agents.multiplexers import MultiplexerError, get_multiplexer
+from tongs_agents.multiplexers import (
+    SESSION_EXITED,
+    SESSION_RUNNING,
+    MultiplexerError,
+    get_multiplexer,
+)
 from tongs_agents.multiplexers.zellij_binary import (
     ZELLIJ_CEILING,
     ZELLIJ_FLOOR,
@@ -68,6 +75,11 @@ def add_arguments(parser):
     parser.add_argument(
         "--no-tongs", action="store_true",
         help="Do not open a tongs tab, even when tongs is on PATH",
+    )
+    parser.add_argument(
+        "--resurrect", action="store_true",
+        help="When the session is EXITED, attach to it instead of deleting it "
+             "and starting it fresh; starts no new panes",
     )
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
@@ -193,6 +205,11 @@ def _inside(mux, args, profiles) -> int:
             "nothing to print inside a Zellij session; run without --print-command",
             EXIT_USAGE,
         )
+    if args.resurrect:
+        return _error(
+            "nothing to resurrect inside a running Zellij session; run without --resurrect",
+            EXIT_USAGE,
+        )
     try:
         workspace_spawn.spawn_profiles(mux, here.session, profiles)
         workspace_spawn.ensure_sidebar(mux, here.session)
@@ -201,19 +218,37 @@ def _inside(mux, args, profiles) -> int:
     return 0
 
 
-def _prepare_new_session(mux, session: str, profiles, no_tongs: bool) -> list[str]:
-    records = workspace_spawn.create_launches(mux.name, session, profiles)
-    token = workspace_spawn.write_spawn_request(
-        session, [record.launch_id for record in records]
-    )
+def _notice(message: str) -> None:
+    print(f"tongs-agents workspace: {message}", file=sys.stderr)
+
+
+def _prepare_new_session(mux, zellij: str, session: str, profiles,
+                         no_tongs: bool) -> tuple[list[str], str, list]:
+    """Write the pending launches, the spawn request and the layout.
+
+    Everything written here is removed again when a later step fails.
+    """
+    records = []
+    token = None
     try:
+        records = workspace_spawn.create_launches(mux.name, session, profiles)
+        token = workspace_spawn.write_spawn_request(
+            session, [record.launch_id for record in records]
+        )
         tongs = None if no_tongs else shutil.which("tongs")
         layout = render_layout(sys.executable, session, token, tongs)
         path = workspace_spawn.write_layout(token, layout)
     except BaseException:
-        workspace_spawn.discard_runtime_files(token)
+        _discard_new_session(token, records)
         raise
-    return [_zellij(), "--session", session, "--new-session-with-layout", str(path)]
+    argv = [zellij, "--session", session, "--new-session-with-layout", str(path)]
+    return argv, token, records
+
+
+def _discard_new_session(token: str | None, records) -> None:
+    if token is not None:
+        workspace_spawn.discard_runtime_files(token)
+    workspace_spawn.discard_launches(records)
 
 
 def _zellij() -> str:
@@ -223,23 +258,69 @@ def _zellij() -> str:
     return binary
 
 
+def _profile_names(profiles) -> str:
+    return ", ".join(profile.name for profile in profiles)
+
+
 def _outside(mux, args, session: str, profiles) -> int:
+    token = None
+    records = []
     try:
-        if mux.session_exists(session):
-            workspace_spawn.spawn_profiles(mux, session, profiles)
-            workspace_spawn.ensure_sidebar(mux, session)
-            argv = [_zellij(), "attach", session]
+        zellij = _zellij()
+        state = mux.session_state(session)
+        if state == SESSION_EXITED and args.resurrect:
+            _notice(
+                f"attaching to the EXITED session {session!r}; zellij restores "
+                "its panes with their commands suspended"
+            )
+            if profiles:
+                _notice(
+                    "--resurrect starts no new panes; not starting "
+                    f"{_profile_names(profiles)}"
+                )
+            argv = [zellij, "attach", session]
+        elif state == SESSION_EXITED and args.print_command:
+            return _error(
+                f"session {session!r} is EXITED; run 'zellij delete-session {session}' "
+                "first, or add --resurrect to print the command that attaches to it"
+            )
+        elif state == SESSION_RUNNING:
+            if args.print_command:
+                if profiles:
+                    _notice(
+                        f"session {session!r} is running; the printed command only "
+                        f"attaches and does not start {_profile_names(profiles)} "
+                        "(run without --print-command to start them)"
+                    )
+            else:
+                workspace_spawn.spawn_profiles(mux, session, profiles)
+                workspace_spawn.ensure_sidebar(mux, session)
+            argv = [zellij, "attach", session]
         else:
-            argv = _prepare_new_session(mux, session, profiles, args.no_tongs)
+            if state == SESSION_EXITED:
+                _notice(
+                    f"session {session!r} is EXITED; deleting it and starting it "
+                    "fresh (--resurrect attaches to it instead)"
+                )
+                mux.delete_session(session)
+            argv, token, records = _prepare_new_session(
+                mux, zellij, session, profiles, args.no_tongs
+            )
     except (MultiplexerError, LaunchError, SpawnRequestError, LayoutError,
             UnsafePathError, OSError) as error:
         return _error(getattr(error, "detail", None) or str(error))
     if args.print_command:
+        if token is not None:
+            _notice(
+                f"prepared a one-shot spawn request for the new session {session!r}; "
+                "run the command below once to start it"
+            )
         print(shlex.join(argv))
         return 0
     try:
         os.execvpe(argv[0], argv, creator_env())
     except OSError as error:
+        _discard_new_session(token, records)
         return _error(f"cannot run {argv[0]}: {error.strerror or error}")
     return EXIT_ERROR
 

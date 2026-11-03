@@ -304,3 +304,27 @@ def test_read_does_not_block_on_a_fifo():
     worker.join(timeout=5)
     assert not worker.is_alive()
     assert result == [None]
+
+
+def test_discard_removes_only_a_pending_record():
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    claimed = launches.create_pending(PROFILE, "agents", "zellij")
+    launches.claim(claimed.launch_id, 4242, "1", PANE)
+    launches.discard(pending.launch_id)
+    launches.discard(claimed.launch_id)
+    launches.discard(pending.launch_id)
+    assert not os.path.lexists(record_file(pending.launch_id))
+    assert [record.launch_id for record in launches.list_records()] == [claimed.launch_id]
+    with pytest.raises(LaunchError):
+        launches.discard("../escape")
+
+
+@posix_only
+def test_discard_never_follows_a_symlinked_record(tmp_path):
+    target = tmp_path / "target.json"
+    target.write_text("{}")
+    paths.launches_dir(create=True)
+    link = record_file("a" * 32)
+    link.symlink_to(target)
+    launches.discard("a" * 32)
+    assert target.read_text() == "{}"

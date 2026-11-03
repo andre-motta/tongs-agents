@@ -8,6 +8,7 @@ it prints that the workspace is unsupported and exits 2.
 ```console
 tongs-agents workspace --profile claude-alt --profile codex-review
 tongs-agents workspace --session work --profile pi-local --no-tongs
+tongs-agents workspace --resurrect
 tongs-agents workspace --print-command --profile claude-alt
 tongs-agents workspace --print-alias --profile claude-alt
 ```
@@ -17,7 +18,8 @@ tongs-agents workspace --print-alias --profile claude-alt
 | `--profile NAME` | Start an agent pane for this profile. Repeatable. Unknown names are refused before anything starts. Without it only the sidebar opens. |
 | `--session NAME` | The Zellij session, `agents` by default. Names use letters, digits, `.`, `_` and `-` (at most 64 characters). |
 | `--no-tongs` | Do not add the `tongs` tab. Without it the tab opens when `tongs` is on `PATH`. |
-| `--print-command` | Prepare everything, then print the `zellij` command instead of running it. |
+| `--resurrect` | When the session is EXITED, attach to it instead of deleting it and starting it fresh. Starts no new panes; without an EXITED session it changes nothing. |
+| `--print-command` | Print the `zellij` command instead of running it. See [Printing the command](#printing-the-command). |
 | `--print-alias` | Print a shell alias for the same workspace command. Nothing else runs and no file is edited; add the line to your shell rc yourself. |
 
 When `zellij` is missing or older than 0.44.2 the command stops and points at
@@ -32,11 +34,33 @@ the profile command. Panes are named after their profile.
 
 | Where you run it | Result |
 | --- | --- |
-| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so is `--print-command`. |
+| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so are `--print-command` and `--resurrect`. |
 | Outside Zellij, session running | Spawns the profiles into that session (and a sidebar if it has none), then runs `zellij attach <session>`. |
-| Outside Zellij, no running session | Writes a spawn request and a layout, then runs `zellij --session <session> --new-session-with-layout <layout>`. The sidebar in that layout spawns the profiles when it starts. |
+| Outside Zellij, no session | Writes a spawn request and a layout, then runs `zellij --session <session> --new-session-with-layout <layout>`. The sidebar in that layout spawns the profiles when it starts. |
+| Outside Zellij, session EXITED | Prints a one-line notice, runs `zellij delete-session <session>`, then creates it as above. With `--resurrect` it runs `zellij attach <session>` instead and starts nothing new. |
 
-An EXITED (resurrectable) session counts as not running.
+### Second run: EXITED sessions
+
+Zellij serializes sessions by default, so quitting the workspace leaves the
+session listed as `EXITED - attach to resurrect`, and Zellij refuses to create
+a new session with that name. The workspace checks
+`zellij list-sessions --no-formatting` (with the same `ZELLIJ_SOCKET_DIR`)
+before it writes anything. For an EXITED session of the requested name it
+deletes exactly that session, without `--force`, and starts it fresh; a
+running session or any other session is never deleted. If the delete fails,
+nothing is written and the command exits 1.
+
+`--resurrect` keeps the EXITED session instead: Zellij restores its layout
+with every command pane suspended until you press Enter in it, and requested
+profiles are not started (a notice names them). Agents are not restarted.
+
+### Failures
+
+Launch records, the spawn request and the layout written for a new session
+are removed again when any later step fails before Zellij takes over: writing
+the request, rendering or writing the layout, or running `zellij`. When a
+profile pane cannot be spawned into a running session, its record is removed;
+panes already started stay up.
 
 Zellij is started without `TMUX`, `TMUX_PANE` or an outer Zellij pane identity
 in its environment, so agent panes never address an outer multiplexer.
@@ -56,7 +80,21 @@ created 0600 without following or replacing anything:
   `tongs` path are substituted, as escaped KDL strings; control characters are
   refused. The sidebar deletes it on start.
 
-`--print-command` leaves both files in place for the printed command to use.
+### Printing the command
+
+`--print-command` writes the command to stdout and notes to stderr:
+
+- Running session: prints `zellij attach <session>` and has no side effects.
+  No profile or sidebar pane is spawned; a note names the profiles it did not
+  start.
+- No session: prepares a one-shot spawn request, its layout and pending
+  launch records, says so on stderr, and prints the create command. Run that
+  command once; the sidebar consumes the request when it starts. Unused
+  requests and layouts stay in the runtime directory.
+- EXITED session: refused with exit 1 and a message naming
+  `zellij delete-session <session>` and `--resurrect`, because printing never
+  deletes a session. With `--resurrect` it prints `zellij attach <session>`
+  and has no side effects.
 
 ## Sidebar
 

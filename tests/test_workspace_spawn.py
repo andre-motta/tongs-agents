@@ -23,9 +23,11 @@ class FakeMux:
     name = "zellij"
 
     def __init__(self, *, here=None, exists=False, available=(True, "zellij 0.45.1"),
-                 panes=(), fail_spawn=None):
+                 panes=(), fail_spawn=None, state=None, fail_delete=False):
         self.here = here
         self.exists = exists
+        self.state = state
+        self.fail_delete = fail_delete
         self._available = available
         self.panes = list(panes)
         self.fail_spawn = fail_spawn or set()
@@ -40,9 +42,21 @@ class FakeMux:
     def in_session(self):
         return self.here
 
+    def session_state(self, session):
+        self.calls.append(("session_state", session))
+        if self.state is not None:
+            return self.state
+        return "running" if self.exists else None
+
     def session_exists(self, session):
         self.calls.append(("session_exists", session))
         return self.exists
+
+    def delete_session(self, session):
+        self.calls.append(("delete_session", session))
+        if self.fail_delete:
+            raise MultiplexerError(f"cannot delete {session}")
+        self.state = None
 
     def spawn(self, session, argv, *, cwd=None, name=None, focus=False):
         if name in self.fail_spawn:

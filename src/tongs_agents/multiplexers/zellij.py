@@ -19,6 +19,8 @@ from collections.abc import Iterator
 
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
+    SESSION_EXITED,
+    SESSION_RUNNING,
     MultiplexerError,
     PaneInfo,
     PaneRef,
@@ -253,12 +255,10 @@ class ZellijMultiplexer:
             NAME, session, pane_id, _absolute_dir(os.environ.get(SOCKET_DIR_KEY))
         )
 
-    def session_exists(self, session: str) -> bool:
-        """True only for a running session; EXITED sessions count as absent."""
-        session = _session(session)
-        argv = [self._zellij(), "list-sessions", "--no-formatting"]
+    def _cli(self, *args: str) -> subprocess.CompletedProcess:
+        argv = [self._zellij(), *args]
         try:
-            result = subprocess.run(
+            return subprocess.run(
                 argv,
                 capture_output=True,
                 text=True,
@@ -267,21 +267,52 @@ class ZellijMultiplexer:
                 env=_cli_env(self._effective_socket_dir()),
             )
         except (OSError, subprocess.TimeoutExpired) as error:
-            raise MultiplexerError(f"zellij list-sessions failed: {error}") from error
+            raise MultiplexerError(f"zellij {args[0]} failed: {error}") from error
+
+    def session_state(self, session: str) -> str | None:
+        """SESSION_RUNNING, SESSION_EXITED (resurrectable) or None when not listed."""
+        session = _session(session)
+        result = self._cli("list-sessions", "--no-formatting")
         if result.returncode != 0:
             if NO_SESSIONS in (result.stderr or "").lower():
-                return False
+                return None
             raise MultiplexerError(
                 f"zellij list-sessions exited {result.returncode}"
             )
         lines = _running_sessions(result.stdout or "")
         prefix = session + " "
-        return any(
-            line.startswith(prefix)
-            and not exited
-            and _SESSION_LINE.fullmatch(line[len(session):]) is not None
-            for line, exited in lines.items()
-        )
+        for line, exited in lines.items():
+            if (
+                line.startswith(prefix)
+                and _SESSION_LINE.fullmatch(line[len(session):]) is not None
+            ):
+                return SESSION_EXITED if exited else SESSION_RUNNING
+        return None
+
+    def session_exists(self, session: str) -> bool:
+        """True only for a running session; EXITED sessions count as absent."""
+        return self.session_state(session) == SESSION_RUNNING
+
+    def delete_session(self, session: str) -> None:
+        """Delete ``session`` only while it is listed as EXITED; never forced."""
+        session = _session(session)
+        state = self.session_state(session)
+        if state != SESSION_EXITED:
+            shown = "running" if state == SESSION_RUNNING else "not listed"
+            raise MultiplexerError(
+                f"zellij session {session!r} is {shown}, not EXITED; not deleting it"
+            )
+        result = self._cli("delete-session", session)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip().splitlines()
+            raise MultiplexerError(
+                f"zellij delete-session {session} exited {result.returncode}"
+                + (f": {detail[0][:200]}" if detail else "")
+            )
+        if self.session_state(session) is not None:
+            raise MultiplexerError(
+                f"zellij session {session!r} is still listed after delete-session"
+            )
 
     def spawn(
         self,

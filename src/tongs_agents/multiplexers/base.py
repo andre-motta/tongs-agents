@@ -13,6 +13,9 @@ from typing import Protocol, runtime_checkable
 
 from tongs_agents.models import FocusResult
 
+SESSION_RUNNING = "running"
+SESSION_EXITED = "exited"
+
 
 @dataclass(frozen=True)
 class PaneRef:
@@ -50,7 +53,15 @@ class Multiplexer(Protocol):
 
     def in_session(self) -> PaneRef | None: ...
 
+    def session_state(self, session: str) -> str | None:
+        """SESSION_RUNNING, SESSION_EXITED (resurrectable) or None when absent."""
+        ...
+
     def session_exists(self, session: str) -> bool: ...
+
+    def delete_session(self, session: str) -> None:
+        """Delete an EXITED session; refuse a running or absent one."""
+        ...
 
     def spawn(
         self,
