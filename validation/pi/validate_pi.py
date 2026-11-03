@@ -485,10 +485,18 @@ def validate(require_tmux):
             )
             abrupt.process.kill()
             abrupt.process.wait(timeout=10)
-            from tongs_agents import discovery
-
-            os.environ["TONGS_AGENTS_STATE_DIR"] = str(fleet_dir.parent)
-            discovery.read_sessions()
+            # Readers never clean up; store maintenance removes dead records.
+            cleanup = subprocess.run(
+                [sys.executable, "-m", "tongs_agents.cli", "cleanup"],
+                env=environment,
+                capture_output=True,
+                text=True,
+                timeout=40,
+            )
+            if cleanup.returncode != 0:
+                raise RuntimeError(
+                    f"tongs-agents cleanup failed: {cleanup.stdout}{cleanup.stderr}"
+                )
             if any(
                 item.get("canonical_id") == abrupt_record["canonical_id"]
                 for item in read_current_records(fleet_dir)

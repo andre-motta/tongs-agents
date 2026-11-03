@@ -104,6 +104,12 @@ STATUS_BUDGET = 4.0
 REPORT_WAIT = 10.0
 TOKEN_RE = re.compile(r"--spawn-request ([0-9a-f]{32})")
 DOWN_ARROW = b"\x1b[B"
+PRIVATE_PATH_RE = re.compile(r"/(?:tmp|home|run/user)/\S*")
+DIAGNOSTIC_LINES = 40
+SCREEN_AFTER = 5.0
+RERUN_STDERR = "rerun.stderr"
+# exec keeps the rerun the pane's own process; only its stderr goes to the file.
+STDERR_TO_FILE = 'exec "$@" 2>"$0"'
 
 
 class Check(Exception):
@@ -427,6 +433,26 @@ def pane_titles(target):
     return sorted(pane.get("title", "") for pane in target.panes())
 
 
+def diagnostic_lines(text, root, limit=DIAGNOSTIC_LINES):
+    """The last ``limit`` non-blank lines of ``text``, with private paths dropped.
+
+    A pane dump wraps long lines, so a path the final redaction would replace
+    can be split; any piece still naming a private dir becomes ``<path>``.
+    """
+    text = (text or "").replace(str(root), "<tmp>")
+    lines = [PRIVATE_PATH_RE.sub("<path>", line).rstrip() for line in text.splitlines()]
+    return [line for line in lines if line.strip()][-limit:]
+
+
+def pane_screen(target, title, root):
+    """The visible screen of the first pane titled ``title``, for failure evidence."""
+    pane = next((item for item in target.panes() if item.get("title") == title), None)
+    if pane is None:
+        return None
+    code, out, _ = target.action("dump-screen", "--pane-id", f"terminal_{pane.get('id')}")
+    return diagnostic_lines(out, root) if code == 0 else None
+
+
 def create_workspace(root, session, env, tongs_bin, target, tracker, observations):
     argv = [tongs_bin, "workspace"]
     for name in FIRST_PROFILES:
@@ -438,7 +464,17 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
     session_seconds = round(time.monotonic() - started, 2)
     expect(created, "workspace did not create the session")
     expected = len(FIRST_PROFILES) + 1
-    ready = wait_until(lambda: len(target.panes()) >= expected, 15)
+    early = {}
+
+    def panes_ready():
+        if len(target.panes()) >= expected:
+            return True
+        # A spawn failure is a 15 s sidebar toast; read it while it shows.
+        if "screen" not in early and time.monotonic() - started >= SCREEN_AFTER:
+            early["screen"] = pane_screen(target, workspace_spawn.SIDEBAR_PANE_NAME, root)
+        return False
+
+    ready = wait_until(panes_ready, 15)
     panes_seconds = round(time.monotonic() - started, 2)
     tracker.sweep()
     panes = target.panes()
@@ -457,6 +493,9 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
         "pane_titles": pane_titles(target),
         "sidebar_panes": len(sidebar_panes),
     }
+    if not ready or len(panes) != expected:
+        observations["workspace"]["sidebar_screen"] = early.get("screen") or pane_screen(
+            target, workspace_spawn.SIDEBAR_PANE_NAME, root)
     observations["_panes_ready_at"] = time.monotonic()
     expect(session_seconds <= SESSION_BUDGET,
            f"session took {session_seconds} s (budget {SESSION_BUDGET} s)")
@@ -542,8 +581,10 @@ def rerun_in_session(root, session, tongs_bin, target, tracker, observations):
     argv = [tongs_bin, "workspace"]
     for name in RERUN_PROFILES:
         argv += ["--profile", name]
+    stderr_path = Path(root) / "io" / RERUN_STDERR
     started = time.monotonic()
-    code, out, err = target.action("new-pane", "--name", "rerun", "--", *argv)
+    code, out, err = target.action("new-pane", "--name", "rerun", "--", "/bin/sh", "-c",
+                                   STDERR_TO_FILE, str(stderr_path), *argv)
     expect(code == 0 and out.startswith("terminal_"), f"rerun pane did not start: {err[:120]}")
     rerun_id = out.removeprefix("terminal_")
 
@@ -578,6 +619,14 @@ def rerun_in_session(root, session, tongs_bin, target, tracker, observations):
         "zellij_servers_after": servers(root),
     }
     facts = observations["rerun"]
+    if not (facts["exited"] and facts["exit_status"] == 0):
+        try:
+            stderr = stderr_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            stderr = ""
+        facts["stderr"] = diagnostic_lines(stderr, root)
+        facts["rerun_screen"] = pane_screen(target, "rerun", root)
+        facts["sidebar_screen"] = pane_screen(target, workspace_spawn.SIDEBAR_PANE_NAME, root)
     expect(facts["exited"] and facts["exit_status"] == 0,
            f"in-session rerun did not exit 0: {facts['exit_status']}")
     expect(facts["sessions_after"] == ["<session>"] and facts["zellij_servers_after"] == 1,
