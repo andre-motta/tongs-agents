@@ -158,8 +158,7 @@ class TestPluginWithTongs:
         from tongs_agents.tongs_plugin import FleetMonitorPlugin
         plugin = FleetMonitorPlugin()
         cmds = plugin.get_commands()
-        assert len(cmds) == 1
-        assert cmds[0][0] == "Agents"
+        assert [cmd[0] for cmd in cmds] == ["Agents", "Open agent workspace"]
 
     def test_get_screens(self):
         from tongs_agents.tongs_plugin import FleetMonitorPlugin
