@@ -38,7 +38,8 @@ send is stopped after 1.5 seconds. Missing or failing Fleet hooks do not stop Pi
 On shutdown, the bridge spends at most 1.5 seconds draining intermediate events,
 drops any remaining intermediate queue, and reserves up to 1.5 seconds for the
 final ended event. An abruptly killed Pi process is removed by Fleet's PID and
-process-start validation on the next read.
+process-start validation on the next store maintenance: the sidebar or monitor
+while one runs, `tongs-agents cleanup` or the `fleet_cleanup` MCP tool.
 
 ## Lifecycle behavior
 

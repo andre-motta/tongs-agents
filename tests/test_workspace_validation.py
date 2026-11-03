@@ -224,6 +224,35 @@ def test_public_text_flags_private_paths(value):
 
 
 @linux_only
+def test_diagnostic_lines_drop_private_paths_and_blank_lines():
+    root = "/tmp/tongs-ws-abcd-xyz"
+    screen = (f"error: {root}/xdg-config/config.toml\n\n   \n"
+              "wrapped tail /tmp/tongs-ws-ab\ncd-xyz/sock /home/someone/x /run/user/1/z\n")
+
+    lines = validator.diagnostic_lines(screen, root)
+    text, leaks = validator.public_text({"lines": lines}, lambda value: value)
+
+    assert lines == ["error: <tmp>/xdg-config/config.toml",
+                     "wrapped tail <path>", "cd-xyz/sock <path> <path>"]
+    assert not leaks
+    assert validator.diagnostic_lines("\n".join(map(str, range(50))), root, limit=3) == [
+        "47", "48", "49"]
+
+
+@linux_only
+def test_rerun_stderr_wrapper_execs_the_command(tmp_path):
+    stderr = tmp_path / "stderr"
+    result = subprocess.run(
+        ["/bin/sh", "-c", validator.STDERR_TO_FILE, str(stderr), sys.executable, "-c",
+         "import sys; print('out'); print('err', file=sys.stderr); sys.exit(3)"],
+        capture_output=True, text=True, timeout=10)
+
+    assert result.returncode == 3
+    assert result.stdout == "out\n"
+    assert stderr.read_text() == "err\n"
+
+
+@linux_only
 def test_write_evidence_keeps_other_pins(tmp_path):
     path = tmp_path / "evidence.json"
     validator.write_evidence(path, {"zellij_version": "zellij 0.45.1", "result": "pass"})

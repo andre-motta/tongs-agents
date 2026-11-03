@@ -7,7 +7,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 
-from tongs_agents import discovery, launches
+from tongs_agents import discovery, launches, session_store
 from tongs_agents.launches import LaunchRecord
 from tongs_agents.models import (
     SORT_KEYS,
@@ -39,6 +39,7 @@ __all__ = [
 ]
 
 Reader = Callable[[], Iterable[dict]]
+Maintainer = Callable[[], object]
 LaunchReader = Callable[[str], Iterable[LaunchRecord]]
 
 LAUNCH_SOURCE = "launch"
@@ -49,14 +50,29 @@ LAUNCH_ID_PREFIX = "launch:"
 class SessionFeed:
     """Read session records and parse them into FleetSession objects.
 
-    The default reader is looked up at call time so that tests and the
-    store rename can replace ``discovery.read_sessions`` in one place.
+    The feed is the store's one cleanup owner: reading the store (no
+    ``reader`` given) first runs ``session_store.maintain_store``, which
+    skips itself while another sidebar or monitor ran it recently. A custom
+    ``reader`` reads without maintenance unless a ``maintainer`` is given.
+    Both defaults are looked up at call time so tests can replace them.
     """
 
-    def __init__(self, reader: Reader | None = None) -> None:
+    def __init__(
+        self, reader: Reader | None = None, *, maintainer: Maintainer | None = None
+    ) -> None:
         self._reader = reader
+        self._maintainer = maintainer
+
+    def maintain(self) -> None:
+        maintainer = self._maintainer
+        if maintainer is None:
+            if self._reader is not None:
+                return
+            maintainer = session_store.maintain_store
+        maintainer()
 
     def snapshot(self) -> list[FleetSession]:
+        self.maintain()
         reader = self._reader or discovery.read_sessions
         return [parse_session(record) for record in reader()]
 
@@ -135,12 +151,13 @@ class WorkspaceFeed(SessionFeed):
         multiplexer: Multiplexer,
         reader: Reader | None = None,
         *,
+        maintainer: Maintainer | None = None,
         launch_reader: LaunchReader | None = None,
         alive: Callable[[LaunchRecord], bool] = _alive,
         clock: Callable[[], float] = time.time,
         socket_dir: str | None = None,
     ) -> None:
-        super().__init__(reader)
+        super().__init__(reader, maintainer=maintainer)
         self.session = session
         self.multiplexer = multiplexer
         self.socket_dir = socket_dir
