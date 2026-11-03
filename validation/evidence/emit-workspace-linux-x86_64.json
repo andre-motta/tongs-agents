@@ -1,0 +1,434 @@
+{
+  "schema": "workspace-validation/1",
+  "provenance": "instrumented",
+  "runs": {
+    "0.45.1": {
+      "schema": "workspace-validation-run/1",
+      "result": "pass",
+      "error": null,
+      "zellij_version": "zellij 0.45.1",
+      "provenance": "instrumented",
+      "provenance_detail": "real zellij server and PTY clients, real tongs-agents workspace, sidebar, launcher and hook in a private root; the hooked profile's config dir was written by the Claude emitter instead of tongs-agents install; fake harness fixtures stand in for agents and send hook events",
+      "fixtures": {
+        "f1": "pi fixture, fleet-event through tongs-agents-hook",
+        "f2": "pi fixture, fleet-event through tongs-agents-hook",
+        "f3": "Claude fixture, runs the hooks installed in its CLAUDE_CONFIG_DIR",
+        "f4": "Claude fixture, CLAUDE_CONFIG_DIR without installed hooks",
+        "claude, codex and pi on PATH": "stub CLI that records its arguments"
+      },
+      "install": {
+        "via": "Claude emitter plan_full and apply_plan (no tongs-agents install)",
+        "conflicts": [],
+        "failed_steps": [],
+        "files": [
+          "CLAUDE.md",
+          "settings.json",
+          "skills/tongs-agents/.claude-plugin/plugin.json",
+          "skills/tongs-agents/skills/pr-review/SKILL.md",
+          "skills/tongs-agents/skills/release-notes/SKILL.md",
+          "skills/tongs-agents/skills/release-notes/scripts/render.py",
+          "skills/tongs-agents/skills/release-notes/template.md",
+          "tongs-agents/instructions.md"
+        ],
+        "hook_events": [
+          "Elicitation",
+          "PermissionRequest",
+          "PreToolUse",
+          "SessionEnd",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "UserPromptSubmit"
+        ],
+        "hook_commands_are_owned": true,
+        "private_home_settings_written": false,
+        "bare_config_dir_untouched": true,
+        "claude_mcp_add_calls": [
+          {
+            "name": "issues",
+            "claude_config_dir_is_target": true
+          },
+          {
+            "name": "tongs-agents",
+            "claude_config_dir_is_target": true
+          }
+        ],
+        "second_plan_file_changes": []
+      },
+      "workspace": {
+        "argv": [
+          "tongs-agents",
+          "workspace",
+          "--profile",
+          "f1",
+          "--profile",
+          "f2",
+          "--no-tongs",
+          "--session",
+          "<session>"
+        ],
+        "session_listed_seconds": 0.21,
+        "panes_listed_seconds": 0.42,
+        "session_budget_seconds": 5.0,
+        "terminal_panes": 3,
+        "expected_terminal_panes": 3,
+        "pane_titles": [
+          "f1",
+          "f2",
+          "tongs-agents-sidebar"
+        ],
+        "sidebar_panes": 1
+      },
+      "spawn_request": {
+        "request_file_after_mount": false,
+        "layout_file_after_mount": false,
+        "requests_dir_entries": 0,
+        "layouts_dir_entries": 0,
+        "second_consume": null,
+        "launch_states": {
+          "f1": "running",
+          "f2": "running"
+        },
+        "launch_panes_match": true
+      },
+      "first_profiles": {
+        "status_budget_seconds": 4.0,
+        "profiles": {
+          "f1": {
+            "hook_row": true,
+            "seconds_after_panes_listed": 0.03,
+            "source": "hook",
+            "status": "idle",
+            "agent": "pi",
+            "launch_id_matches": true,
+            "profile_id_matches": true,
+            "pid_matches_launch": true,
+            "process_identity_resolved": true,
+            "pane_matches_launch": true,
+            "session_matches": true
+          },
+          "f2": {
+            "hook_row": true,
+            "seconds_after_panes_listed": 0.03,
+            "source": "hook",
+            "status": "idle",
+            "agent": "pi",
+            "launch_id_matches": true,
+            "profile_id_matches": true,
+            "pid_matches_launch": true,
+            "process_identity_resolved": true,
+            "pane_matches_launch": true,
+            "session_matches": true
+          }
+        }
+      },
+      "rerun": {
+        "argv": [
+          "tongs-agents",
+          "workspace",
+          "--profile",
+          "f3",
+          "--profile",
+          "f4"
+        ],
+        "run_from": "a new pane of the workspace session (ZELLIJ set by Zellij)",
+        "exited": true,
+        "exit_status": 0,
+        "seconds": 0.28,
+        "terminal_panes_before": 3,
+        "terminal_panes_after": 6,
+        "new_pane_titles": [
+          "f3",
+          "f4",
+          "rerun"
+        ],
+        "sidebar_panes": 1,
+        "sessions_before": [
+          "<session>"
+        ],
+        "sessions_after": [
+          "<session>"
+        ],
+        "zellij_servers_before": 1,
+        "zellij_servers_after": 1
+      },
+      "claude_config_dir": {
+        "status_budget_seconds": 4.0,
+        "profiles": {
+          "f3": {
+            "hook_row": true,
+            "seconds_after_panes_listed": 0.1,
+            "source": "hook",
+            "status": "idle",
+            "agent": "claude",
+            "launch_id_matches": true,
+            "profile_id_matches": true,
+            "pid_matches_launch": false,
+            "process_identity_resolved": false,
+            "pane_matches_launch": true,
+            "session_matches": true
+          }
+        },
+        "control": {
+          "profile": "f4",
+          "config_dir_installed": false,
+          "row_present": true,
+          "source": "launch",
+          "status": "discovered",
+          "launch_state": "running"
+        }
+      },
+      "agent_env": {
+        "f1": {
+          "mode": "pi",
+          "launch_id_env_matches": true,
+          "profile_env_matches": true,
+          "zellij_session_matches": true,
+          "zellij_pane_matches": true,
+          "pid_is_launch_pid": true,
+          "tmux_env_absent": true,
+          "claude_config_dir": null,
+          "settings_found": null,
+          "hooks": [
+            [
+              "started",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ],
+            [
+              "running",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ],
+            [
+              "idle",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ]
+          ]
+        },
+        "f2": {
+          "mode": "pi",
+          "launch_id_env_matches": true,
+          "profile_env_matches": true,
+          "zellij_session_matches": true,
+          "zellij_pane_matches": true,
+          "pid_is_launch_pid": true,
+          "tmux_env_absent": true,
+          "claude_config_dir": null,
+          "settings_found": null,
+          "hooks": [
+            [
+              "started",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ],
+            [
+              "running",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ],
+            [
+              "idle",
+              "tongs-agents-hook",
+              "fleet-event",
+              "--agent",
+              "pi",
+              0
+            ]
+          ]
+        },
+        "f3": {
+          "mode": "claude",
+          "launch_id_env_matches": true,
+          "profile_env_matches": true,
+          "zellij_session_matches": true,
+          "zellij_pane_matches": true,
+          "pid_is_launch_pid": true,
+          "tmux_env_absent": true,
+          "claude_config_dir": "<claude-hooked>",
+          "settings_found": true,
+          "hooks": [
+            [
+              "SessionStart",
+              "tongs-agents-hook",
+              "session-start",
+              "--agent",
+              "claude",
+              0
+            ],
+            [
+              "UserPromptSubmit",
+              "tongs-agents-hook",
+              "prompt-submit",
+              "--agent",
+              "claude",
+              0
+            ],
+            [
+              "Stop",
+              "tongs-agents-hook",
+              "stop",
+              "--agent",
+              "claude",
+              0
+            ]
+          ]
+        },
+        "f4": {
+          "mode": "claude",
+          "launch_id_env_matches": true,
+          "profile_env_matches": true,
+          "zellij_session_matches": true,
+          "zellij_pane_matches": true,
+          "pid_is_launch_pid": true,
+          "tmux_env_absent": true,
+          "claude_config_dir": "<claude-bare>",
+          "settings_found": false,
+          "hooks": []
+        }
+      },
+      "row_focus": {
+        "driver": "SidebarApp run headless in the validator with the sidebar pane's ZELLIJ, ZELLIJ_SESSION_NAME, ZELLIJ_PANE_ID and ZELLIJ_SOCKET_DIR; Enter on the highlighted row; readback by zellij list-clients and keystrokes typed by the second client",
+        "attached_clients": 2,
+        "first_client": "workspace creator, sent no input",
+        "second_client": "zellij attach, the most recent input client",
+        "first_client_rule": "not asserted: with Zellij's default stacked_resize, a client sitting on a pane in the target's stack follows the expanded pane; first_client_unchanged records what happened",
+        "parent_activation_calls": [],
+        "steps": [
+          {
+            "profile": "f1",
+            "row": "hook row (pi fixture)",
+            "state": "partial",
+            "backend": "zellij",
+            "selection_succeeded": true,
+            "activation_attempted": false,
+            "activation_detail": "skipped: same zellij session",
+            "notification": "Focused: f1",
+            "second_client_moved_to_target": true,
+            "second_client_was_elsewhere": true,
+            "first_client_unchanged": true,
+            "clients_before": {
+              "first": "terminal_5",
+              "second": "terminal_5"
+            },
+            "clients_after": {
+              "first": "terminal_5",
+              "second": "terminal_1"
+            },
+            "keystroke_routed_to": [
+              "f1"
+            ]
+          },
+          {
+            "profile": "f3",
+            "row": "hook row (Claude config dir fixture)",
+            "state": "partial",
+            "backend": "zellij",
+            "selection_succeeded": true,
+            "activation_attempted": false,
+            "activation_detail": "skipped: same zellij session",
+            "notification": "Focused: f3",
+            "second_client_moved_to_target": true,
+            "second_client_was_elsewhere": true,
+            "first_client_unchanged": false,
+            "clients_before": {
+              "first": "terminal_5",
+              "second": "terminal_1"
+            },
+            "clients_after": {
+              "first": "terminal_4",
+              "second": "terminal_4"
+            },
+            "keystroke_routed_to": [
+              "f3"
+            ]
+          },
+          {
+            "profile": "f4",
+            "row": "launch row",
+            "state": "partial",
+            "backend": "zellij",
+            "selection_succeeded": true,
+            "activation_attempted": false,
+            "activation_detail": "skipped: same zellij session",
+            "notification": "Focused: f4",
+            "second_client_moved_to_target": true,
+            "second_client_was_elsewhere": true,
+            "first_client_unchanged": false,
+            "clients_before": {
+              "first": "terminal_4",
+              "second": "terminal_4"
+            },
+            "clients_after": {
+              "first": "terminal_5",
+              "second": "terminal_5"
+            },
+            "keystroke_routed_to": [
+              "f4"
+            ]
+          }
+        ]
+      },
+      "cleanup": {
+        "tracked": 10,
+        "survivors": 0,
+        "marker_strays": 0,
+        "temp_dir_removed": true,
+        "marker_strays_after_run": 0
+      },
+      "user_config_unchanged": true,
+      "user_agent_config_unchanged": true,
+      "user_zellij_cache_entries_for_run": 0,
+      "kwin_calls": 0,
+      "duration_seconds": 2.6,
+      "platform": {
+        "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+        "kernel_release": "7.2.11-200.fc44.x86_64",
+        "desktop": "KDE",
+        "session_type": "wayland",
+        "python_version": "3.14.8"
+      },
+      "tested_commit": "43f545c8c54c8b3696550f68841ef33ca6543210",
+      "modified_since_commit": false,
+      "sha256": {
+        "src/tongs_agents/cli.py": "641e7fe2129be0f47df08b4291a19dab0ed07f532a21655fbdfe081d324094d6",
+        "src/tongs_agents/commands/sidebar.py": "ac4a4215e69ab282408284f2cd5405f965714ee5ae622e6f57810e904563d158",
+        "src/tongs_agents/commands/workspace.py": "faea9a587309718359504768e113575bf7c8841bf064ac32b5c5565062388d2c",
+        "src/tongs_agents/focus.py": "25eb3cdd3628c45f2c671671770260934ac5d4bc61d7eb26e0ddc5200db278a4",
+        "src/tongs_agents/hook.py": "6b0ad0df90e85cff4169229687faffbb529324ed171228e366e0f3994a12d73f",
+        "src/tongs_agents/launch.py": "5eaba1a54cb5ea7342e3e1209408db61918ddcb8d402e1976a31f2c9217040e4",
+        "src/tongs_agents/launches.py": "54ad8c0f7668f88f35def09435fde30a414c97cc54870a3e7079fcb4f9f3236d",
+        "src/tongs_agents/layouts/agents.kdl.tmpl": "3b36d8ec6486968ce3e5e604cd87f5814ffd51c3994e702c0edab20dd5f8d22a",
+        "src/tongs_agents/multiplexers/zellij.py": "00267e2bc4e9f6639f3bcb89867f6b0f700d09d119b7619f17de500ecb83551b",
+        "src/tongs_agents/profiles.py": "1874ac1fc67a96f9746e3c7d2dfce16bd46e6895ab04f4baf0ced8d7f117547a",
+        "src/tongs_agents/sessions_feed.py": "b2804fc07c2693b90aa2dc41c523cc188b7eea1afce5a6a62225613d263cd7e5",
+        "src/tongs_agents/workspace_spawn.py": "462a0aa712598f7a8617eca6ec4d72dd54583af26875d2d6abeeee86fe9a31bf",
+        "validation/fixtures/fake_agent.py": "d858aba14474be0c79b590ae5a7c35703867a0436fc73f69aa4c1963388fd468",
+        "validation/fixtures/fake_cli.py": "07a1e8d26caf1035bd1f4bd091b3f4cb9ff263a5d9ac6be2cbe5d569d728c183",
+        "validation/workspace.py": "c407453f74e0e071988ee59a0471111f1e675a44c2d9d64f66748c21948438c3",
+        "src/tongs_agents/config_layer/emitters/_common.py": "286f80923599c7ab4c6f0fbe905f5896f4e257fd10bf9602e32ba1c8fdfc09b9",
+        "src/tongs_agents/config_layer/emitters/base.py": "c82b8e8e4309307494590d87063bc69e1b69f953a486de2570c6032f88f52eea",
+        "src/tongs_agents/config_layer/emitters/claude.py": "cb83dccff6d9505432830a2d2d0a0dae2aa442f894355fca1f791dfffc259cb4",
+        "src/tongs_agents/owned.py": "6bd21240183fcf7b763609676141324cf749b4c629158c54cf12f3908d6b4424",
+        "tests/fixtures/dotfiles_synthetic/agentic.toml": "fd1fa3b919c06ff46513b126e9a6a141406f62c86b4302fe903f7f9628232c48",
+        "validation/emit_workspace.py": "2e326d117cb1b89962dd553c2ea882a1cb59c63bfa02c2c03c7b622ff2efd19d"
+      }
+    }
+  }
+}

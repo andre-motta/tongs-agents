@@ -1,0 +1,32 @@
+# Synthetic dotfiles for the emitter tests; every name and server is made up.
+# Profiles are passed by the tests, which point them at temporary config dirs.
+schema = "tongs-agents-dotfiles/1"
+
+[instructions]
+files = ["instructions/common.md"]
+
+[instructions.harness.codex]
+files = ["instructions/codex.md"]
+
+[skills]
+dirs = ["skills"]
+
+[skills.overrides.pr-review]
+harnesses = ["claude", "codex"]
+
+[mcp_servers.issues]
+command = ["example-issues-mcp", "--stdio"]
+env = ["EXAMPLE_ISSUES_TOKEN"]
+
+[mcp_servers.notes]
+command = ["~/bin/example-notes-mcp"]
+cwd = "~/notes"
+harnesses = ["codex", "pi"]
+
+[mcp_servers.docs]
+url = "https://mcp.example.invalid/mcp"
+bearer_token_env = "EXAMPLE_DOCS_TOKEN"
+
+[mcp_servers.paused]
+command = ["example-paused-mcp"]
+enabled = false

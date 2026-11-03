@@ -1,0 +1,20 @@
+{
+  "package": "@earendil-works/pi-coding-agent",
+  "mcp_floor": "0.99.0",
+  "pins": {
+    "0.85.0": {
+      "gate": "pi-validation",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.0.tgz",
+      "sha256": "a0895f70a9efd9dde2a69b9cee04cb3b7c5aab68f5d47aad92b63f27a4ca13c8",
+      "integrity": "sha512-INxVkLAVfAMju5MojJpmyu/0bMP+r+ffZuS7UqVv32E2JwHBRbcHfELDfmFNvapEbgYfKN2r9OYO1p3TqDBR+g==",
+      "size": 7354291
+    },
+    "0.99.0": {
+      "gate": "pi-mcp-emitter",
+      "url": "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.99.0.tgz",
+      "sha256": "19a8dbd8d697a599ea972a8ba307c109a814bb9122604b2553c62006b9617724",
+      "integrity": "sha512-rZ8lLzqhrXrlZSt9VffVmVOcPBzbnK53UilkwEpDqU/WfE1RKCRqzYfGll/Xsk5XumjpeBT8IWzKNP6CyiEtrg==",
+      "size": 7444520
+    }
+  }
+}

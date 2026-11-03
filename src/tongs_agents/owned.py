@@ -4,19 +4,22 @@ Two kinds of file:
 
 - Owned files are written whole and carry an owner marker: top-level
   ``owner``, ``schema_version`` and optional ``managed_paths`` keys in JSON,
-  or a ``tongs-agents-owned {...}`` header comment in md, toml and kdl (in
-  Markdown it follows a leading front matter block). They are always 0600, and
-  an existing file without our marker is never replaced.
-- Shared JSON files (settings.json, hooks.json) hold entries of ours among the
-  user's. An edit keeps the file's mode, and the first edit of an existing
-  file keeps a ``<name>.tongs-agents.bak`` copy of it next to the file.
+  or a ``tongs-agents-owned {...}`` header comment in md, toml, kdl, ``hash``
+  (``#`` comments) and ``slash`` (``//`` comments). In Markdown it follows a
+  leading front matter block, in ``hash`` and ``slash`` a ``#!`` line. They are
+  always 0600, and an existing file without our marker is never replaced.
+- Shared files hold entries of ours among the user's: JSON (settings.json,
+  hooks.json) edited as a document, text (AGENTS.md, CLAUDE.md, config.toml)
+  edited as a string. An edit keeps the file's mode, and the first edit of an
+  existing file keeps a ``<name>.tongs-agents.bak`` copy of it next to the file.
 
 Every write is atomic (mkstemp, fsync, replace). Symlinks, non-regular files,
 files over a size cap and malformed JSON are refused with a one-line
 ``OwnedFileError`` and left untouched. A ``ChangeSet`` applies several changes,
 re-checking each file's digest first, and restores every file it touched when
 any step fails. The emit manifest (``state_dir()/emit/manifest.json``) records
-the files tongs-agents manages per target.
+the files tongs-agents manages per target and, per target, keyed entries with
+the digest of what was emitted (``entries``), which drift checks compare.
 """
 
 from __future__ import annotations
@@ -41,14 +44,21 @@ BACKUP_SUFFIX = ".tongs-agents.bak"
 MAX_OWNED_BYTES = 1024 * 1024
 MAX_EDIT_BYTES = 4 * 1024 * 1024
 MARKER_KEYS = ("owner", "schema_version", "managed_paths")
-FORMATS = ("json", "md", "toml", "kdl")
+FORMATS = ("json", "md", "toml", "kdl", "hash", "slash")
 MANIFEST_SCHEMA = 1
 MANIFEST_NAME = "manifest.json"
 
 _SUFFIX_FORMATS = {".json": "json", ".md": "md", ".toml": "toml", ".kdl": "kdl"}
 _MARKER_TAG = "tongs-agents-owned"
-_COMMENTS = {"md": ("<!-- ", " -->"), "toml": ("# ", ""), "kdl": ("// ", "")}
+_COMMENTS = {
+    "md": ("<!-- ", " -->"), "toml": ("# ", ""), "kdl": ("// ", ""),
+    "hash": ("# ", ""), "slash": ("// ", ""),
+}
 _FRONT_MATTER = re.compile(r"\A---\r?\n.*?^---[ \t]*\r?\n", re.DOTALL | re.MULTILINE)
+_SHEBANG = re.compile(r"\A#![^\n]*\n")
+# A leading block the marker line must follow so the file keeps working.
+_PREAMBLES = {"md": _FRONT_MATTER, "hash": _SHEBANG, "slash": _SHEBANG}
+_ENTRY_ID = re.compile(r"^[^\x00-\x1f\x7f]{1,2048}\Z")
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _BINARY = getattr(os, "O_BINARY", 0)
 
@@ -149,6 +159,22 @@ def _read_current(path: Path, max_bytes: int) -> tuple[bytes | None, int | None]
     if len(data) > max_bytes:
         raise SizeError(f"{path}: refusing a file larger than {max_bytes} bytes")
     return data, stat.S_IMODE(info.st_mode)
+
+
+def read_bytes(path: Path, *, max_bytes: int = MAX_EDIT_BYTES) -> bytes | None:
+    """The bytes of ``path``, None when absent; refuses symlinks and oversize files."""
+    return _read_current(Path(path), max_bytes)[0]
+
+
+def read_text(path: Path, *, max_bytes: int = MAX_EDIT_BYTES) -> str | None:
+    """``path`` as UTF-8 text, None when absent; refuses what ``read_bytes`` refuses."""
+    raw = read_bytes(path, max_bytes=max_bytes)
+    if raw is None:
+        return None
+    try:
+        return raw.decode("utf-8")
+    except UnicodeError:
+        raise OwnedFileError(f"{path}: cannot read (not UTF-8 text)") from None
 
 
 def _parse_json(path: Path, raw: bytes) -> Any:
@@ -277,10 +303,15 @@ def render_owned(
     if data and not data.endswith("\n"):
         data += "\n"
     line = _marker_line(fmt, marker)
-    front = _FRONT_MATTER.match(data) if fmt == "md" else None
+    front = _preamble(fmt, data)
     if front:
         return (data[:front.end()] + line + data[front.end():]).encode("utf-8")
     return (line + data).encode("utf-8")
+
+
+def _preamble(fmt: str, text: str) -> re.Match | None:
+    pattern = _PREAMBLES.get(fmt)
+    return pattern.match(text) if pattern is not None else None
 
 
 def _valid_marker(value: Any) -> bool:
@@ -314,7 +345,7 @@ def parse_owned(path: Path, raw: bytes, fmt: str) -> OwnedFile | None:
         except UnicodeError:
             return None
         start, end = _COMMENTS[fmt]
-        front = _FRONT_MATTER.match(text) if fmt == "md" else None
+        front = _preamble(fmt, text)
         offset = front.end() if front else 0
         line_end = text.find("\n", offset)
         line = text[offset:] if line_end < 0 else text[offset:line_end]
@@ -461,6 +492,53 @@ def plan_json_edit(
     return _plan_edit(path, mutate, ownership, current)
 
 
+def _plan_text_edit(
+    path: Path,
+    mutate: Callable[[str], str | None],
+    current: bytes | None,
+    max_bytes: int,
+) -> Change:
+    try:
+        text = "" if current is None else current.decode("utf-8")
+    except UnicodeError:
+        raise OwnedFileError(f"{path}: cannot read (not UTF-8 text)") from None
+    result = mutate(text)
+    before = sha256_of(current)
+    if result is None:
+        if current is None:
+            return Change(path, "unchanged")
+        return Change(path, "delete", before, None)
+    if not isinstance(result, str):
+        raise TypeError("a text edit must return a string or None")
+    content = result.encode("utf-8")
+    if len(content) > max_bytes:
+        raise SizeError(f"{path}: refusing to write more than {max_bytes} bytes")
+    if current is None:
+        if not content:
+            return Change(path, "unchanged")
+        kind = "create"
+    elif content == current:
+        kind = "unchanged"
+    else:
+        kind = "edit_entry"
+    return Change(path, kind, before, sha256_of(content), content)
+
+
+def plan_text_edit(
+    path: Path, mutate: Callable[[str], str | None], *, max_bytes: int = MAX_EDIT_BYTES
+) -> Change:
+    """The change that applies ``mutate`` to a shared UTF-8 text file; never writes.
+
+    ``mutate`` gets the current text ("" when absent) and returns the new
+    text, or None to remove the file. Callers return None only when nothing
+    but their own entries is left. An absent file that stays empty is not
+    created.
+    """
+    path = Path(path)
+    current, _ = _read_current(path, max_bytes)
+    return _plan_text_edit(path, mutate, current, max_bytes)
+
+
 @dataclass
 class _Undo:
     path: Path
@@ -580,27 +658,73 @@ class ChangeSet:
         change = _plan_edit(path, mutate, ownership, current)
         return self.add(change, max_bytes=ownership.max_bytes)
 
+    def edit_text_entries(
+        self,
+        path: Path,
+        mutate: Callable[[str], str | None],
+        *,
+        max_bytes: int = MAX_EDIT_BYTES,
+    ) -> Change:
+        path = Path(path)
+        current = self._current(path, max_bytes)
+        change = _plan_text_edit(path, mutate, current, max_bytes)
+        return self.add(change, max_bytes=max_bytes)
+
+    def _stage_manifest(
+        self, update: Callable[[dict[str, list[str]], dict[str, dict]], None]
+    ) -> Change:
+        path = manifest_path()
+        current = self._current(path, MAX_OWNED_BYTES)
+        targets, entries = ({}, {}) if current is None else _manifest_document(path, current)
+        update(targets, entries)
+        data: dict[str, Any] = {"targets": dict(sorted(targets.items()))}
+        if entries:
+            data["entries"] = {key: dict(sorted(value.items()))
+                               for key, value in sorted(entries.items())}
+        if _ensure_manifest_dir not in self._prepare:
+            self._prepare.append(_ensure_manifest_dir)
+        return self.write_owned_file(
+            path, data, owner=OWNER, schema_version=MANIFEST_SCHEMA, fmt="json",
+        )
+
     def record_managed_paths(
         self, target: ProfileTarget, managed: Iterable[Path | str]
     ) -> Change:
         """Stage the manifest entry for ``target``; an empty list drops it."""
-        path = manifest_path()
-        current = self._current(path, MAX_OWNED_BYTES)
-        targets = {} if current is None else _manifest_targets(path, current)
         values = sorted({str(item) for item in managed})
         if not all(os.path.isabs(value) for value in values):
             raise ValueError("managed paths must be absolute")
         key = target_key(target)
-        if values:
-            targets[key] = values
-        else:
-            targets.pop(key, None)
-        if _ensure_manifest_dir not in self._prepare:
-            self._prepare.append(_ensure_manifest_dir)
-        return self.write_owned_file(
-            path, {"targets": dict(sorted(targets.items()))},
-            owner=OWNER, schema_version=MANIFEST_SCHEMA, fmt="json",
-        )
+
+        def update(targets: dict, entries: dict) -> None:
+            if values:
+                targets[key] = values
+            else:
+                targets.pop(key, None)
+
+        return self._stage_manifest(update)
+
+    def record_entries(
+        self, target: ProfileTarget, entries: Mapping[str, Mapping[str, str]]
+    ) -> Change:
+        """Stage the keyed entries for ``target``, replacing its previous ones.
+
+        Each entry id maps to string fields; ``kind`` and ``sha256`` are
+        required. An empty mapping drops the target's entries.
+        """
+        values = {name: dict(fields) for name, fields in entries.items()}
+        problem = _entries_problem(values)
+        if problem:
+            raise ValueError(problem)
+        key = target_key(target)
+
+        def update(targets: dict, recorded: dict) -> None:
+            if values:
+                recorded[key] = values
+            else:
+                recorded.pop(key, None)
+
+        return self._stage_manifest(update)
 
     def commit(self) -> list[Change]:
         if self._committed:
@@ -745,12 +869,30 @@ def target_key(target: ProfileTarget) -> str:
     return f"{target.harness}:{where}"
 
 
-def _manifest_targets(path: Path, raw: bytes) -> dict[str, list[str]]:
+def _entries_problem(entries: Any) -> str | None:
+    if not isinstance(entries, dict):
+        return "manifest entries must be a mapping"
+    for name, fields in entries.items():
+        if not isinstance(name, str) or not _ENTRY_ID.match(name):
+            return f"invalid manifest entry id {name!r}"
+        if not isinstance(fields, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) for key, value in fields.items()
+        ):
+            return f"manifest entry {name!r} must map strings to strings"
+        if not fields.get("kind") or not fields.get("sha256"):
+            return f"manifest entry {name!r} needs kind and sha256"
+    return None
+
+
+def _manifest_document(
+    path: Path, raw: bytes
+) -> tuple[dict[str, list[str]], dict[str, dict[str, dict[str, str]]]]:
     current = parse_owned(path, raw, "json")
     if current is None or current.owner != OWNER:
         _parse_json(path, raw)
         raise OwnershipError(f"{path}: not owned by {OWNER}; refusing to change it")
     targets = current.content.get("targets")
+    entries = current.content.get("entries", {})
     if (
         current.schema_version != MANIFEST_SCHEMA
         or not isinstance(targets, dict)
@@ -760,9 +902,22 @@ def _manifest_targets(path: Path, raw: bytes) -> dict[str, list[str]]:
             and all(isinstance(value, str) and os.path.isabs(value) for value in values)
             for key, values in targets.items()
         )
+        or not isinstance(entries, dict)
+        or not all(
+            isinstance(key, str) and _entries_problem(value) is None
+            for key, value in entries.items()
+        )
     ):
         raise OwnedFileError(f"{path}: unrecognized emit manifest")
-    return {key: list(values) for key, values in targets.items()}
+    return (
+        {key: list(values) for key, values in targets.items()},
+        {key: {name: dict(fields) for name, fields in value.items()}
+         for key, value in entries.items()},
+    )
+
+
+def _manifest_targets(path: Path, raw: bytes) -> dict[str, list[str]]:
+    return _manifest_document(path, raw)[0]
 
 
 def load_manifest() -> dict[str, list[str]]:
@@ -774,5 +929,18 @@ def load_manifest() -> dict[str, list[str]]:
     return _manifest_targets(path, raw)
 
 
+def load_manifest_entries() -> dict[str, dict[str, dict[str, str]]]:
+    """Keyed entries per target key; empty when no manifest exists."""
+    path = manifest_path()
+    raw, _ = _read_current(path, MAX_OWNED_BYTES)
+    if raw is None:
+        return {}
+    return _manifest_document(path, raw)[1]
+
+
 def managed_paths_for(target: ProfileTarget) -> tuple[Path, ...]:
     return tuple(Path(value) for value in load_manifest().get(target_key(target), []))
+
+
+def manifest_entries_for(target: ProfileTarget) -> dict[str, dict[str, str]]:
+    return load_manifest_entries().get(target_key(target), {})

@@ -273,6 +273,62 @@ which keeps one run per pin with source hashes. The maintainer's live run with
 real profiles is separate; see the
 [runbook](../docs/work/workspace-live-run.md).
 
+## Config emitters (M2-C)
+
+Three checks cover the Claude, Codex and Pi emitters beyond the synthetic
+pytest snapshots in `tests/test_emitters.py`. Each uses a private temporary
+root for HOME, the harness config dir, the XDG dirs and the tongs-agents state
+dir, removes it afterwards, and redacts its evidence.
+
+```console
+python validation/claude_import.py
+```
+
+Confirms decision row 2 of the [emitter strategy](../docs/work/emitter-strategy.md):
+the Claude emitter's `@tongs-agents/instructions.md` import line reaches the
+model. Two real `claude -p` sessions run against a fake provider, a local
+Messages API stub on 127.0.0.1 with a fixed fake key, so no model runs and no
+credential exists. On Linux with `unshare` the check re-runs itself in a new
+user and network namespace with only loopback up. The session with the import
+must send the synthetic token from the dotfiles instructions; the control
+session, with the line removed and the owned file kept, must not. It also
+reports the session records the emitted hooks wrote. Evidence:
+`evidence/claude-import-fedora44.json`.
+
+```console
+python validation/pi_mcp.py
+```
+
+Runs the Pi emitter against the real Pi CLI on PATH, which must be 0.99.0 or
+newer (native MCP). Only offline config commands run: `pi --version`,
+`pi mcp add` and `remove`, and `pi install` of the packaged extension; no
+session starts and `pi mcp list`, which starts servers, is not used. A user
+server, a foreign server with a managed name and an unknown top-level key in
+`mcp.json` must survive, a second plan must be empty, and dropping the
+servers must remove only ours. The hosted `pi-mcp-emitter` job runs it on the
+second Pi pin. Evidence: `evidence/pi-mcp-emitter-0.99.0.json`.
+
+```console
+python validation/emit_workspace.py
+```
+
+The live acceptance: the [agent workspace](#agent-workspace-on-linux)
+validator with one step replaced. The hooked Claude profile's config dir is
+written by the Claude emitter instead of `tongs-agents install`, then the
+workspace runs for real with the fake harness fixtures. That profile's row
+must carry hook status, while the control profile without hooks stays
+`discovered`. Instrumented evidence: `evidence/emit-workspace-linux-x86_64.json`.
+
+Both Pi pins live in `src/tongs_agents/data/pi_pins.json`.
+`validation/pi/install_pin.py VERSION --prefix DIR --download-dir DIR`
+downloads the release tarball from the npm registry, checks its size and
+sha256 against the table before npm sees it, installs it and confirms the
+reported version. The hosted `pi-mcp-emitter` job installs the 0.99.0 pin
+this way. The `pi-validation` lifecycle job keeps its original
+`npm install` of 0.85.0, which checks the registry's sha512 integrity (also
+recorded in the table); it starts a Pi session, so it cannot be reproduced
+locally and its install step is left exactly as it was validated.
+
 ## Investigation probes
 
 Two local-only Linux probes back investigation records rather than a product
