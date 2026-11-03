@@ -31,8 +31,9 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rich.text import Text
 from textual import work
@@ -66,6 +67,40 @@ class CommandHelp(Exception):  # noqa: N818 - control flow for -h, not an error
     """``-h``: the verb's help text, shown under the prompt instead of printed."""
 
 
+class ResumeGuard:
+    """The session ids being resumed from one sidebar, shared by all its paths.
+
+    The row action, the picker and ``:resume`` each hold a session id from
+    before they check it until its pane is spawned (or the attempt ends), so
+    two requests never both spawn. After the spawn the launch record itself
+    marks the session as resuming here (``commands.resume.resuming_launch``).
+    Thread-safe: the command line takes it in a worker thread.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._held: set[str] = set()
+
+    def acquire(self, session_id: str) -> bool:
+        with self._lock:
+            if session_id in self._held:
+                return False
+            self._held.add(session_id)
+            return True
+
+    def release(self, session_id: str) -> None:
+        with self._lock:
+            self._held.discard(session_id)
+
+    def __contains__(self, session_id: str) -> bool:
+        with self._lock:
+            return session_id in self._held
+
+    def __bool__(self) -> bool:
+        with self._lock:
+            return bool(self._held)
+
+
 @dataclass(frozen=True)
 class CommandContext:
     """Where commands run: the sidebar's multiplexer and session, and its profiles."""
@@ -73,6 +108,7 @@ class CommandContext:
     multiplexer: Multiplexer
     session: str
     load_profiles: Callable[[], Mapping[str, Profile]]
+    resuming: ResumeGuard = field(default_factory=ResumeGuard, compare=False)
 
 
 @dataclass(frozen=True)
@@ -421,17 +457,39 @@ def start_resume(context: CommandContext, plan: resume_command.Plan) -> list[str
     return notices
 
 
+def resolve_session_id(session_id: str) -> str:
+    """The full id of the stored session ``session_id`` names; CommandError otherwise."""
+    try:
+        return resume_command.find_session(
+            resume_command.recent_sessions(), session_id).session_id
+    except resume_command.ResumeRefused as refused:
+        raise CommandError(str(refused)) from None
+
+
+def already_resuming(session_id: str) -> str:
+    return (f"session {session_id[:resume_command.SHORT_ID]} is already being resumed "
+            "from this sidebar")
+
+
 def resume_session(context: CommandContext, session_id: str,
                    profile: str | None = None) -> str:
     """Start ``session_id`` in the context's session; the command line's result text.
 
-    A session that already runs in this session is refused (CommandError);
-    one that runs elsewhere starts with a warning, as the CLI does.
+    The full id is held in ``context.resuming`` from before the check until
+    the pane is spawned. A session that already runs in this session, or is
+    being resumed, is refused (CommandError); one that runs elsewhere starts
+    with a warning, as the CLI does.
     """
-    checked = check_resume(context, session_id, profile)
-    if checked.refusal is not None:
-        raise CommandError(checked.refusal)
-    notices = start_resume(context, checked.plan)
+    full_id = resolve_session_id(session_id)
+    if not context.resuming.acquire(full_id):
+        raise CommandError(already_resuming(full_id))
+    try:
+        checked = check_resume(context, full_id, profile)
+        if checked.refusal is not None:
+            raise CommandError(checked.refusal)
+        notices = start_resume(context, checked.plan)
+    finally:
+        context.resuming.release(full_id)
     result = f"resumed {checked.plan.summary}"
     if checked.warning is not None:
         result += f"\nwarning: {checked.warning}"

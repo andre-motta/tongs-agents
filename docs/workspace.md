@@ -238,7 +238,9 @@ created 0600 without following or replacing anything:
 `tongs-agents sidebar [--spawn-request TOKEN] [--compact] [--layout {single,split}]`
 (started by the layout as `python -m tongs_agents.commands.sidebar`; the
 `single` layout passes `--layout single` so the agent stack can be found
-again without its home pane) runs the compact agents
+again without its home pane, and a sidebar re-added by `run`, `workspace` or
+the tongs plugin gets the same argument when the session has a home pane or
+an earlier marked sidebar, or records `single` on tmux) runs the compact agents
 panel inside a Zellij pane named `tongs-agents-sidebar` (or a tmux pane, see
 [tmux](#tmux)). It refuses to start outside a Zellij or tmux session. It shares the monitor's header, footer, theme and command
 palette (`Ctrl+P`, with `Add agent…`, `New agent: <profile>` and

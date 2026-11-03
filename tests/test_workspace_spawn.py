@@ -165,6 +165,27 @@ def test_placement_notices_go_to_the_callers_list_or_stderr(capsys):
     assert workspace_spawn.take_notices(FakeMux()) == []
 
 
+def test_a_readded_sidebar_carries_the_sessions_layout():
+    assert workspace_spawn.sidebar_argv("ab" * 16, "single")[3:] == [
+        "--compact", "--layout", "single", "--spawn-request", "ab" * 16]
+    mux = FakeMux()
+    mux.layout = lambda session: "single"
+    workspace_spawn.ensure_sidebar(mux, "agents")
+    assert mux.spawned[-1]["argv"] == workspace_spawn.sidebar_argv(layout="single")
+    split = FakeMux()
+    split.layout = lambda session: None
+    workspace_spawn.ensure_sidebar(split, "agents")
+    assert "--layout" not in split.spawned[-1]["argv"]
+    failing = FakeMux()
+
+    def broken(session):
+        raise MultiplexerError("no answer")
+
+    failing.layout = broken
+    assert workspace_spawn.session_layout(failing, "agents") is None
+    assert workspace_spawn.session_layout(FakeMux(), "agents") is None
+
+
 def test_spawn_profiles_stops_at_the_first_failure():
     mux = FakeMux(fail_spawn={"beta"})
     with pytest.raises(MultiplexerError):

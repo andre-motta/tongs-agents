@@ -54,12 +54,11 @@ import threading
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.worker import Worker
 
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import AppConfig, AppConfigError, load_app_config
 from tongs_agents.commands import CommandParser
-from tongs_agents.models import FleetSession, FocusResult
+from tongs_agents.models import FleetSession, FocusResult, SessionStatus
 from tongs_agents.multiplexers import (
     LAYOUT_OPTION,
     LAYOUTS,
@@ -86,6 +85,8 @@ from tongs_agents.widgets.command_line import (
     CommandError,
     CommandLine,
     ResumeCheck,
+    ResumeGuard,
+    already_resuming,
     check_resume,
     start_resume,
 )
@@ -200,9 +201,6 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
         self.command_context = CommandContext(multiplexer, session, load_profiles)
-        # Session ids being resumed: the running worker, or None while a
-        # confirmation is open.
-        self.resuming: dict[str, Worker | None] = {}
         self.init_approvals(self.feed, approval_interval)
 
     def compose(self) -> ComposeResult:
@@ -304,24 +302,25 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         if session_id is not None:
             self.resume_in_workspace(session_id)
 
-    def _in_flight(self, session_id: str) -> bool:
-        if session_id not in self.resuming:
-            return False
-        worker = self.resuming[session_id]
-        return worker is None or not worker.is_finished
+    @property
+    def resuming(self) -> ResumeGuard:
+        """Session ids being resumed, shared with the command line's ``:resume``."""
+        return self.command_context.resuming
 
     def resume_in_workspace(self, session_id: str) -> None:
         """Check, confirm when needed, then resume ``session_id`` in this session.
 
-        A second request for a session id while one is in flight is ignored.
+        The id is held in ``resuming`` from before the check until the pane
+        is spawned or the attempt ends; a request for an id already held
+        (from ``u``, the picker or ``:resume``) is ignored with a notice.
         Each session id has its own exclusive worker groups, one for the
         check and one for the spawn.
         """
-        if self._in_flight(session_id):
-            self.notify(f"Already resuming {session_id[:resume_command.SHORT_ID]}",
-                        title="Resume", timeout=3)
+        if not self.resuming.acquire(session_id):
+            self.notify(already_resuming(session_id)[0].upper()
+                        + already_resuming(session_id)[1:], title="Resume", timeout=3)
             return
-        self.resuming[session_id] = self.run_worker(
+        self.run_worker(
             lambda: self._check_resume(session_id), thread=True,
             group=f"resume-check-{session_id}", exclusive=True,
         )
@@ -340,11 +339,10 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
 
     def _resume_checked(self, session_id: str, checked: ResumeCheck) -> None:
         if checked.refusal is not None:
-            self.resuming.pop(session_id, None)
-            self._offer_focus(session_id, checked.refusal)
+            self.resuming.release(session_id)
+            self._offer_focus(session_id, checked)
             return
         if checked.warning is not None:
-            self.resuming[session_id] = None
             self.push_screen(
                 ConfirmScreen(
                     "Resume a session that still runs?",
@@ -360,10 +358,10 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         if yes:
             self._start_resume(session_id, checked)
         else:
-            self.resuming.pop(session_id, None)
+            self.resuming.release(session_id)
 
     def _start_resume(self, session_id: str, checked: ResumeCheck) -> None:
-        self.resuming[session_id] = self.run_worker(
+        self.run_worker(
             lambda: self._run_resume(session_id, checked), thread=True,
             group=f"resume-{session_id}", exclusive=True,
         )
@@ -381,11 +379,20 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         self.call_from_thread(self._resumed, session_id, checked.plan.summary,
                               checked.warning, notices)
 
-    def _offer_focus(self, session_id: str, refusal: str) -> None:
+    def _live_row(self, session_id: str, live) -> FleetSession | None:
+        """The row of the live process: its pid, else a row that has not ended."""
+        rows = [session for session in self.agents_panel.sessions
+                if session.session_id == session_id]
+        if live is not None and live.pid is not None:
+            for row in rows:
+                if str(row.pid) == str(live.pid):
+                    return row
+        return next((row for row in rows if row.status != SessionStatus.ENDED), None)
+
+    def _offer_focus(self, session_id: str, checked: ResumeCheck) -> None:
         """Refuse a duplicate and offer to show the pane the session already has."""
-        row = next((session for session in self.agents_panel.sessions
-                    if session.session_id == session_id), None)
-        message = refusal[0].upper() + refusal[1:]
+        row = self._live_row(session_id, checked.live)
+        message = checked.refusal[0].upper() + checked.refusal[1:]
         if row is None:
             self.notify(message, title="Already running here", severity="warning",
                         timeout=10)
@@ -396,12 +403,12 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         )
 
     def _resume_failed(self, session_id: str, message: str) -> None:
-        self.resuming.pop(session_id, None)
+        self.resuming.release(session_id)
         self.notify(message, title="Resume failed", severity="error", timeout=15)
 
     def _resumed(self, session_id: str, summary: str, warning: str | None,
                  notices: list[str] = ()) -> None:
-        self.resuming.pop(session_id, None)
+        self.resuming.release(session_id)
         self.notify(f"Resumed {summary}", title="Resume", timeout=5)
         if warning is not None:
             self.notify(warning, title="Still running", severity="warning", timeout=20)

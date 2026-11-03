@@ -50,6 +50,7 @@ from tongs_agents.launches import LaunchError, LaunchRecord
 from tongs_agents.multiplexers.base import (
     HOME_COMMAND,
     HOME_MODULE,
+    LAYOUT_OPTION,
     SIDEBAR_PANE_NAME,
     Multiplexer,
     MultiplexerError,
@@ -103,11 +104,30 @@ def home_argv() -> list[str]:
     return [sys.executable, "-m", HOME_MODULE, HOME_COMMAND]
 
 
-def sidebar_argv(token: str | None = None) -> list[str]:
+def sidebar_argv(token: str | None = None, layout: str | None = None) -> list[str]:
+    """The sidebar pane's command; ``layout`` marks it (``--layout single``)."""
     argv = [sys.executable, "-m", SIDEBAR_MODULE, "--compact"]
+    if layout is not None:
+        argv += [LAYOUT_OPTION, layout]
     if token is not None:
         argv += ["--spawn-request", token]
     return argv
+
+
+def session_layout(mux: Multiplexer, session: str) -> str | None:
+    """The layout the running ``session`` records (``Multiplexer.layout``), or None.
+
+    Read from the session itself: a Zellij home pane or marked sidebar, the
+    tmux session option. ``[workspace].layout`` is not used, because it only
+    shapes new sessions; a session without a marker stays unmarked.
+    """
+    read = getattr(mux, "layout", None)
+    if not callable(read):
+        return None
+    try:
+        return read(session)
+    except MultiplexerError:
+        return None
 
 
 class LaunchOptionError(LaunchError):
@@ -254,10 +274,16 @@ def has_sidebar(mux: Multiplexer, session: str) -> bool:
 
 
 def ensure_sidebar(mux: Multiplexer, session: str) -> PaneRef | None:
-    """Add a sidebar pane unless one is listed; return the new pane, if any."""
+    """Add a sidebar pane unless one is listed; return the new pane, if any.
+
+    The new sidebar carries the session's layout (``session_layout``), so a
+    ``single`` Zellij session can still rebuild its stack after its home
+    pane is closed.
+    """
     if has_sidebar(mux, session):
         return None
-    return mux.spawn(session, sidebar_argv(), name=SIDEBAR_PANE_NAME, focus=False)
+    return mux.spawn(session, sidebar_argv(layout=session_layout(mux, session)),
+                     name=SIDEBAR_PANE_NAME, focus=False)
 
 
 def _runtime_subdir(name: str, *, create: bool) -> Path:

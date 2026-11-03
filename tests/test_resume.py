@@ -4,6 +4,7 @@ Session records are synthetic and the multiplexer is a fake: nothing starts
 a harness. Config dirs and transcripts live under a temporary HOME.
 """
 
+import dataclasses
 import json
 import time
 from types import SimpleNamespace
@@ -562,7 +563,7 @@ async def test_a_session_running_elsewhere_needs_a_confirmation(tmp_path, projec
         assert "still runs as pid 4242 in konsole" in app.screen.message
         app.resume_in_workspace(CLAUDE_ID)
         await _settle(app, pilot)
-        assert notes == [("Resume", "Already resuming 3f2a9c1e")]
+        assert notes == [("Resume", "Session 3f2a9c1e is already being resumed from this sidebar")]
         await pilot.press("n")
         await _settle(app, pilot)
         assert not mux.spawned and not app.resuming
@@ -592,7 +593,7 @@ async def test_a_second_request_while_one_runs_is_ignored(tmp_path, project, mon
         app.resume_in_workspace(CODEX_ID)
         await _settle(app, pilot)
         assert not app.resuming
-    assert notes[0] == ("Resume", "Already resuming 019a1b2c")
+    assert notes[0] == ("Resume", "Session 019a1b2c is already being resumed from this sidebar")
     assert [title for title, _ in notes[1:]] == ["Resume"]
     assert len(mux.spawned) == 1
     [record] = launches.list_records()
@@ -680,3 +681,155 @@ async def test_the_picker_closes_with_escape_and_an_empty_store_only_notifies(mo
         await pilot.pause()
         assert not isinstance(app.screen, ResumePickerScreen)
     assert not mux.spawned
+
+
+# -- Before the harness writes a record (B1) --
+
+def _cx(tmp_path):
+    _profiles(tmp_path, '[profiles.cx]\ncommand = ["codex"]\n')
+    _codex_transcript(tmp_path / "home" / ".codex")
+
+
+@pytest.mark.asyncio
+async def test_u_twice_spawns_once(tmp_path, project, monkeypatch):
+    _cx(tmp_path)
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+        assert not app.resuming
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+    assert len(mux.spawned) == 1
+    assert notes[-1][0] == "Already running here"
+    assert "already runs in this workspace in a pane that is starting" in notes[-1][1]
+
+
+@pytest.mark.asyncio
+async def test_u_then_resume_on_the_command_line_spawns_once(tmp_path, project,
+                                                            monkeypatch):
+    _cx(tmp_path)
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        assert app.resuming.acquire(CODEX_ID)
+        app.action_command_line()
+        await pilot.pause()
+        await _submit(app, pilot, "resume 019a")
+        assert app.command_line.result_text == (
+            "session 019a1b2c is already being resumed from this sidebar")
+        app.resuming.release(CODEX_ID)
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+        await _submit(app, pilot, "resume 019a")
+        assert "already runs in this workspace in a pane that is starting" in (
+            app.command_line.result_text)
+    assert len(mux.spawned) == 1
+
+
+@pytest.mark.asyncio
+async def test_resume_twice_on_the_command_line_spawns_once(tmp_path, project, monkeypatch):
+    _cx(tmp_path)
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.action_command_line()
+        await pilot.pause()
+        await _submit(app, pilot, "resume 019a")
+        assert app.command_line.result_text.startswith("resumed Codex session 019a1b2c")
+        await _submit(app, pilot, "resume 019a")
+        assert "already runs in this workspace" in app.command_line.result_text
+        assert not app.resuming
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+    assert notes[-1][0] == "Already running here"
+    assert len(mux.spawned) == 1
+
+
+def test_the_cli_refuses_a_resume_in_its_pending_window(tmp_path, project, monkeypatch,
+                                                        capsys):
+    _cx(tmp_path)
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    monkeypatch.setattr(run, "get_multiplexer", lambda name="zellij", **kwargs: mux)
+    _inside_zellij(monkeypatch, mux, SESSION)
+    assert _main("resume", "019a") == 0
+    assert _main("resume", "019a") == 2
+    assert "already runs in this workspace in a pane that is starting" in (
+        capsys.readouterr().err)
+    _inside_zellij(monkeypatch, mux, "other")
+    assert _main("resume", "019a") == 0
+    assert [call["name"] for call in mux.spawned].count("cx") == 2
+
+
+def _resume_launch(tmp_path, session=SESSION, multiplexer="zellij", **changes):
+    record = launches.create_pending(
+        load_profiles()["cx"], session, multiplexer, args=("resume", CODEX_ID))
+    if changes:
+        record = launches._write(dataclasses.replace(record, **changes))
+    return record
+
+
+def test_resuming_launch_counts_pending_and_live_claimed_launches(tmp_path, project,
+                                                                  monkeypatch):
+    _cx(tmp_path)
+    [session] = resume.recent_sessions([_record("codex", CODEX_ID, project)])
+    monkeypatch.setattr(resume.discovery, "read_session_records", lambda: [])
+    now = time.time()
+    assert resume.resuming_launch(session, SESSION) is None
+    pending = _resume_launch(tmp_path)
+    found = resume.resuming_launch(session, SESSION, "zellij", now=now)
+    assert (found.pid, found.here) == (None, True)
+    assert resume.resuming_launch(session, SESSION, "tmux", now=now) is None
+    assert resume.resuming_launch(session, "other", now=now) is None
+    late = now + resume.PENDING_LAUNCH_SECONDS + 1
+    assert resume.resuming_launch(session, SESSION, now=late) is None
+    launches.discard(pending.launch_id)
+    claimed = _resume_launch(tmp_path, state="running", pid=4242, process_start="77")
+    monkeypatch.setattr(resume.launches, "alive", lambda record: record.pid == 4242)
+    assert resume.resuming_launch(session, SESSION, now=late).pid == 4242
+    monkeypatch.setattr(resume.launches, "alive", lambda record: False)
+    assert resume.resuming_launch(session, SESSION, now=late) is None
+    monkeypatch.setattr(resume.launches, "alive", lambda record: True)
+    monkeypatch.setattr(resume.discovery, "read_session_records", lambda: [
+        {"session_id": "other", "launch": {"launch_id": claimed.launch_id}}])
+    assert resume.resuming_launch(session, SESSION, now=late) is None
+    _resume_launch(tmp_path, args=("resume", "--last"))
+    monkeypatch.setattr(resume.discovery, "read_session_records", lambda: [])
+    assert resume.resuming_launch(session, SESSION, now=now).pid == 4242
+
+
+@pytest.mark.asyncio
+async def test_the_focus_offer_picks_the_live_row(tmp_path, project, monkeypatch):
+    _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
+    _claude_transcript(tmp_path / "home" / ".claude", project)
+    ended = _record("claude", CLAUDE_ID, project, pid="1111", status="ended",
+                    env={"ZELLIJ_SESSION_NAME": SESSION, "ZELLIJ_PANE_ID": "3"})
+    live = _record("claude", CLAUDE_ID, project, pid="4242", instance="9:1",
+                   env={"ZELLIJ_SESSION_NAME": SESSION, "ZELLIJ_PANE_ID": "4"})
+    _store(monkeypatch, [ended, live])
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=int(record["pid"])))
+    mux = FakeMux()
+    app = _sidebar(mux, [ended, live])
+    focused = []
+    monkeypatch.setattr(app, "_do_focus", focused.append)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        assert len([row for row in app.agents_panel.sessions
+                    if row.session_id == CLAUDE_ID]) == 2
+        app.resume_in_workspace(CLAUDE_ID)
+        await _settle(app, pilot)
+        await pilot.press("y")
+        await _settle(app, pilot)
+    assert [str(row.pid) for row in focused] == ["4242"]

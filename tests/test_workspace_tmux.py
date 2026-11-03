@@ -84,7 +84,8 @@ def test_new_tmux_session_starts_detached_with_sidebar_then_attaches(env, monkey
     assert requested == ["tmux"]
     assert [call["name"] for call in mux.spawned] == [SIDEBAR_PANE_NAME, "alpha", "beta"]
     assert all(call["session"] == "agents" and not call["focus"] for call in mux.spawned)
-    assert mux.spawned[0]["argv"][1:] == ["-m", "tongs_agents.commands.sidebar", "--compact"]
+    assert mux.spawned[0]["argv"][1:] == ["-m", "tongs_agents.commands.sidebar", "--compact",
+                                          "--layout", "single"]
     assert mux.spawned[1]["argv"][1:4] == ["-m", "tongs_agents.launch", "alpha"]
     (file, argv, exec_env), = execs.calls
     assert file == "tmux" and argv == [*ATTACH, "=agents"]

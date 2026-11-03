@@ -249,17 +249,20 @@ def _home_anchor(entries: list[dict]) -> dict | None:
     return min(anchors, key=lambda entry: entry["id"]) if anchors else None
 
 
-def _marks_single(entry: dict) -> bool:
-    """True for a tiled sidebar pane started with ``--layout single``."""
+def _runs_single(entry: dict) -> bool:
+    """True for a sidebar pane (exited ones too) started with ``--layout single``."""
     if entry["is_plugin"] or entry["title"] != SIDEBAR_PANE_NAME:
-        return False
-    if entry.get("is_floating") is not False:
         return False
     words = (entry.get("terminal_command") or entry.get("pane_command") or "").split()
     return any(
         words[index:index + 2] == [LAYOUT_OPTION, LAYOUT_SINGLE]
         for index in range(len(words) - 1)
     )
+
+
+def _marks_single(entry: dict) -> bool:
+    """True for a tiled sidebar pane started with ``--layout single``."""
+    return entry.get("is_floating") is False and _runs_single(entry)
 
 
 def _agent_column(entries: list[dict], sidebar: dict) -> list[dict]:
@@ -509,6 +512,16 @@ class ZellijMultiplexer:
                 return ref
         result = self._new_pane(session, *options, "--", *command)
         return self._new_ref(session, result)
+
+    def layout(self, session: str) -> str | None:
+        """``single`` when the session has a home pane or a marked sidebar, else None.
+
+        None means split or unknown (a session from before the marker).
+        """
+        entries = self._pane_entries(_session(session))
+        if _home_anchor(entries) is not None or any(_runs_single(e) for e in entries):
+            return LAYOUT_SINGLE
+        return None
 
     def take_notices(self) -> list[str]:
         """Notices about pane placement since the last call (see the module docstring)."""

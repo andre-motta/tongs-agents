@@ -21,7 +21,10 @@ path (``commands.run``), with:
 
 When the session still has a live process (any status but ended) in the
 workspace session it would join, it is refused: that pane is already there,
-so show it instead. A live process anywhere else gets a warning: two
+so show it instead. A resume of the session that was started in that
+workspace session counts too, before the harness writes any record: a
+pending launch with its resume arguments created in the last
+``PENDING_LAUNCH_SECONDS``, or a claimed one whose process still runs. A live process anywhere else gets a warning: two
 processes on one session conflict. It never stops that process. That is the
 usual case: maintenance removes a record once its process is gone, so a
 session is resumed while it still runs, and the old one is quit afterwards.
@@ -70,6 +73,7 @@ SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 SHORT_ID = 8
 MAX_SCAN_ENTRIES = 20000
 DAY_SECONDS = 24 * 3600
+PENDING_LAUNCH_SECONDS = 30
 LIST_LIMIT = 50
 EPILOG = (
     "Without ID it lists the sessions it can resume. ID may be a unique prefix, "
@@ -456,9 +460,12 @@ def plan(session: Resumable, profiles: Mapping[str, Profile],
 
 @dataclass(frozen=True)
 class LiveProcess:
-    """A live process of a session: its pid, where it runs and whether that is here."""
+    """A live process of a session: its pid, where it runs and whether that is here.
 
-    pid: int
+    ``pid`` is None for a resume launch whose pane has not started yet.
+    """
+
+    pid: int | None
     where: str
     here: bool
 
@@ -487,6 +494,47 @@ def _where(record: dict, name: str | None, here: bool) -> str:
     return f"in {terminal}" if isinstance(terminal, str) and terminal else "elsewhere"
 
 
+def _launch_reported(launch_id: str) -> bool:
+    """True when a session record already names ``launch_id``."""
+    for record in discovery.read_session_records():
+        launch = record.get("launch") if isinstance(record, dict) else None
+        if isinstance(launch, dict) and launch.get("launch_id") == launch_id:
+            return True
+    return False
+
+
+def resuming_launch(session: Resumable, workspace_session: str,
+                    multiplexer: str | None = None, *,
+                    now: float | None = None) -> LiveProcess | None:
+    """A launch in ``workspace_session`` that resumes ``session`` and has no record yet.
+
+    Its arguments end with the harness's resume arguments for the session.
+    It counts while pending for at most ``PENDING_LAUNCH_SECONDS``, or once
+    claimed while its process (pid and start token) runs; a launch that a
+    session record already names is left to the store (the agent may have
+    moved on to another session since, for example with ``/clear``).
+    """
+    tail = resume_args(session.harness, session.session_id)
+    now = time.time() if now is None else now
+    for record in reversed(launches.list_records(workspace_session)):
+        if record.harness != session.harness or tuple(record.args[-len(tail):]) != tail:
+            continue
+        if multiplexer is not None and record.multiplexer != multiplexer:
+            continue
+        if record.state == "pending":
+            if now - record.created > PENDING_LAUNCH_SECONDS:
+                continue
+            pid = None
+        elif record.state == "running" and launches.alive(record):
+            pid = record.pid
+        else:
+            continue
+        if _launch_reported(record.launch_id):
+            continue
+        return LiveProcess(pid, "in this workspace", True)
+    return None
+
+
 def live_process(session: Resumable, workspace_session: str | None = None,
                  multiplexer: str | None = None) -> LiveProcess | None:
     """The live process of ``session``, if any; ``here`` when it runs in
@@ -494,8 +542,14 @@ def live_process(session: Resumable, workspace_session: str | None = None,
 
     An ended record is skipped: its process may have started another session
     (Claude Code ``/clear``). A process in this workspace wins over one
-    elsewhere. The process is never stopped.
+    elsewhere, and a resume launch in this workspace whose harness has not
+    written a record yet (``resuming_launch``) counts as one. The process is
+    never stopped.
     """
+    if workspace_session is not None:
+        starting = resuming_launch(session, workspace_session, multiplexer)
+        if starting is not None:
+            return starting
     found = None
     for record in session.records:
         if record.get("status") == "ended":
@@ -528,9 +582,13 @@ def live_warning(session: Resumable, workspace_session: str | None = None,
     return warning_text(session, live)
 
 
+def _as_pid(live: LiveProcess) -> str:
+    return f"as pid {live.pid}" if live.pid is not None else "in a pane that is starting"
+
+
 def warning_text(session: Resumable, live: LiveProcess) -> str:
     return (
-        f"session {session.short_id} still runs as pid {live.pid} {live.where}; "
+        f"session {session.short_id} still runs {_as_pid(live)} {live.where}; "
         "two processes on one session conflict, so quit that one before you type in "
         "the new pane (it was not stopped)"
     )
@@ -539,7 +597,7 @@ def warning_text(session: Resumable, live: LiveProcess) -> str:
 def here_refusal(session: Resumable, live: LiveProcess) -> str:
     """Why a session already running in this workspace is not resumed again."""
     return (
-        f"session {session.short_id} already runs in this workspace as pid {live.pid}; "
+        f"session {session.short_id} already runs in this workspace {_as_pid(live)}; "
         "show its pane instead (select its row in the sidebar, or run "
         f"'tongs-agents focus {session.session_id}')"
     )

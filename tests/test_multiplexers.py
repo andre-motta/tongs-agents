@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from tongs_agents import multiplexers
+from tongs_agents import multiplexers, workspace_spawn
 from tongs_agents.multiplexers import (
     SESSION_EXITED,
     SESSION_RUNNING,
@@ -1279,3 +1279,23 @@ def test_an_unmarked_session_without_a_home_pane_stays_silent(fake):
     assert mux.take_notices() == []
     assert not mux_zellij._marks_single(dict(MARKED, is_floating=True))
     assert not mux_zellij._marks_single(dict(MARKED, title="claude"))
+
+
+def test_layout_reads_the_home_pane_or_a_marked_sidebar(fake):
+    mux = _mux()
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2))
+    assert mux.layout("agents") == "single"
+    fake.responses["list-panes"] = _listing(dict(MARKED, exited=True, is_floating=True))
+    assert mux.layout("agents") == "single"
+    fake.responses["list-panes"] = _listing(SIDEBAR, *_stack(2))
+    assert mux.layout("agents") is None
+
+
+def test_a_readded_marked_sidebar_restores_home_recovery(fake):
+    # ensure_sidebar re-adds the sidebar with the layout the session reports.
+    readded = dict(MARKED, id=6)
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2))
+    argv = workspace_spawn.sidebar_argv(layout=_mux().layout("agents"))
+    assert argv[-2:] == ["--layout", "single"]
+    readded["terminal_command"] = " ".join(argv)
+    assert mux_zellij._marks_single(readded)

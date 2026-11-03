@@ -38,7 +38,11 @@ Then, for each session:
 A session whose process already runs in the workspace session it would join
 is refused (exit 2) instead: it already has a pane there. Select its row in
 the sidebar, or run `tongs-agents focus ID`, to bring that pane up. Inside
-tmux this compares the tmux session the command runs in.
+tmux this compares the tmux session the command runs in. A resume of the
+session that was just started there counts as running too, before the
+harness has reported anything: its launch is pending (for up to 30 seconds)
+or its process runs. A second `resume ID` right after the first is
+therefore refused rather than starting a second pane.
 
 Resume while the old agent still runs: once its process is gone, the
 session store drops its record within seconds, and it is no longer listed.
@@ -65,9 +69,11 @@ the sidebar checks where the session still runs:
 - Nowhere: it is resumed right away.
 
 While a session is being resumed (or its dialog is open), asking to resume
-it again is ignored with a short notice, so a double key press starts one
-pane. `:resume ID` works like the CLI: it refuses a session that runs in this
-workspace and warns, without asking, about one that runs elsewhere. A failure
+it again, with `u`, the list or `:resume`, is ignored with a short notice, so
+a double key press starts one pane; once its pane is started, the check
+above refuses it. `:resume ID` works like the CLI: it refuses a session that
+runs (or is being resumed) in this workspace and warns, without asking,
+about one that runs elsewhere. A failure
 (no matching profile, a folder that no longer exists) is shown as an error
 notification.
 
