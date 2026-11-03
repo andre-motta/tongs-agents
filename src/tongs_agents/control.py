@@ -5,7 +5,10 @@ Control acts only on panes that tongs-agents spawned and can verify now.
 not replaced, its pane is listed in the same session (and socket dir), the
 claimed process is still alive with the same start token
 (``_identity_matches``, the one seam for stronger launch-identity checks),
-and no hook session record carrying that launch id names another pane.
+and no hook session record for that launch names another pane. A hook record
+counts for a launch only when it carries the launch id and its process is the
+claimed one or runs under it (``launches.claims_session``, #74): a shared
+Codex daemon runs later sessions' hooks with the first launch's environment.
 Everything else is refused (exit 5), never guessed.
 
 ``send`` holds a per-pane lock (``runtime_dir()/locks``), so concurrent sends
@@ -228,8 +231,9 @@ def _multiplexer(record: LaunchRecord) -> Multiplexer:
 def _identity_matches(record: LaunchRecord) -> bool:
     """True when the record's claimed process is still the one running.
 
-    The single launch-identity seam: today the pid must be alive with the
-    start token captured at claim time. Stronger process checks (#74) go here.
+    The single launch-identity seam: the pid must be alive with the start
+    token captured at claim time. Hook records are matched to this process
+    separately, in ``_hook_records``.
     """
     if record.pid is None or not record.process_start:
         return False
@@ -247,11 +251,18 @@ def _replaced(launch_id: str) -> bool:
     return any(record.replaces == launch_id for record in launches.list_records())
 
 
-def _hook_records(launch_id: str) -> list[dict]:
+def _hook_records(record: LaunchRecord) -> list[dict]:
+    """Session records for ``record``: its launch id and its claimed process.
+
+    A record carrying the launch id whose process is not the claimed one (or
+    under it) has no launch identity and is ignored, never trusted (#74).
+    """
     found = []
     for data in discovery.read_session_records():
         launch = validated_launch(data.get("launch")) or {}
-        if launch.get("launch_id") == launch_id:
+        if launch.get("launch_id") == record.launch_id and launches.claims_session(
+            record, data
+        ):
             found.append(data)
     return found
 
@@ -320,7 +331,7 @@ def _verify(launch_id) -> Target:
             f"launch {launch_id}: pane {record.pane_id} no longer runs the launched "
             "process (stale launch)"
         )
-    _check_hook_pane(record, _hook_records(launch_id))
+    _check_hook_pane(record, _hook_records(record))
     ref = PaneRef(record.multiplexer, record.session, record.pane_id, record.socket_dir)
     return Target(record, ref, pane, mux)
 
@@ -545,7 +556,7 @@ def send(
         record = _claimed(launch_id)
         with _pane_lock(record):
             target = _verify(launch_id)
-            marks = _hook_marks(_hook_records(launch_id))
+            marks = _hook_marks(_hook_records(target.record))
             try:
                 if text:
                     target.multiplexer.paste(target.ref, text)
@@ -625,7 +636,7 @@ def _current(launch_id: str) -> tuple[AgentStatus, dict | None]:
     except AgentExited as error:
         record = launches.get(launch_id)
         return _status_of(record, ENDED, error.detail, exit_status=error.exit_status), None
-    hook = _latest(_hook_records(launch_id))
+    hook = _latest(_hook_records(target.record))
     if hook is None:
         return _status_of(target.record, Attention.QUIET.value,
                           "running; no status reported"), None

@@ -54,6 +54,9 @@ def _no_inherited_launch(monkeypatch):
         "tongs_agents.terminal_apis.capture_terminal_info",
         lambda: {"terminal": "test", "terminal_env": {}},
     )
+    # Isolates the #71 carry-forward from the #74 claim check
+    # (tests/test_launch_identity.py), which a daemon process never passes.
+    monkeypatch.setattr(hook, "_verified_launch", lambda launch, process: launch)
 
 
 def set_env(monkeypatch, launch):
@@ -171,11 +174,11 @@ def test_late_end_of_the_first_session_ends_only_that_session(fleet_dir, monkeyp
 
 def test_session_end_never_reads_the_launch_env(monkeypatch):
     set_env(monkeypatch, FIRST_LAUNCH)
-    assert hook._record_launch("session-end", None) is None
-    assert hook._record_launch("session-end", {"launch": LATER_LAUNCH}) == LATER_LAUNCH
-    assert hook._record_launch("session-end", {}) is None
-    assert hook._record_launch("stop", {"launch": LATER_LAUNCH}) == LATER_LAUNCH
-    assert hook._record_launch("prompt-submit", None) == FIRST_LAUNCH
-    assert hook._record_launch("session-start", {"launch": LATER_LAUNCH}) == (
+    assert hook._record_launch("session-end", None, None) is None
+    assert hook._record_launch("session-end", {"launch": LATER_LAUNCH}, None) == LATER_LAUNCH
+    assert hook._record_launch("session-end", {}, None) is None
+    assert hook._record_launch("stop", {"launch": LATER_LAUNCH}, None) == LATER_LAUNCH
+    assert hook._record_launch("prompt-submit", None, None) == FIRST_LAUNCH
+    assert hook._record_launch("session-start", {"launch": LATER_LAUNCH}, None) == (
         FIRST_LAUNCH
     )
