@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass
 from dataclasses import field
 from enum import Enum
@@ -33,6 +34,35 @@ SORT_KEYS = ["attention", "status", "age", "repo"]
 
 SCHEMA_VERSION = 1
 UNRESOLVED_INSTANCE_ID = "unresolved"
+
+LAUNCH_ID_ENV = "TONGS_AGENTS_LAUNCH_ID"
+PROFILE_ID_ENV = "TONGS_AGENTS_PROFILE"
+LAUNCH_FIELD_PATTERNS = {
+    "launch_id": re.compile(r"[0-9a-f]{32}"),
+    "profile_id": re.compile(r"[a-z0-9][a-z0-9_-]{0,31}"),
+}
+
+
+def valid_launch_value(key: str, value) -> bool:
+    pattern = LAUNCH_FIELD_PATTERNS.get(key)
+    return (
+        pattern is not None
+        and isinstance(value, str)
+        and pattern.fullmatch(value) is not None
+    )
+
+
+def validated_launch(value) -> dict[str, str] | None:
+    """Return a copy of a well-formed optional `launch` record key, else None.
+
+    A launch key holds at least one of `launch_id` and `profile_id`, no other
+    keys, and every value matches its pattern.
+    """
+    if not isinstance(value, dict) or not value:
+        return None
+    if any(not valid_launch_value(key, item) for key, item in value.items()):
+        return None
+    return dict(value)
 
 
 class FocusTargetKind(Enum):
@@ -146,6 +176,8 @@ class FleetSession:
     sequence: int | None = None
     process_start: str = ""
     process_identity: str = ""
+    launch_id: str = ""
+    profile_id: str = ""
     focus_target: FocusTarget = field(
         default_factory=lambda: FocusTarget(FocusTargetKind.UNAVAILABLE)
     )
@@ -184,6 +216,8 @@ class FleetSession:
             "needs_attention": self.needs_attention,
             "process_start": self.process_start,
             "process_identity": self.process_identity,
+            "launch_id": self.launch_id,
+            "profile_id": self.profile_id,
             "focus_target": {
                 "kind": self.focus_target.kind.value,
                 "terminal": self.focus_target.terminal,
@@ -224,6 +258,7 @@ def parse_session(data: dict) -> FleetSession:
     canonical_id = data.get("canonical_id", "")
     if not canonical_id and instance_id:
         canonical_id = canonical_session_id(agent, session_id, instance_id)
+    launch = validated_launch(data.get("launch")) or {}
 
     return FleetSession(
         session_id=session_id,
@@ -247,6 +282,8 @@ def parse_session(data: dict) -> FleetSession:
         sequence=data.get("sequence"),
         process_start=data.get("process_start", ""),
         process_identity=data.get("process_identity", ""),
+        launch_id=launch.get("launch_id", ""),
+        profile_id=launch.get("profile_id", ""),
         focus_target=target,
     )
 

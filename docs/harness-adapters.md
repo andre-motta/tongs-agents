@@ -139,6 +139,45 @@ event is written before the placeholder is removed. An adapter must not invent
 a PID, merge different harnesses that share a native ID, or revive an
 unresolved placeholder after a successful identity migration.
 
+### Optional launch identity
+
+A record may carry one additive key, `launch`, that names the tongs-agents
+launch and profile which started the agent:
+
+```json
+"launch": {"launch_id": "0123456789abcdef0123456789abcdef", "profile_id": "reviewer"}
+```
+
+The hook reads it only from its own process environment:
+
+| Variable | Record field | Accepted value |
+| --- | --- | --- |
+| `TONGS_AGENTS_LAUNCH_ID` | `launch.launch_id` | exactly 32 lowercase hex characters |
+| `TONGS_AGENTS_PROFILE` | `launch.profile_id` | `[a-z0-9][a-z0-9_-]{0,31}` |
+
+Each value is checked on its own. A missing, oversized, non-UTF-8 or
+non-matching value is omitted, and `launch` is left out when neither value is
+valid. A bad value never rejects the event. Capture follows the terminal
+rules: the hook reads the environment for a new record or `session-start` and
+otherwise carries the stored `launch` forward unchanged, so a later event from
+another environment cannot relabel a session. Launch capture starts no subprocess and
+reads no file.
+
+Readers treat the key as optional. `schema_version` stays 1, and a record
+whose `launch` is not a nonempty object with only those two keys and matching
+values keeps everything except `launch`. `FleetSession.launch_id` and
+`profile_id` are empty for records without it, and the MCP session tools show
+both fields.
+
+Producers inherit the values from the agent: Claude Code and Pi pass their
+environment to hook subprocesses (the Pi bridge spawns the hook with
+`process.env`), and so does Codex when run with `--no-daemon`. Under the
+shared Codex app-server daemon a later launch's hooks see the first launch's
+environment, so a Codex record may lack `launch` or carry another launch's
+values; see [harness-facts.md](work/harness-facts.md). Since the variables
+also leak to processes the agent starts, never treat `launch_id` alone as
+proof of a pane.
+
 ## Storage, privacy and fail-open behavior
 
 All writes go through [discovery.py](../src/tongs_agents/discovery.py) into
