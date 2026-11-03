@@ -368,6 +368,12 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
 
     def _run_resume(self, session_id: str, checked: ResumeCheck) -> None:
         try:
+            # The confirmation dialog may have been open for a while: another
+            # terminal could have resumed the same session in this workspace.
+            again = check_resume(self.command_context, session_id)
+            if again.refusal is not None:
+                self.call_from_thread(self._resume_failed, session_id, again.refusal)
+                return
             notices = start_resume(self.command_context, checked.plan)
         except CommandError as error:
             self.call_from_thread(self._resume_failed, session_id, str(error))

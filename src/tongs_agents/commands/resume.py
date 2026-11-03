@@ -596,11 +596,14 @@ def warning_text(session: Resumable, live: LiveProcess) -> str:
 
 def here_refusal(session: Resumable, live: LiveProcess) -> str:
     """Why a session already running in this workspace is not resumed again."""
-    return (
+    text = (
         f"session {session.short_id} already runs in this workspace {_as_pid(live)}; "
         "show its pane instead (select its row in the sidebar, or run "
         f"'tongs-agents focus {session.session_id}')"
     )
+    if live.pid is None:
+        text += f"; if that pane failed to start, retry in {PENDING_LAUNCH_SECONDS} seconds"
+    return text
 
 
 def _workspace_here(args, settings) -> tuple[str | None, str | None]:
