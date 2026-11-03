@@ -26,7 +26,7 @@ and checks:
 - with ``--approval-host`` (M7-C, #37), access requests round-trip through
   the sidebar: a fetch of that host is denied, its drafted rule shows as a
   NEEDS-YOU row in a headless sidebar, the validator presses ``a``, ``a``
-  and ``y`` there (the maintainer's run standing in for the maintainer), and
+  and the Yes button there (the maintainer's run standing in for the maintainer), and
   the retry passes once the approved rule hot-reloads. Then a fetch of
   ``--reject-host`` is denied, rejected in the sidebar (``a``, ``d``, a
   reason) and stays denied. Without it these checks are not applicable.
@@ -67,8 +67,7 @@ from tongs_agents.profiles import parse_profile
 from tongs_agents.sandbox import approvals, bridge, launcher
 from tongs_agents.sandbox.openshell import OpenShell, OpenShellError, flavour
 from tongs_agents.sessions_feed import SessionFeed
-from tongs_agents.widgets.approvals import ApprovalScreen, ReasonScreen
-from tongs_agents.widgets.chat_panel import ConfirmScreen
+from tongs_agents.widgets.approvals import ApprovalScreen, ApproveScreen, ReasonScreen
 
 STATUS_TARGET_SECONDS = 4.0
 WAIT_SECONDS = 30.0
@@ -226,8 +225,8 @@ async def drive_sidebar(evidence: dict, client: OpenShell, name: str, launch_id:
                 check(evidence, label, None, detail="no request to decide")
             return
         await pilot.press("a")
-        await _until(pilot, lambda: isinstance(app.screen, ConfirmScreen))
-        await pilot.press("y")
+        await _until(pilot, lambda: isinstance(app.screen, ApproveScreen))
+        await pilot.click("#approve-yes")
         approved = await _until(pilot, lambda: _decided(client, name, "approved", approve_host))
         retry = None
         if approved:

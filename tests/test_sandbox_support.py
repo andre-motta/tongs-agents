@@ -60,7 +60,7 @@ def fake(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_OPENSHELL_HOME", str(home))
     monkeypatch.setenv("PATH", f"{FAKE_DIR}{os.pathsep}{os.environ.get('PATH', '')}")
     for key in ("FAKE_OPENSHELL_PHASES", "FAKE_OPENSHELL_FAIL", "FAKE_OPENSHELL_VERSION",
-                "FAKE_OPENSHELL_RUN_TTY", "OPENSHELL_GATEWAY"):
+                "FAKE_OPENSHELL_RUN_TTY", "FAKE_OPENSHELL_LIFECYCLE_PHASE", "OPENSHELL_GATEWAY"):
         monkeypatch.delenv(key, raising=False)
     return Fake(home)
 

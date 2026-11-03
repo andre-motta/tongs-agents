@@ -11,6 +11,7 @@ import builtins
 import dataclasses
 import io
 import json
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -42,8 +43,12 @@ from tongs_agents.sandbox.openshell import OpenShell, OpenShellError
 from tongs_agents.sessions_feed import SessionFeed
 from tongs_agents.widgets import agents_panel
 from tongs_agents.widgets import approvals as approval_widgets
-from tongs_agents.widgets.approvals import ApprovalFeed, ApprovalScreen, ReasonScreen
-from tongs_agents.widgets.chat_panel import ConfirmScreen
+from tongs_agents.widgets.approvals import (
+    ApprovalFeed,
+    ApprovalScreen,
+    ApproveScreen,
+    ReasonScreen,
+)
 
 RULES = Path(__file__).parent / "fixtures" / "openshell_rules"
 SRC = Path(__file__).resolve().parents[1] / "src" / "tongs_agents"
@@ -454,8 +459,8 @@ async def test_approve_needs_the_screen_and_a_second_yes(fake, quiet_desktop):
         assert "Security: Port 5432" in detail and "Prover: no new reach" in detail
         await pilot.press("a")
         await _settle(app, pilot)
-        assert isinstance(app.screen, ConfirmScreen)
-        assert "api.example.test:443" in app.screen.message
+        assert isinstance(app.screen, ApproveScreen)
+        assert "api.example.test:443" in str(app.screen.query_one("#approve-text").render())
         await pilot.press("n")
         await _settle(app, pilot)
         assert not [call for call in rule_calls(fake) if call[1] != "get"]
@@ -463,12 +468,159 @@ async def test_approve_needs_the_screen_and_a_second_yes(fake, quiet_desktop):
         await _settle(app, pilot)
         await pilot.press("a")
         await _settle(app, pilot)
-        await pilot.press("y")
+        await pilot.press("y", "enter", "space")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ApproveScreen)
+        assert not [call for call in rule_calls(fake) if call[1] != "get"]
+        await pilot.click("#approve-yes")
         await _settle(app, pilot)
         assert [call for call in rule_calls(fake) if call[1] != "get"] == [
             ["rule", "approve", SANDBOX, "--chunk-id", chunk]]
         await _poll(app, pilot)
         assert attention_state(_boxed_row(app)) is not Attention.NEEDS_YOU
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_long_approval_keeps_security_lines_and_buttons_on_a_short_terminal(
+        fake, quiet_desktop):
+    feed = _sidebar_state(fake)
+    chunk = propose(fake, rationale="Needed to fetch release notes. " * 40,
+                    security_notes="Destination appears internal.",
+                    validation_result="credential reach expansion")
+    app = _app(feed)
+    async with app.run_test(size=(80, 20)) as pilot:
+        await _poll(app, pilot)
+        app.agents_panel.table.focus()
+        await pilot.press("a")
+        await _settle(app, pilot)
+        await pilot.press("a")
+        await _settle(app, pilot)
+        screen = app.screen
+        assert isinstance(screen, ApproveScreen)
+        body = screen.query_one("#approve-body")
+        text = str(screen.query_one("#approve-text").render())
+        lines = text.split("\n")
+        assert lines[0].startswith("Security: Destination appears internal.")
+        assert lines[1].startswith("Prover: credential reach expansion")
+        assert "Endpoints: api.example.test:443" in text and f"Chunk: {chunk}" in text
+        assert body.max_scroll_y > 0 and body.scroll_y == 0
+        assert body.region.height >= 2
+        for button in ("#approve-yes", "#approve-no"):
+            region = screen.query_one(button).region
+            assert region.height > 0 and screen.region.contains_region(region), button
+        shown = app.export_screenshot()
+        assert "Security:" in shown and "Prover:" in shown and "Yes," in shown
+        await pilot.press("y", "enter", "space", "Y")
+        await _settle(app, pilot)
+        assert app.screen is screen
+        assert not [call for call in rule_calls(fake) if call[1] != "get"]
+        await pilot.click("#approve-yes")
+        await _settle(app, pilot)
+        assert [call for call in rule_calls(fake) if call[1] != "get"] == [
+            ["rule", "approve", SANDBOX, "--chunk-id", chunk]]
+
+
+async def _until(pilot, condition, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        assert time.monotonic() < deadline, "condition not reached"
+        await pilot.pause(0.01)
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_slow_poll_never_overlaps_and_runs_again_after(fake, quiet_desktop,
+                                                               monkeypatch):
+    gate = threading.Event()
+    calls, active, peak = [], [0], [0]
+    key = (None, SANDBOX)
+
+    def slow(targets, client_for=None):
+        active[0] += 1
+        peak[0] = max(peak[0], active[0])
+        calls.append(set(targets))
+        gate.wait(10)
+        active[0] -= 1
+        return {key: RuleListing(SANDBOX, None, version=len(calls))}
+
+    app = _app(_sidebar_state(fake))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.agents_panel.poll()
+        await _settle(app, pilot)
+        monkeypatch.setattr(approval_widgets.approvals, "poll", slow)
+        app.poll_approvals()
+        await _until(pilot, lambda: len(calls) == 1)
+        app.poll_approvals()
+        app.poll_approvals()
+        await pilot.pause(0.05)
+        assert len(calls) == 1 and app.approval_polling and app.approval_poll_again
+        gate.set()
+        await _until(pilot, lambda: not app.approval_polling and len(calls) == 2)
+        await _settle(app, pilot)
+        assert len(calls) == 2 and peak[0] == 1
+        assert calls[0] == {key}
+        assert app.approval_listings[key].version == 2
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_cancelled_poll_never_overwrites_newer_listings(fake, quiet_desktop,
+                                                                monkeypatch):
+    gate, started, finished = threading.Event(), threading.Event(), threading.Event()
+    calls = []
+    key = (None, SANDBOX)
+    newer = {key: RuleListing(SANDBOX, None, version=2)}
+
+    def slow(targets, client_for=None):
+        calls.append(targets)
+        started.set()
+        gate.wait(10)
+        finished.set()
+        return {key: RuleListing(SANDBOX, None, version=1)}
+
+    app = _app(_sidebar_state(fake))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.agents_panel.poll()
+        await _settle(app, pilot)
+        monkeypatch.setattr(approval_widgets.approvals, "poll", slow)
+        app.poll_approvals()
+        await _until(pilot, started.is_set)
+        app.workers.cancel_group(app, "approvals")
+        app.approval_listings = newer
+        app.poll_approvals()
+        assert app.approval_polling and app.approval_poll_again and len(calls) == 1
+        gate.set()
+        await _until(pilot, lambda: finished.is_set() and not app.approval_polling)
+        await pilot.pause(0.05)
+        assert app.approval_listings is newer and len(calls) == 1
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_poll_cancelled_before_its_thread_starts_never_blocks_the_next(
+        fake, quiet_desktop, monkeypatch):
+    calls = []
+    key = (None, SANDBOX)
+
+    def quick(targets, client_for=None):
+        calls.append(targets)
+        return {key: RuleListing(SANDBOX, None, version=len(calls))}
+
+    app = _app(_sidebar_state(fake))
+    async with app.run_test(size=(100, 30)) as pilot:
+        app.agents_panel.poll()
+        await _settle(app, pilot)
+        monkeypatch.setattr(approval_widgets.approvals, "poll", quick)
+        app.poll_approvals()
+        abandoned = app.approval_run
+        app.workers.cancel_group(app, "approvals")
+        app.poll_approvals()
+        assert app.approval_run is not abandoned
+        await _until(pilot, lambda: app.approval_run.done.is_set())
+        await pilot.pause(0.05)
+        assert len(calls) == 1 and not app.approval_polling
+        assert app.approval_listings[key].version == 1
 
 
 @posix_only

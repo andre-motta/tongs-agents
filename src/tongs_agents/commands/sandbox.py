@@ -25,25 +25,30 @@ sandbox is refused by name and skipped by ``list`` and ``prune``.
   and a yes or ``--yes``. Nothing here approves all rules or changes the
   approval mode.
 
+- ``setup`` (#38) checks the host, builds a policy from network presets for
+  review, optionally probes the image in a throwaway labelled sandbox (only
+  after the policy was shown) and prints the commands left to run and a
+  profile snippet. On a terminal it runs the Textual wizard
+  (``views.sandbox_wizard``); ``--print`` or no terminal prints instead. It
+  never writes the tongs-agents config file; ``--write-policy`` writes the
+  reviewed policy to a new file only.
+
 tongs-agents never installs OpenShell, starts gateways or edits OpenShell
-configuration (row 18); ``doctor`` only reports.
+configuration (row 18); ``doctor`` and ``setup`` only report.
 """
 
 from __future__ import annotations
 
 import argparse
-import ctypes
 import difflib
 import json
 import os
-import platform
 import posixpath
 import re
 import shutil
 import stat
 import sys
 import tempfile
-from collections.abc import Iterable
 from pathlib import Path
 
 from tongs_agents.commands.doctor import Check
@@ -55,6 +60,7 @@ from tongs_agents.profiles import (
     load_profiles,
 )
 from tongs_agents.sandbox import approvals, bridge, state
+from tongs_agents.sandbox import setup as sandbox_setup
 from tongs_agents.sandbox.launcher import READY_PHASE, sandbox_name
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
@@ -62,33 +68,31 @@ from tongs_agents.sandbox.openshell import (
     OpenShell,
     OpenShellError,
     SandboxInfo,
-    flavour,
-    parse_version,
     run_bounded,
-    version_problems,
 )
+from tongs_agents.sandbox.setup import (
+    PRESETS,
+    SETUP_HARNESSES,
+    SetupError,
+    landlock_abi,
+)
+from tongs_agents.views.sandbox_wizard import SandboxWizardApp
 
 NAME = "sandbox"
-HELP = "Manage tongs-agents' OpenShell sandboxes (list, status, pull, policy, rules)"
+HELP = "Set up and manage tongs-agents' OpenShell sandboxes (setup, list, pull, policy, rules)"
 
-PROVER = "openshell-prover"
-SSH = "ssh"
+PROVER = sandbox_setup.PROVER
 PROVER_TIMEOUT = 120.0
 MAX_POLICY_BYTES = 1024 * 1024
 MAX_LOG_LINES = 10000
-LANDLOCK_MIN_ABI = 3
+# Unvalidated (row 21): an upstream main checked for M7-B has no ``sandbox
+# start`` or ``stop`` and its SandboxPhase (proto/openshell.proto) has only
+# Unknown, Provisioning, Ready, Error and Deleting. These shapes are kept
+# pending the maintainer's live run; start and stop report success only for
+# a phase listed here (or Ready), never for one they do not know.
 STOPPED_PHASES = frozenset({"Stopped", "Suspending", "Suspended", "Completed"})
+STARTING_PHASES = frozenset({"Provisioning"})
 LOG_SOURCES = ("all", "gateway", "sandbox")
-# landlock_create_ruleset(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION) returns the ABI.
-LANDLOCK_SYSCALL = {"x86_64": 444, "aarch64": 444, "arm64": 444}
-LANDLOCK_CREATE_RULESET_VERSION = 1
-TELEMETRY_NOTE = (
-    "Upstream OpenShell gateways send anonymous telemetry by default; midstream "
-    "(-rhaiv) images build it out. tongs-agents adds none and never changes gateway config"
-)
-TELEMETRY_OPT_OUT = (
-    "To opt out, set OPENSHELL_TELEMETRY_ENABLED=false in the gateway's own environment"
-)
 ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 
@@ -211,6 +215,38 @@ def add_arguments(parser):
     named(advisor)
 
     action("sync", "Import hook events from sandboxed agents once (headless use)")
+
+    wizard = action(
+        "setup",
+        "Check the host, review a generated policy, print commands and a profile snippet "
+        "(never edits config)",
+    )
+    wizard.add_argument("--harness", choices=SETUP_HARNESSES, default="claude")
+    wizard.add_argument("--folder", type=Path, default=None,
+                        help="Project folder to upload (default: the current directory)")
+    wizard.add_argument("--profile", dest="profile_name", default=None, metavar="NAME",
+                        help="Profile name for the snippet (default: <harness>-boxed)")
+    wizard.add_argument("--image", default=None, help="Sandbox image (--from)")
+    wizard.add_argument("--network", dest="presets", action="append", default=None,
+                        choices=[*PRESETS, "none"], metavar="PRESET",
+                        help=f"Network preset, repeatable: {', '.join(PRESETS)} or none "
+                             "(default: the harness's model API)")
+    wizard.add_argument("--provider", dest="providers", action="append", default=None,
+                        metavar="NAME",
+                        help="OpenShell provider name, repeatable (default: by preset)")
+    wizard.add_argument("--chat", action="store_true",
+                        help="Check that the image has tongs-agents for chat")
+    wizard.add_argument("--policy-file", type=Path, default=None, metavar="FILE",
+                        help="Where the policy goes "
+                             "(default: <config dir>/policies/<profile>.yaml)")
+    wizard.add_argument("--write-policy", action="store_true",
+                        help="Write the reviewed policy to the policy file (never overwrites)")
+    wizard.add_argument("--probe", action="store_true",
+                        help="Probe the image in a throwaway sandbox after showing the policy")
+    wizard.add_argument("--yes", action="store_true",
+                        help="Probe without asking (off a terminal)")
+    wizard.add_argument("--print", dest="print_only", action="store_true",
+                        help="Print instead of running the interactive wizard")
 
     rules = action("rules", "Review and decide a sandbox's pending access requests")
     rule_actions = rules.add_subparsers(dest="rules_action", metavar="ACTION")
@@ -431,8 +467,31 @@ def do_start(args) -> int:
         client.start(args.name)
     except OpenShellError as error:
         raise SandboxCommandError(str(error)) from None
-    print(f"Started sandbox {args.name}.")
+    phase = _phase_after(client, args.name, "start")
+    if phase == READY_PHASE:
+        print(f"Started sandbox {args.name}.")
+    elif phase in STARTING_PHASES:
+        print(f"Starting sandbox {args.name} ({phase}); "
+              f"check with tongs-agents sandbox status {args.name}.")
+    else:
+        raise SandboxCommandError(_unexpected_phase(args.name, "start", phase))
     return 0
+
+
+def _phase_after(client: OpenShell, name: str, verb: str) -> str | None:
+    """The phase once ``openshell sandbox <verb>`` returned; None when the sandbox is gone."""
+    try:
+        info = owned(client, name)
+    except SandboxCommandError as error:
+        raise SandboxCommandError(f"openshell sandbox {verb} {name} returned, but reading "
+                                  f"the sandbox again failed: {error}") from None
+    return None if info is None else info.phase
+
+
+def _unexpected_phase(name: str, verb: str, phase: str | None) -> str:
+    shown = "it no longer exists" if phase is None else f"it reports phase {clean(phase)!r}"
+    return (f"openshell sandbox {verb} {name} returned, but {shown}; not reporting "
+            f"success (check with tongs-agents sandbox status {name})")
 
 
 def _refuse_in_use(name: str, force: bool, verb: str) -> None:
@@ -455,7 +514,10 @@ def do_stop(args) -> int:
         client.stop(args.name)
     except OpenShellError as error:
         raise SandboxCommandError(str(error)) from None
-    print(f"Stopped sandbox {args.name}.")
+    phase = _phase_after(client, args.name, "stop")
+    if phase not in STOPPED_PHASES:
+        raise SandboxCommandError(_unexpected_phase(args.name, "stop", phase))
+    print(f"Stopped sandbox {args.name} ({phase}).")
     return 0
 
 
@@ -794,6 +856,99 @@ def do_rules(args) -> int:
     return 0
 
 
+def _setup_plan(args) -> sandbox_setup.Plan:
+    """The plan from the setup options, not validated yet."""
+    plan = sandbox_setup.default_plan(args.harness, args.folder, args.profile_name)
+    presets = plan.presets
+    if args.presets is not None:
+        presets = tuple(key for key in args.presets if key != "none")
+    providers = (tuple(args.providers) if args.providers is not None
+                 else sandbox_setup.suggested_providers(args.harness, presets))
+    return sandbox_setup.replace(
+        plan, presets=presets, providers=providers, image=args.image,
+        gateway=args.gateway, chat=args.chat, policy_path=args.policy_file,
+    )
+
+
+def _inspect(gateway: str | None) -> sandbox_setup.HostReport:
+    return sandbox_setup.inspect_host(gateway, landlock=landlock_abi)
+
+
+def _print_checks(report: sandbox_setup.HostReport) -> None:
+    print("Host:")
+    for check in report.checks:
+        print(f"  {check.level.upper():5} {check.name}: {clean(check.message)}")
+        if check.remediation and check.level != "ok":
+            print(f"        {clean(check.remediation)}")
+    if report.providers is not None:
+        print(f"  Providers on the gateway: {', '.join(sorted(report.providers)) or 'none'}")
+    print()
+
+
+def _setup_print(args) -> int:
+    try:
+        plan = _setup_plan(args).check()
+        reviewed = sandbox_setup.review(plan)
+    except SetupError as error:
+        raise SandboxCommandError(str(error)) from None
+    report = _inspect(plan.gateway)
+    _print_checks(report)
+    print("Generated policy (review it before any sandbox starts):")
+    print()
+    sys.stdout.write(reviewed.text)
+    print()
+    written = False
+    if args.write_policy:
+        try:
+            path = sandbox_setup.write_policy(reviewed, plan.resolved_policy_path())
+        except SetupError as error:
+            raise SandboxCommandError(str(error)) from None
+        print(f"Saved the policy as {path}.")
+        print()
+        written = True
+    probed_ok = True
+    if args.probe:
+        probed_ok = _setup_probe(plan, reviewed, report, args.yes)
+    sys.stdout.write(clean(sandbox_setup.finish(plan, report, reviewed,
+                                                policy_written=written).text()))
+    return 0 if report.ready and probed_ok else 1
+
+
+def _setup_probe(plan, reviewed, report, confirmed: bool) -> bool:
+    if not report.ready:
+        print("Not probing the image: the OpenShell CLI or gateway is not ready.")
+        print()
+        return False
+    if not confirmed and not _confirm(
+        "Start a throwaway sandbox with the policy above to probe the image? [y/N] "
+    ):
+        print("Not probing the image; pass --yes to probe off a terminal.")
+        print()
+        return False
+    try:
+        result = sandbox_setup.probe_image(plan, reviewed, out=sys.stderr)
+    except SetupError as error:
+        raise SandboxCommandError(str(error)) from None
+    print(f"Image probe (sandbox {result.sandbox}, deleted afterwards):")
+    for line in result.lines():
+        print(f"  {clean(line)}")
+    print()
+    return result.ok
+
+
+def do_setup(args) -> int:
+    interactive = (not (args.print_only or args.probe or args.write_policy)
+                   and sys.stdin.isatty() and sys.stdout.isatty())
+    if not interactive:
+        return _setup_print(args)
+    text = SandboxWizardApp(_setup_plan(args), inspect=_inspect).run()
+    if not text:
+        print("Sandbox setup cancelled; nothing was changed.")
+        return 1
+    sys.stdout.write(clean(text))
+    return 0
+
+
 ACTIONS = {
     None: do_list,
     "list": do_list,
@@ -808,6 +963,7 @@ ACTIONS = {
     "advisor": do_advisor,
     "sync": do_sync,
     "rules": do_rules,
+    "setup": do_setup,
 }
 
 
@@ -820,62 +976,7 @@ def run(args) -> int:
         return 1
 
 
-# Doctor (M7-B doctor lines; rows 2, 17, 18, 19)
-
-
-def landlock_abi() -> int | None:
-    """The kernel's Landlock ABI version, or None when unknown or unsupported."""
-    number = LANDLOCK_SYSCALL.get(platform.machine())
-    if sys.platform != "linux" or number is None:
-        return None
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        value = libc.syscall(ctypes.c_long(number), None, ctypes.c_size_t(0),
-                             ctypes.c_uint32(LANDLOCK_CREATE_RULESET_VERSION))
-    except (OSError, AttributeError, TypeError, ValueError):
-        return None
-    return value if isinstance(value, int) and value > 0 else None
-
-
-def _version_checks(client: OpenShell) -> list[Check]:
-    try:
-        text = client.version_text()
-    except OpenShellError as error:
-        return [Check("openshell", "error", f"openshell --version failed: {error}")]
-    version = parse_version(text)
-    error, warnings = version_problems(version)
-    if error:
-        return [Check("openshell", "error", error,
-                      "Install a supported OpenShell CLI yourself (see docs/sandbox.md)")]
-    shown = ".".join(map(str, version))
-    checks = [Check("openshell", "ok",
-                    f"openshell {shown} ({flavour(text)}) at {client.executable}")]
-    checks += [Check("openshell", "warn", warning, "See docs/sandbox.md for supported versions")
-               for warning in warnings]
-    return checks
-
-
-def _gateway_checks(client_for, gateways: Iterable[str | None]) -> list[Check]:
-    checks = []
-    for gateway in gateways:
-        label = gateway or "default"
-        try:
-            result = client_for(gateway).status()
-        except OpenShellError as error:
-            result = None
-            detail = str(error)
-        else:
-            detail = result.error_text()
-        if result is not None and result.ok:
-            checks.append(Check("openshell-gateway", "ok", f"Gateway {label} is reachable"))
-            continue
-        checks.append(Check(
-            "openshell-gateway", "warn",
-            f"Gateway {label} is not reachable: {clean(detail)}",
-            "Start or log in to the gateway yourself (`openshell status`); "
-            "tongs-agents never starts gateways",
-        ))
-    return checks
+# Doctor (M7-B doctor lines; rows 2, 17, 18, 19; shared with the setup wizard)
 
 
 def doctor_checks():
@@ -896,38 +997,18 @@ def doctor_checks():
             "Install the OpenShell CLI yourself (see docs/sandbox.md); "
             "tongs-agents never installs it",
         )]
-    client = OpenShell(executable)
-    checks = _version_checks(client)
-    if profiles:
+    checks, _text = sandbox_setup.version_checks(OpenShell(executable),
+                                                 required=bool(profiles))
+    if profiles and not any(check.level == "error" for check in checks):
         gateways = list(dict.fromkeys(profile.sandbox.gateway for profile in profiles.values()))
-        checks += _gateway_checks(lambda gateway: OpenShell(executable, gateway=gateway),
-                                  gateways)
-    if shutil.which(SSH):
-        checks.append(Check("openssh", "ok", "OpenSSH client found (uploads and pull use it)"))
-    else:
-        checks.append(Check(
-            "openssh", "warn", "No ssh client on PATH; openshell uploads and downloads need it",
-            "Install the OpenSSH client",
-        ))
+        checks += [sandbox_setup.gateway_check(OpenShell(executable, gateway=gateway),
+                                               gateway or "default")
+                   for gateway in gateways]
+    checks.append(sandbox_setup.ssh_check())
     if sys.platform == "linux":
-        abi = landlock_abi()
-        if abi is None:
-            checks.append(Check(
-                "landlock", "warn", "Cannot read the Landlock ABI; OpenShell sandboxes need 3+",
-                "Check that the kernel enables Landlock (lsm=...,landlock)",
-            ))
-        elif abi < LANDLOCK_MIN_ABI:
-            checks.append(Check(
-                "landlock", "warn",
-                f"Landlock ABI {abi} is older than the {LANDLOCK_MIN_ABI} OpenShell needs",
-                "Use a newer kernel for the gateway host",
-            ))
-        else:
-            checks.append(Check("landlock", "ok", f"Landlock ABI {abi}"))
-    if shutil.which(PROVER) is None:
-        checks.append(Check(
-            "openshell-prover", "info",
-            f"{PROVER} not on PATH; `tongs-agents sandbox policy check` shows diffs unproved",
-        ))
-    checks.append(Check("openshell-telemetry", "info", TELEMETRY_NOTE, TELEMETRY_OPT_OUT))
+        checks.append(sandbox_setup.landlock_check(landlock_abi()))
+    prover = sandbox_setup.prover_check()
+    if prover is not None:
+        checks.append(prover)
+    checks.append(sandbox_setup.telemetry_check())
     return checks

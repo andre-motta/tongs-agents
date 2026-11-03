@@ -5,7 +5,7 @@ A profile with a `sandbox` table runs its agent inside an
 own Zellij pane, with its status in the sidebar like any other agent. The
 design and its approval record are in
 [openshell-sandbox.md](work/openshell-sandbox.md) (#34); this page describes
-what M7-A (#35), M7-B (#36) and M7-C (#37) implement.
+what M7-A (#35), M7-B (#36), M7-C (#37) and M7-D (#38) implement.
 
 Status: **instrumented only.** Every OpenShell call has been exercised against
 the fake CLI in `tests/fixtures/fake_openshell/`, which reproduces the argument
@@ -15,6 +15,9 @@ rootless Podman gateway with upstream v0.1.6 and a midstream build is pending
 the maintainer's run (row 21, see [Live validation](#live-validation)).
 
 ## Before you start
+
+`tongs-agents sandbox setup` walks through everything below and prints what
+is left to do; see [Setup wizard](#setup-wizard).
 
 tongs-agents never installs OpenShell, starts, stops or configures a gateway,
 or changes system services. You need:
@@ -30,6 +33,100 @@ or changes system services. You need:
   through `--env`, argv or an upload, so a profile's `env` table is refused on
   a sandboxed profile. A Claude subscription login inside a sandbox is not
   supported in v0.10.0; use an API key provider.
+
+## Setup wizard
+
+```console
+tongs-agents sandbox setup [-g GATEWAY] [--harness claude|codex|pi] [--folder DIR]
+    [--profile NAME] [--image IMAGE] [--network PRESET]... [--provider NAME]...
+    [--chat] [--policy-file FILE] [--write-policy] [--probe [--yes]] [--print]
+```
+
+On a terminal it opens a Textual wizard; with `--print`, `--probe`,
+`--write-policy` or without a terminal it prints the same steps. Either way
+it never writes the tongs-agents config file, never installs anything, and
+never starts, stops or configures a gateway (row 18): it prints commands for
+you to run.
+
+1. **Host.** The `openshell` CLI, its version and flavour (upstream, or
+   midstream for `-rhaiv` builds), the gateway (`openshell [-g G] status -o
+   json`), which local gateway drivers the host could use (Podman, Docker or
+   `/dev/kvm`, a hint only), Landlock, OpenSSH, the optional prover and the
+   telemetry disclosure, the same lines as `doctor`. When the gateway answers,
+   `openshell provider list -o json` shows which providers exist (names and
+   types only; OpenShell prints key names, never values). A missing or too old
+   CLI, or a gateway that does not answer, comes with the commands to check or
+   start it yourself. The gateway field must be a gateway name (letters,
+   digits, `.`, `_` and `-`, at most 64); anything else is shown as a field
+   error and no `openshell` command runs.
+2. **Folder and harness.** The project folder that is uploaded, the harness
+   (`claude`, `codex` or `pi`), the profile name (default `<harness>-boxed`)
+   and an optional image.
+3. **Network and credentials.** Network presets for the generated policy;
+   everything else stays denied and goes through
+   [access requests](#access-requests). The harness's model API is checked
+   by default. Credentials are OpenShell provider names (row 13), suggested
+   per preset:
+
+   | Preset | Allows | Provider (type) |
+   | --- | --- | --- |
+   | `anthropic` | `api.anthropic.com` (REST, read-write) for `claude` | `claude-code` (`claude-code`) |
+   | `openai` | `api.openai.com`, `auth.openai.com`, `chatgpt.com` for `codex` | `codex` (`codex`) |
+   | `openrouter` | `openrouter.ai` for `node` (Pi) | `openrouter` (`generic`, `OPENROUTER_API_KEY`) |
+   | `github` | `api.github.com` read-only, `github.com` clone and fetch, no push, for `git` and `gh` | `github` (`github`) |
+   | `pypi` | `pypi.org`, `files.pythonhosted.org` for Python, pip and uv | none |
+   | `npm` | `registry.npmjs.org` for node and npm | none |
+
+   Only `anthropic`, `openai` and `github` come from upstream provider
+   profiles (`claude-code`, `codex` and `github` in `providers/*.yaml` of the
+   OpenShell repository): a subset of their endpoints, with their binary
+   paths. `pypi` takes its first two hosts from upstream's `pypi` profile but
+   uses its own binary paths; `openrouter` and `npm` are tongs-agents' own.
+   Every provider type is one upstream's CLI accepts (`normalize_provider_type`
+   in `crates/openshell-providers/src/lib.rs`). OpenShell has no `openrouter`
+   provider type, so the OpenRouter credential is a `generic` provider holding
+   `OPENROUTER_API_KEY`, the variable Pi reads; a gateway with its own
+   `openrouter` provider profile can use that instead. An image that installs
+   a harness elsewhere needs its own policy. **Chat** only adds `tongs-agents` to
+   the image probe; chat is still granted per pane from the sidebar.
+4. **Review.** The generated policy (schema version 1: OpenShell's default
+   filesystem, Landlock `best_effort` and `sandbox` user, plus one
+   `network_policies` entry per preset) is shown in full. Only from here can
+   you save it (`Save policy`, or `--write-policy`; a new file with mode
+   0600, never over an existing one, by default
+   `<config dir>/policies/<profile>.yaml`) or probe the image. The probe
+   starts one throwaway sandbox from the image with exactly the reviewed
+   policy, labelled `tongs-agents.launch=<random id>`, with no provider and no
+   upload, waits for Ready, runs `sh -c` with `command -v` through `sandbox
+   exec --no-tty --no-login-shell` for `sh`, `bash`, `tar`, `cat`, `mv`,
+   `head`, `base64`, the harness binary and, with chat, `tongs-agents`, then
+   deletes the sandbox. While the probe runs the wizard names its sandbox and
+   cannot be cancelled or finished (`ctrl+q` and Cancel say why and print the
+   delete command), so no create is left running unseen. If the delete
+   fails the wizard says so and prints
+   `tongs-agents sandbox delete [--gateway <name>] <sandbox>` (with the
+   wizard's gateway when one is set), or `prune` removes it later. Off a
+   terminal `--probe` needs `--yes`. Changing the presets or the profile name after the
+   review asks for a new one before anything is saved or probed.
+5. **Commands and profile.** What is left for you: the CLI or gateway
+   commands, `openshell provider create --name <name> --type <type>
+   --from-existing` for each provider the gateway lacks, or `--credential
+   <VARIABLE>` instead of `--from-existing` for a `generic` one such as
+   `openrouter` (either way the CLI reads the key from your environment;
+   nothing passes through tongs-agents), saving the
+   policy, the `[profiles.<name>]` snippet to add to the config file yourself
+   (it is checked with the profile loader first), and the spawn command,
+   `tongs-agents workspace --profile <name>`. The wizard prints this text
+   again when it exits.
+
+Exit status 0 means the CLI and gateway are ready (and a requested probe found
+everything); 1 otherwise, or when the wizard was cancelled.
+
+`provider list -o json` and the probe are instrumented against the fake CLI
+only; their shapes follow upstream source and are unvalidated against a live
+gateway until the maintainer's run (row 21). The printed `provider create`
+commands were checked against upstream's CLI definition (`ProviderCommands::Create`
+in `crates/openshell-cli/src/main.rs`) and provider list, not run.
 
 ## Profile keys
 
@@ -198,8 +295,8 @@ openshell's default.
 | --- | --- |
 | `sandbox list [--json]` (default) | `openshell sandbox list --limit 1000 -o json` on the default gateway and every profile gateway, filtered to labelled sandboxes, with whether an agent pane runs in each |
 | `sandbox status NAME [--json]` | `openshell sandbox get NAME -o json` |
-| `sandbox start NAME` | `openshell sandbox start NAME`, unless it is already Ready |
-| `sandbox stop NAME [--force]` | `openshell sandbox stop NAME`, unless it is already stopped |
+| `sandbox start NAME` | `openshell sandbox start NAME`, unless it is already Ready (unvalidated, see below) |
+| `sandbox stop NAME [--force]` | `openshell sandbox stop NAME`, unless it is already stopped (unvalidated, see below) |
 | `sandbox delete NAME... [--yes] [--force]` | `openshell sandbox delete NAME`; an absent sandbox is reported and skipped |
 | `sandbox prune [--all] [--yes]` | deletes labelled sandboxes whose profile is no longer configured (with `--all`, every labelled one); never one an agent pane runs in |
 | `sandbox pull NAME DEST [--path P] [--workdir W]` | `openshell sandbox download NAME <workdir>/<P> DEST` |
@@ -208,6 +305,7 @@ openshell's default.
 | `sandbox policy check [NAME] [--policy F] [--boundary F]`, alias `sandbox diff` | a diff, then `openshell-prover check F --boundary <active policy>` |
 | `sandbox advisor on\|off NAME` | `openshell settings set NAME --key agent_policy_proposals_enabled --value true\|false` |
 | `sandbox sync` | one bridge pass, like `python -m tongs_agents.sandbox sync` |
+| `sandbox setup [...]` | the [setup wizard](#setup-wizard): read-only checks, a policy to review, an optional image probe, printed commands and snippet |
 | `sandbox rules list NAME [--status pending\|approved\|rejected]` | `openshell rule get NAME --status pending`, every proposal in full |
 | `sandbox rules approve NAME CHUNK` | shows the proposal, asks at a terminal, then `openshell rule approve NAME --chunk-id CHUNK` |
 | `sandbox rules reject NAME CHUNK --reason R [--yes]` | shows the proposal, asks (or `--yes`), then `openshell rule reject NAME --chunk-id CHUNK --reason R` |
@@ -215,6 +313,16 @@ openshell's default.
 Lifecycle commands are idempotent: starting a Ready sandbox, stopping a
 stopped one (`Stopped`, `Suspending`, `Suspended`, `Completed`), deleting an
 absent one and pruning twice all succeed without calling OpenShell again.
+`start` and `stop` read the sandbox again afterwards and report success only
+for `Ready` (or `Provisioning`, reported as starting) and a stopped phase
+respectively; any other phase, or a sandbox that vanished, exits 1 with the
+phase it reports. **Unvalidated:** the design record lists `sandbox start`
+and `stop` from upstream source, but an upstream main checked for this
+change has neither subcommand, and its `SandboxPhase`
+(`proto/openshell.proto`) has only `Unknown`, `Provisioning`, `Ready`,
+`Error` and `Deleting`. The stopped phase names and both subcommands are
+kept unvalidated pending the maintainer's live run (row 21); on a CLI
+without them `start` and `stop` fail with OpenShell's error.
 `stop` and `delete` refuse a sandbox an agent pane is still running in (a
 recorded launch whose pane process is alive) unless `--force`. Deleting
 discards every file in the sandbox, so `delete` asks first, and off a
@@ -249,8 +357,11 @@ agent can write it.
 When a profile is sandboxed or `openshell` is on `PATH`, `tongs-agents doctor`
 adds:
 
-- `openshell`: the CLI's path, version and flavour (an error below 0.1.0 or
-  when a sandboxed profile has no CLI, a warning below 0.1.6 or above 0.1.x);
+- `openshell`: the CLI's path, version and flavour (an error below 0.1.0, for
+  an unreadable version or when a sandboxed profile has no CLI, a warning
+  below 0.1.6 or above 0.1.x). With no sandboxed profile an unusable
+  `openshell` on `PATH` is only a warning, since nothing needs it;
+  the gateway is asked only when the CLI is usable;
 - `openshell-gateway`: `openshell [-g G] status -o json` (5 second timeout)
   for each gateway a sandboxed profile uses, a warning when it fails.
   tongs-agents never starts or logs in to a gateway;
@@ -291,7 +402,10 @@ sidebar or with `tongs-agents sandbox rules`, one rule at a time.
 **Sidebar.** Every 5 seconds the sidebar runs
 `openshell [-g G] rule get <sandbox> --status pending` (with `NO_COLOR=1`, 15
 second timeout) for the sandboxes its listed rows run in, and nothing at all
-while no row is sandboxed. A row whose sandbox has pending rules reads as
+while no row is sandboxed. Only one poll runs at a time: while a slow or
+unreachable gateway holds one, later ticks wait and one more poll follows it,
+and a poll whose worker was cancelled is dropped, so older results never
+replace newer ones. A row whose sandbox has pending rules reads as
 waiting, so it counts as needing you, `n` jumps to it and the usual desktop
 notification fires; its detail says how many requests wait. Each new request
 also raises a notice in the sidebar naming the sandbox and endpoint, marked
@@ -301,8 +415,12 @@ when OpenShell attached security notes. Then:
   selected row's sandbox (or the first sandbox with requests), with each
   proposal's full text: rule, binary, confidence, rationale, `Security:`,
   `Prover:`, endpoints, binaries and hits;
-- `a` in that view asks **Approve this network access?** with the full text
-  again; only `y` there approves;
+- `a` in that view opens **Approve this network access?** with the full text
+  again, `Security:` and `Prover:` lines first, in a scrollable body whose
+  height is capped so the Yes and No buttons stay on screen at any terminal
+  size. Only the **Yes, approve** button approves (a click, or Tab to it and
+  Enter); no single key does, so a stray key never approves text still
+  scrolled out of view. `n` or Escape cancels;
 - `d` asks for a reason, which is required, and rejects.
 
 Before acting, tongs-agents reads the pending list again: a rule that is no
@@ -354,7 +472,7 @@ applicable (`passed: null`). With `--approval-host` (a host the sandbox
 policy denies), it also checks access requests end to end: a fetch of that
 host is denied, the drafted rule shows as a needs-you row in a headless
 sidebar, the validator approves it there with the same keys you would use
-(`a`, `a`, `y`), and the retry passes once the rule hot-reloads; then a fetch
+(`a`, `a`, then the Yes button), and the retry passes once the rule hot-reloads; then a fetch
 of `--reject-host` (default `example.net`) is denied, rejected there with a
 reason (`a`, `d`) and stays denied. This is the one place tongs-agents
 presses approve for you, and only in the throwaway validation sandbox you

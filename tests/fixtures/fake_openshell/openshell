@@ -15,7 +15,8 @@ the keys of ``sandbox_to_json``, and keeps its state under
 M7-B adds ``sandbox list -o json`` (an array of the ``get`` objects),
 ``sandbox get <name> --policy-only`` (the stored policy text: the
 ``--policy`` file given at create when it exists, else a default), ``sandbox start|stop``
-(phase Ready or Stopped), ``sandbox download`` (upstream
+(phase Ready or Stopped; an upstream main checked for M7-B has neither
+subcommand nor a Stopped phase, so these shapes are unvalidated), ``sandbox download`` (upstream
 ``sandbox_sync_down``: a directory's contents land in ``dest``, a file at
 ``dest`` or ``dest/<basename>`` when ``dest`` is a directory), ``policy get``,
 ``logs <name> -n N`` and a ``delete`` that prints upstream's messages.
@@ -29,6 +30,10 @@ verb fail loudly. Pending rules live in ``state.json`` under each sandbox's
 ``FAKE_OPENSHELL_RULES_TEXT`` names a file ``rule get`` prints instead (the
 text fixtures in tests/fixtures/openshell_rules).
 
+M7-D adds ``provider list -o json`` (``provider_to_json`` keys: id, name,
+type, credential key names, never values) from ``state.json["providers"]``,
+a ``{name: type}`` map tests fill; ``FAKE_OPENSHELL_FAIL=provider`` fails it.
+
 Uploads follow upstream ``sandbox_sync_up``: a directory lands at
 ``<dest>/<basename>`` (flat only for ``.``), so a nesting mistake shows up in
 ``fs/``.
@@ -37,7 +42,9 @@ Knobs: ``FAKE_OPENSHELL_VERSION`` (default ``0.1.6``),
 ``FAKE_OPENSHELL_PHASES`` (comma-separated phases returned by successive
 ``get`` calls after create, the last one sticks; default ``Ready``),
 ``FAKE_OPENSHELL_FAIL`` (comma-separated subcommands that fail; ``status``
-fails ``status -o json``, ``rule`` fails every ``rule`` verb),
+fails ``status -o json``, ``rule`` fails every ``rule`` verb, ``version``
+fails ``--version``), ``FAKE_OPENSHELL_LIFECYCLE_PHASE`` (the phase a
+``sandbox start`` or ``stop`` leaves instead of Ready or Stopped),
 ``FAKE_OPENSHELL_LOG_TEXT`` (printed by ``logs`` instead of numbered lines),
 ``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
 instead of printing them) and ``FAKE_OPENSHELL_NETWORK=1`` (an ``exec`` whose
@@ -410,7 +417,8 @@ def lifecycle(verb, args):
     sandbox = data["sandboxes"].get(name)
     if sandbox is None:
         fail('status: NotFound, message: "sandbox not found"')
-    sandbox["phases"] = ["Ready" if verb == "start" else "Stopped"]
+    phase = os.environ.get("FAKE_OPENSHELL_LIFECYCLE_PHASE")
+    sandbox["phases"] = [phase or ("Ready" if verb == "start" else "Stopped")]
     save(data)
     print(f"{'Started' if verb == 'start' else 'Stopped'} sandbox {name}")
 
@@ -468,6 +476,17 @@ def logs(args):
         print(f"2026-11-03T12:00:{index % 60:02d}Z INFO sandbox {args[0]} line {index}")
 
 
+def provider(args):
+    if failing("provider"):
+        fail("status: Unavailable, message: \"gateway unreachable\"")
+    if args != ["list", "-o", "json"]:
+        fail("the fake only supports provider list -o json", 2)
+    providers = load().get("providers", {})
+    print(json.dumps([{"id": uuid.uuid5(uuid.NAMESPACE_DNS, name).hex, "name": name,
+                       "workspace": "default", "type": kind, "credential_keys": ["API_KEY"]}
+                      for name, kind in sorted(providers.items())], indent=2))
+
+
 def main():
     args = sys.argv[1:]
     HOME.mkdir(parents=True, exist_ok=True)
@@ -475,6 +494,8 @@ def main():
         stream.write(json.dumps({"argv": args, "no_color": os.environ.get("NO_COLOR"),
                                  "cwd": os.getcwd()}) + "\n")
     if args in (["--version"], ["-V"]):
+        if failing("version"):
+            fail("version failed")
         print(f"openshell {os.environ.get('FAKE_OPENSHELL_VERSION', '0.1.6')}")
         return
     gateway = take(args, "-g") + take(args, "--gateway")
@@ -492,6 +513,8 @@ def main():
         return logs(args[1:])
     if args and args[0] == "rule":
         return rule(args[1:])
+    if args and args[0] == "provider":
+        return provider(args[1:])
     if not args or args[0] != "sandbox":
         fail(f"unsupported command {args!r}", 2)
     verb, rest = args[1], args[2:]
