@@ -417,12 +417,15 @@ def test_advisor_is_set_per_sandbox_never_global(fake, capsys, state_word, value
 
 
 def test_no_command_approves_rules_or_writes_global_settings():
-    for module in (sandbox_command, openshell):
+    # M7-C: `sandbox rules approve` is a CLI action name; the `openshell rule`
+    # argv lives only in sandbox/approvals.py (tests/test_sandbox_approvals.py).
+    for module, allowed in ((sandbox_command, {"approve"}), (openshell, set())):
         tree = ast.parse(Path(module.__file__).read_text())
         literals = {node.value for node in ast.walk(tree)
                     if isinstance(node, ast.Constant) and isinstance(node.value, str)}
-        assert not literals & {"approve", "approve-all", "rule", "--global",
-                               "--approval-mode", "proposal_approval_mode"}
+        forbidden = {"approve", "approve-all", "rule", "--global",
+                     "--approval-mode", "proposal_approval_mode"} - allowed
+        assert not literals & forbidden
 
 
 def test_missing_cli_is_a_clear_error(monkeypatch, tmp_path, capsys):

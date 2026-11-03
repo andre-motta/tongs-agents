@@ -17,8 +17,13 @@ sandbox is refused by name and skipped by ``list`` and ``prune``.
   policy and the sandbox's active one, then runs ``openshell-prover check``
   on it when the prover is installed (row 17; optional, never required).
 - ``advisor on|off`` sets ``agent_policy_proposals_enabled`` on one sandbox,
-  never ``--global`` (row 16). Approval stays manual (row 14): nothing here
-  approves rules or changes the approval mode.
+  never ``--global`` (row 16).
+- ``rules list|approve|reject`` (#37) shows a sandbox's pending access
+  requests through ``sandbox.approvals`` and decides one at a time. Approval
+  stays manual (row 14): ``approve`` prints the full proposal and needs a yes
+  typed at a terminal (there is no ``--yes``); ``reject`` needs ``--reason``
+  and a yes or ``--yes``. Nothing here approves all rules or changes the
+  approval mode.
 
 tongs-agents never installs OpenShell, starts gateways or edits OpenShell
 configuration (row 18); ``doctor`` only reports.
@@ -49,7 +54,7 @@ from tongs_agents.profiles import (
     ProfileError,
     load_profiles,
 )
-from tongs_agents.sandbox import bridge, state
+from tongs_agents.sandbox import approvals, bridge, state
 from tongs_agents.sandbox.launcher import READY_PHASE, sandbox_name
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
@@ -64,7 +69,7 @@ from tongs_agents.sandbox.openshell import (
 )
 
 NAME = "sandbox"
-HELP = "Manage tongs-agents' OpenShell sandboxes (list, status, pull, policy, prune)"
+HELP = "Manage tongs-agents' OpenShell sandboxes (list, status, pull, policy, rules)"
 
 PROVER = "openshell-prover"
 SSH = "ssh"
@@ -113,6 +118,13 @@ def _lines_arg(value: str) -> int:
     if not 1 <= lines <= MAX_LOG_LINES:
         raise argparse.ArgumentTypeError(f"must be between 1 and {MAX_LOG_LINES}")
     return lines
+
+
+def _chunk_arg(value: str) -> str:
+    try:
+        return approvals.check_chunk_id(value)
+    except approvals.ApprovalError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
 
 
 def add_arguments(parser):
@@ -199,6 +211,25 @@ def add_arguments(parser):
     named(advisor)
 
     action("sync", "Import hook events from sandboxed agents once (headless use)")
+
+    rules = action("rules", "Review and decide a sandbox's pending access requests")
+    rule_actions = rules.add_subparsers(dest="rules_action", metavar="ACTION")
+    shown = rule_actions.add_parser("list", parents=[common],
+                                    help="Print pending (or --status) network rules")
+    named(shown)
+    shown.add_argument("--status", choices=approvals.STATUSES, default=approvals.PENDING)
+    decide = rule_actions.add_parser(
+        "approve", parents=[common],
+        help="Approve one pending rule after showing it (asks at a terminal)",
+    )
+    named(decide)
+    decide.add_argument("chunk", type=_chunk_arg, metavar="CHUNK", help="Chunk id")
+    refuse = rule_actions.add_parser("reject", parents=[common],
+                                     help="Reject one pending rule with a reason")
+    named(refuse)
+    refuse.add_argument("chunk", type=_chunk_arg, metavar="CHUNK", help="Chunk id")
+    refuse.add_argument("--reason", required=True, help="Why (sent to OpenShell)")
+    refuse.add_argument("--yes", action="store_true", help="Do not ask for confirmation")
 
 
 # Resolution
@@ -681,6 +712,88 @@ def do_sync(args) -> int:
     return 1 if result.errors else 0
 
 
+def _pending(client: OpenShell, name: str, status: str = approvals.PENDING
+             ) -> approvals.RuleListing:
+    listing = approvals.list_rules(client, name, status=status)
+    if listing.failure is not None:
+        raise SandboxCommandError(listing.failure)
+    return listing
+
+
+def _unreadable(listing: approvals.RuleListing) -> SandboxCommandError:
+    print(listing.raw, file=sys.stderr)
+    return SandboxCommandError(
+        f"cannot read openshell's rule output for {listing.sandbox} ({listing.parse_error}); "
+        "the raw text is above. Decide with openshell rule approve or reject yourself"
+    )
+
+
+def _print_proposal(proposal: approvals.Proposal) -> None:
+    for line in proposal.text.split("\n"):
+        print(f"  {line}")
+
+
+def _reviewed(client: OpenShell, name: str, chunk: str) -> approvals.Proposal:
+    listing = _pending(client, name)
+    if listing.parse_error is not None:
+        raise _unreadable(listing)
+    proposal = listing.proposal(chunk)
+    if proposal is None:
+        raise SandboxCommandError(f"no pending rule {chunk} for sandbox {name}")
+    print(f"Sandbox {name}:")
+    _print_proposal(proposal)
+    return proposal
+
+
+def do_rules(args) -> int:
+    action = getattr(args, "rules_action", None)
+    if action is None:
+        raise SandboxCommandError("choose rules list, approve or reject")
+    client = _client(gateway_for(args.name, args.gateway))
+    _existing(client, args.name)
+    if action == "list":
+        listing = _pending(client, args.name, args.status)
+        if listing.parse_error is not None:
+            raise _unreadable(listing)
+        if not listing.proposals:
+            print(f"No {args.status} access requests for sandbox {args.name}.")
+            return 0
+        for index, proposal in enumerate(listing.proposals):
+            if index:
+                print()
+            _print_proposal(proposal)
+        return 0
+    if action == "approve":
+        if not sys.stdin.isatty():
+            raise SandboxCommandError(
+                "approving access needs a person at a terminal; run it interactively "
+                "or approve from the sidebar"
+            )
+        proposal = _reviewed(client, args.name, args.chunk)
+        if not _confirm(f"Approve this network access for {args.name}? [y/N] "):
+            print("Not approved.")
+            return 1
+        try:
+            message = approvals.approve(client, args.name, proposal)
+        except approvals.ApprovalError as error:
+            raise SandboxCommandError(str(error)) from None
+        print(message)
+        return 0
+    try:
+        reason = approvals.check_reason(args.reason)
+    except approvals.ApprovalError as error:
+        raise SandboxCommandError(str(error)) from None
+    proposal = _reviewed(client, args.name, args.chunk)
+    if not args.yes and not _confirm(f"Reject it for {args.name}? [y/N] "):
+        raise SandboxCommandError("not rejected: pass --yes to confirm off a terminal")
+    try:
+        message = approvals.reject(client, args.name, proposal, reason)
+    except approvals.ApprovalError as error:
+        raise SandboxCommandError(str(error)) from None
+    print(message)
+    return 0
+
+
 ACTIONS = {
     None: do_list,
     "list": do_list,
@@ -694,6 +807,7 @@ ACTIONS = {
     "policy": do_policy,
     "advisor": do_advisor,
     "sync": do_sync,
+    "rules": do_rules,
 }
 
 

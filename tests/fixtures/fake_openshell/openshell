@@ -20,6 +20,15 @@ M7-B adds ``sandbox list -o json`` (an array of the ``get`` objects),
 ``dest`` or ``dest/<basename>`` when ``dest`` is a directory), ``policy get``,
 ``logs <name> -n N`` and a ``delete`` that prints upstream's messages.
 
+M7-C adds ``rule get <name> [--status S]``, printed like upstream
+``sandbox_draft_get`` at ba302a6 (run.rs), ``rule approve <name> --chunk-id
+ID`` (bumps the policy version and allows the endpoint) and ``rule reject
+<name> --chunk-id ID --reason R``. ``rule approve-all`` and any other ``rule``
+verb fail loudly. Pending rules live in ``state.json`` under each sandbox's
+``rules``; tests add them there, or let the network knob draft them.
+``FAKE_OPENSHELL_RULES_TEXT`` names a file ``rule get`` prints instead (the
+text fixtures in tests/fixtures/openshell_rules).
+
 Uploads follow upstream ``sandbox_sync_up``: a directory lands at
 ``<dest>/<basename>`` (flat only for ``.``), so a nesting mistake shows up in
 ``fs/``.
@@ -28,9 +37,14 @@ Knobs: ``FAKE_OPENSHELL_VERSION`` (default ``0.1.6``),
 ``FAKE_OPENSHELL_PHASES`` (comma-separated phases returned by successive
 ``get`` calls after create, the last one sticks; default ``Ready``),
 ``FAKE_OPENSHELL_FAIL`` (comma-separated subcommands that fail; ``status``
-fails ``status -o json``), ``FAKE_OPENSHELL_LOG_TEXT`` (printed by ``logs``
-instead of numbered lines) and ``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
-instead of printing them). It never starts a gateway or a container.
+fails ``status -o json``, ``rule`` fails every ``rule`` verb),
+``FAKE_OPENSHELL_LOG_TEXT`` (printed by ``logs`` instead of numbered lines),
+``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
+instead of printing them) and ``FAKE_OPENSHELL_NETWORK=1`` (an ``exec`` whose
+last argument is an ``http(s)://`` URL is a network fetch, never run: it
+passes when an approved rule allows the host and port, else it exits 56 like
+curl behind a refused CONNECT and the gateway drafts a pending rule, or counts
+a hit on the one already drafted). It never starts a gateway or a container.
 """
 
 import json
@@ -39,6 +53,8 @@ import posixpath
 import shutil
 import subprocess
 import sys
+import time
+import urllib.parse
 import uuid
 from pathlib import Path
 
@@ -122,7 +138,7 @@ def sandbox_json(sandbox):
         "resource_version": 1,
         "created_at": "2026-11-03 12:00:00",
         "phase": sandbox["phases"][0],
-        "current_policy_version": 1,
+        "current_policy_version": sandbox.get("policy_version", 1),
         "exit_code": None,
         "conditions": [],
         "endpoint_statuses": [],
@@ -219,6 +235,117 @@ def run_inside(name, args, command):
     sys.exit(result.returncode)
 
 
+def epoch_text(seconds):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(seconds))
+
+
+def render_rules(name, chunks, version):
+    """Upstream ``sandbox_draft_get`` with colour off (NO_COLOR or a pipe)."""
+    if not chunks:
+        print(f"No network rules for sandbox '{name}'")
+        return
+    print(f"Network Rules:  (version {version}, {len(chunks)} chunk"
+          f"{'' if len(chunks) == 1 else 's'})")
+    print()
+    for chunk in chunks:
+        print(f"  Chunk: {chunk['id']}")
+        print(f"  Status: {chunk['status']}")
+        print(f"  Rule: {chunk['rule_name']}")
+        if chunk.get("binary"):
+            print(f"  Binary: {chunk['binary']}")
+        print(f"  Confidence: {chunk.get('confidence', 0.0) * 100:.0f}%")
+        print(f"  Rationale: {chunk.get('rationale', '')}")
+        for label, key in (("Security", "security_notes"), ("Prover", "validation_result"),
+                           ("Application", "application_error")):
+            if chunk.get(key):
+                print(f"  {label}: {chunk[key]}")
+        if chunk.get("candidate"):
+            print(f"  Candidate: {chunk['candidate'][:12]}")
+        if chunk.get("endpoint"):
+            print(f"  Endpoints: {chunk['endpoint']}")
+            if chunk.get("binaries"):
+                print(f"  Binaries: {', '.join(chunk['binaries'])}")
+        if chunk.get("hit_count", 1) > 1:
+            print(f"  Hits: {chunk['hit_count']} (first seen "
+                  f"{epoch_text(chunk.get('first_seen', 0))}, last seen "
+                  f"{epoch_text(chunk.get('last_seen', 0))})")
+        print()
+
+
+def rule(args):
+    if failing("rule"):
+        fail("status: Unavailable, message: \"gateway unreachable\"")
+    verb, rest = args[0], args[1:]
+    if verb not in ("get", "approve", "reject"):
+        fail(f"the fake refuses rule {verb}: tongs-agents approves one rule at a time", 2)
+    chunk_ids = take(rest, "--chunk-id")
+    reasons = take(rest, "--reason")
+    statuses = take(rest, "--status")
+    data = load()
+    name = rest[0]
+    sandbox = data["sandboxes"].get(name)
+    if sandbox is None:
+        fail('status: NotFound, message: "sandbox not found"')
+    chunks = sandbox.setdefault("rules", [])
+    if verb == "get" and os.environ.get("FAKE_OPENSHELL_RULES_TEXT"):
+        sys.stdout.write(Path(os.environ["FAKE_OPENSHELL_RULES_TEXT"]).read_text())
+        return
+    if verb == "get":
+        shown = [chunk for chunk in chunks if not statuses or chunk["status"] == statuses[0]]
+        render_rules(name, shown, sandbox.get("draft_version", len(chunks)))
+        return
+    chunk = next((item for item in chunks if item["id"] == chunk_ids[0]), None)
+    if chunk is None:
+        fail(f"draft chunk '{chunk_ids[0]}' not found")
+    if chunk["status"] != "pending":
+        fail(f"status: FailedPrecondition, message: \"chunk is {chunk['status']}\"")
+    sandbox["draft_version"] = sandbox.get("draft_version", len(chunks)) + 1
+    if verb == "approve":
+        chunk["status"] = "approved"
+        sandbox["policy_version"] = sandbox.get("policy_version", 1) + 1
+        sandbox.setdefault("allowed", []).append(chunk["endpoint"].split(" ")[0])
+        save(data)
+        print(f"OK Chunk approved. Policy version: {sandbox['policy_version']}, "
+              f"hash: {uuid.uuid4().hex[:12]}")
+        return
+    chunk["status"] = "rejected"
+    chunk["rejection_reason"] = reasons[0] if reasons else ""
+    save(data)
+    print("OK Chunk rejected.")
+
+
+def network_fetch(name, url):
+    """A fetch through the sandbox proxy: allowed by an approved rule or drafted as one."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    endpoint = f"{host}:{port}"
+    data = load()
+    sandbox = data["sandboxes"][name]
+    if endpoint in sandbox.get("allowed", []):
+        return 0
+    chunks = sandbox.setdefault("rules", [])
+    now = int(time.time())
+    known = next((chunk for chunk in chunks if chunk["endpoint"].split(" ")[0] == endpoint
+                  and chunk["status"] in ("pending", "rejected")), None)
+    if known is None:
+        chunks.append({
+            "id": str(uuid.uuid4()), "status": "pending",
+            "rule_name": "allow_" + endpoint.replace(".", "_").replace(":", "_"),
+            "binary": "/usr/bin/curl", "confidence": 0.85,
+            "rationale": f"Blocked connection to {endpoint} by /usr/bin/curl",
+            "endpoint": f"{endpoint} [L4]", "binaries": ["/usr/bin/curl"],
+            "hit_count": 1, "first_seen": now, "last_seen": now,
+        })
+        sandbox["draft_version"] = sandbox.get("draft_version", len(chunks) - 1) + 1
+    else:
+        known["hit_count"] = known.get("hit_count", 1) + 1
+        known["last_seen"] = now
+    save(data)
+    print("curl: (56) CONNECT tunnel failed, response 403", file=sys.stderr)
+    return 56
+
+
 def exec_(args):
     if failing("exec"):
         fail("exec failed")
@@ -232,6 +359,9 @@ def exec_(args):
     if sandbox["phases"][0] != "Ready":
         fail(f"sandbox '{name}' is not ready (phase: {sandbox['phases'][0]}); "
              "wait for it to reach Ready state")
+    if (os.environ.get("FAKE_OPENSHELL_NETWORK") == "1" and command
+            and "://" in command[-1]):
+        sys.exit(network_fetch(name, command[-1]))
     tty = "--tty" in args
     if tty and os.environ.get("FAKE_OPENSHELL_RUN_TTY") != "1":
         print(json.dumps({"exec": name, "args": args, "command": command}))
@@ -360,6 +490,8 @@ def main():
         return policy(args[1:])
     if args and args[0] == "logs":
         return logs(args[1:])
+    if args and args[0] == "rule":
+        return rule(args[1:])
     if not args or args[0] != "sandbox":
         fail(f"unsupported command {args!r}", 2)
     verb, rest = args[1], args[2:]

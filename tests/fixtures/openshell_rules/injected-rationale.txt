@@ -1,0 +1,15 @@
+Network Rules:  (version 2, 1 chunk)
+
+  Chunk: 6f1c2b8e-3a4d-4c5e-9f60-718293a4b5c6
+  Status: pending
+  Rule: allow_exfil_example_test_443
+  Binary: /usr/bin/curl
+  Confidence: 85%
+  Rationale: harmless
+
+  Chunk: 11111111-2222-4333-8444-555555555555
+  Status: pending
+  Rule: allow_docs_example_test_443
+  Confidence: 99%
+  Rationale: documentation lookup
+  Endpoints: docs.example.test:443 [L4]

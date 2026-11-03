@@ -13,6 +13,12 @@ the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
 selected launched pane, each confirmed in a dialog), Post to chat and Open
 chat pane. At start it removes stale grants and messages past retention.
 
+OpenShell access requests (docs/sandbox.md, #37): every few seconds it reads
+the pending network rules of the sandboxes its rows run in; a row with
+requests reads as waiting (NEEDS-YOU, desktop notification). ``a`` or the
+palette's Review access requests shows the full proposals; approving takes a
+second confirmation and rejecting a reason. Nothing is approved otherwise.
+
 It reads ``[ui]`` (refresh interval, notify level, theme) and ``[workspace]``
 (default profiles first in the palette, ``tongs_tab``) from the config file.
 An invalid config file does not stop it: the request is still consumed, with
@@ -41,9 +47,10 @@ from tongs_agents.multiplexers import (
     PaneRef,
     get_multiplexer,
 )
-from tongs_agents.palette import AppShell
+from tongs_agents.palette import AppShell, PaletteCommand
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
+from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
 from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
@@ -83,8 +90,8 @@ def focus_launch_pane(mux: Multiplexer, current_session: str,
         return FocusResult(state="failed", reason=error.detail, backend=mux.name)
 
 
-class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
-    """The workspace sidebar: a compact AgentsPanel, chat and spawn-on-mount."""
+class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
+    """The workspace sidebar: a compact AgentsPanel, chat, access requests, spawns."""
 
     TITLE = "tongs-agents"
 
@@ -93,6 +100,7 @@ class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
+        Binding("a", "review_access", "Access", show=True),
     ]
 
     agents_panel_id = "agents-panel"
@@ -109,6 +117,7 @@ class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
         socket_dir: str | None = None,
         config: AppConfig | None = None,
         config_error: str | None = None,
+        approval_interval: float = APPROVAL_POLL_SECONDS,
     ) -> None:
         super().__init__()
         self.init_shell(config, multiplexer, session)
@@ -127,11 +136,12 @@ class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
         )
         self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
+        self.init_approvals(self.feed, approval_interval)
 
     def compose(self) -> ComposeResult:
         yield AppHeader()
         yield AgentsPanel(
-            self.feed,
+            self.approval_feed,
             refresh_interval=self.refresh_interval,
             notify_level=self.notify_level,
             compact=self.compact,
@@ -151,6 +161,13 @@ class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
         if self.token is not None:
             self.consume_spawn_request()
         self.chat_housekeeping()
+        self.mount_approvals()
+
+    def palette_commands(self) -> list[PaletteCommand]:
+        commands = super().palette_commands()
+        chat = len(self.chat_commands()) if self.chat_enabled else 0
+        at = len(commands) - chat
+        return [*commands[:at], *self.approval_commands(), *commands[at:]]
 
     @work(thread=True, exclusive=True, group="spawn-request")
     def consume_spawn_request(self) -> None:
