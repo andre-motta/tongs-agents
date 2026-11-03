@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import shlex
 
 import pytest
 from textual.widgets import Input
@@ -157,10 +158,39 @@ def test_completion_extends_verbs_profiles_and_folders(projects):
     )
 
 
-def test_completion_leaves_harness_arguments_options_and_quotes_alone(projects):
+def test_completion_leaves_harness_arguments_options_and_open_quotes_alone(projects):
     for value in ("run beta app -- t", "run beta app x", "run -", "run 'al",
-                  "ls a", "run --session ", "run beta \"ap"):
+                  "ls a", "run --session ", "run beta \"ap", "run beta '~/x' --"):
         assert complete_line(value, VERBS, _names) == (value, [])
+
+
+def test_completion_descends_home_folders_and_keeps_the_tilde_bare(
+    projects, tmp_path, monkeypatch,
+):
+    home = tmp_path / "home"
+    for folder in ("proj/inner", "src", "srv", "my dir/sub dir/deep"):
+        (home / folder).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    sep = os.sep
+    line, listed = complete_line("run alpha ~/p", VERBS, _names)
+    assert (line, listed) == (f"run alpha ~{sep}proj{sep}", [])
+    assert complete_line(line, VERBS, _names) == (
+        f"run alpha ~{sep}proj{sep}inner{sep}", [],
+    )
+    assert complete_line("run alpha ~/s", VERBS, _names) == (
+        f"run alpha ~{sep}sr", ["src" + sep, "srv" + sep],
+    )
+    line, _ = complete_line("run alpha ~/my", VERBS, _names)
+    assert line == f"run alpha ~{sep}'my dir{sep}'"
+    line, _ = complete_line(line, VERBS, _names)
+    assert line == f"run alpha ~{sep}'my dir{sep}sub dir{sep}'"
+    line, _ = complete_line(line, VERBS, _names)
+    assert line == f"run alpha ~{sep}'my dir{sep}sub dir{sep}deep{sep}'"
+    assert shlex.split(line)[-1] == f"~{sep}my dir{sep}sub dir{sep}deep{sep}"
+    assert complete_line("run  'alpha'   ~/pr", VERBS, _names) == (
+        f"run  'alpha'   ~{sep}proj{sep}", [],
+    )
+    assert complete_line("run 'al'", VERBS, _names) == ("run alp", ["alpha", "alpine"])
 
 
 def test_folder_candidates_follow_the_add_agent_rules(tmp_path, monkeypatch):

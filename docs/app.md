@@ -131,7 +131,7 @@ help.
 | --- | --- |
 | Enter | Run the line. The result (`started alpha in /src/app with --resume`) or the error (an unknown profile, a missing folder, an argparse usage error with the usage line) is shown under the prompt; a refused line stays in the prompt to be fixed. |
 | Up, Down | Older and newer lines from the history. The history keeps the last 100 submitted lines, in memory only, for as long as the sidebar runs; Down past the newest line brings back what you were typing. |
-| Tab | Completes the word at the end of the line: the verb, a profile name, or a folder (`~` expanded, relative to the sidebar's folder, hidden folders only after a typed dot). When several remain it extends to their common start and lists them under the prompt. Arguments after `--` and options are not completed. |
+| Tab | Completes the word at the end of the line: the verb, a profile name, or a folder (`~` expanded, relative to the sidebar's folder, hidden folders only after a typed dot). A folder with spaces is quoted after a bare `~/`, and Tab keeps completing inside a quoted word. When several remain it extends to their common start and lists them under the prompt. Arguments after `--` and options are not completed. |
 | Escape | Closes the prompt and returns to the agents list. |
 
 ## Theme

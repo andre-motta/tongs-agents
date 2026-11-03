@@ -229,21 +229,60 @@ def _shown(candidate: str) -> str:
     return os.path.basename(stripped) + os.sep
 
 
+def _quoted(word: str) -> str:
+    """``word`` quoted for the line, a leading ``~`` or ``~/`` left bare.
+
+    ``shlex.split`` never expands ``~`` but ``shlex.quote`` quotes it, so a
+    bare tilde keeps the word readable and completable (``~/'my dir/'``).
+    """
+    if word.startswith("~"):
+        cut = word.find(os.sep) + 1
+        if cut and shlex.quote(word[1:cut]) == word[1:cut]:
+            rest = word[cut:]
+            return word[:cut] + (shlex.quote(rest) if rest else "")
+    return shlex.quote(word)
+
+
+def _split_last(value: str) -> tuple[str, list[str], str] | None:
+    """The raw text before the last word, the words before it and the last word.
+
+    Words are unquoted as ``shlex.split`` reads them. The last word is empty
+    when the line ends with a separator. ``None`` for a line ``shlex`` cannot
+    split, such as one with an unclosed quote.
+    """
+    try:
+        words = shlex.split(value)
+        sentinel = shlex.split(value + "x")
+    except ValueError:
+        return None
+    if len(sentinel) == len(words) + 1:
+        return value, words, ""
+    previous, last = words[:-1], words[-1]
+    for cut in range(len(value) - 1, -1, -1):
+        if not value[cut].isspace():
+            continue
+        try:
+            if (shlex.split(value[cut + 1:]) == [last]
+                    and shlex.split(value[:cut + 1]) == previous):
+                return value[:cut + 1], previous, last
+        except ValueError:
+            continue
+    return None if previous else ("", previous, last)
+
+
 def complete_line(
     value: str, verbs: Mapping[str, Verb], profile_names: Callable[[], list[str]],
 ) -> tuple[str, list[str]]:
     """``value`` with its last word completed, and the candidates to list.
 
-    Only the last word is completed, and only when it holds no quotes.
+    Only the last word is completed. It is read unquoted, as ``shlex.split``
+    reads it, and written back quoted where needed; a line with an unclosed
+    quote is left alone.
     """
-    cut = value.rfind(" ") + 1
-    head, word = value[:cut], value[cut:]
-    if any(quote in word for quote in "'\"\\"):
+    split = _split_last(value)
+    if split is None:
         return value, []
-    try:
-        previous = shlex.split(head)
-    except ValueError:
-        return value, []
+    head, previous, word = split
     if not previous:
         candidates = sorted(name for name in verbs if name.startswith(word))
         kind = "verb"
@@ -263,11 +302,11 @@ def complete_line(
     if len(candidates) == 1:
         (only,) = candidates
         ending = "" if kind == COMPLETE_FOLDER else " "
-        return head + shlex.quote(only) + ending, []
+        return head + _quoted(only) + ending, []
     common = os.path.commonprefix(candidates)
     shown = [_shown(candidate) for candidate in candidates]
-    if len(common) > len(word) and shlex.quote(common) == common:
-        return head + common, shown
+    if len(common) > len(word):
+        return head + _quoted(common), shown
     return value, shown
 
 
