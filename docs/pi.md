@@ -70,14 +70,16 @@ environment that contains Tongs Agents:
 tongs-agents install --agent pi
 ```
 
-Fleet stores its exact hook and extension paths in
-`$PI_CODING_AGENT_DIR/claude-fleet-monitor.json`, or
-`~/.pi/agent/claude-fleet-monitor.json` by default. The file is marked as owned
-by Tongs Agents. A repeated install updates those paths, installs the
+Tongs Agents stores its exact hook and extension paths in
+`$PI_CODING_AGENT_DIR/tongs-agents.json`, or `~/.pi/agent/tongs-agents.json`
+by default. The file carries the ownership marker `tongs-agents`, and the
+loaded extension keeps its state under the process-wide symbol
+`tongs-agents.pi.runtime.v1`. The Pi package is named `tongs-agents-pi`. A
+repeated install updates those paths, installs the
 new package path first, and removes old owned references. A failed old-reference
 removal remains recorded so a later install or uninstall can retry it.
 
-If that config file exists without Fleet's ownership marker, installation and
+If that config file exists without the `tongs-agents` ownership marker, installation and
 removal stop without replacing it. Uninstall passes only paths recorded in the
 owned file to Pi, preserving every unrelated package and extension:
 
@@ -85,10 +87,16 @@ owned file to Pi, preserving every unrelated package and extension:
 tongs-agents uninstall --agent pi
 ```
 
+Install and uninstall also remove the extension a claude-fleet-monitor 0.9.x
+install registered, using the paths recorded in its own config file (marked
+`claude-fleet-monitor`), and then delete that file. A failed removal keeps it
+for a later retry; a file without that marker is left alone. Details are in
+the [migration guide](migration.md).
+
 Restart or exit Pi sessions that were already running when you uninstalled the
 extension. A running process keeps its loaded monitoring bridge until then.
 
-Removing only Pi does not delete the shared Fleet status directory. The default
+Removing only Pi does not delete the shared sessions directory. The default
 uninstall remains the Claude Code and Codex uninstall. Use `--agent all` to
 remove all three integrations and shared status data, or add `--keep-data` to
 retain the data.
@@ -96,7 +104,7 @@ retain the data.
 ## Validation
 
 The reproducible validation under `validation/pi/` uses a temporary home, Pi
-configuration and Fleet directory. It runs a local synthetic provider and does
+configuration and state directory. It runs a local synthetic provider and does
 not send traffic to an external model provider. See
 [`validation/pi/README.md`](../validation/pi/README.md) for the exact command and
 coverage.

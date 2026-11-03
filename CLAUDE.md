@@ -10,7 +10,7 @@ and [active planning](docs/work/terminal-focus.md).
 
 ```
 Claude Code sessions --\
-                       +--> hook.py --> ~/.claude/fleet/*.json
+                       +--> hook.py --> $XDG_STATE_HOME/tongs-agents/sessions/*.json
 Codex sessions --------/
                             |                 |
                     captures terminal    +-----+-----+------+------+
@@ -32,16 +32,18 @@ Codex sessions --------/
 
 ### Modules
 
-- `hook.py`: Claude Code and Codex hook handler. Receives events via stdin JSON, writes session status to the fleet directory, and tags the source agent. Captures terminal type and PID per session.
+- `hook.py`: Claude Code and Codex hook handler. Receives events via stdin JSON, writes session status to the sessions directory, and tags the source agent. Captures terminal type and PID per session.
 - `discovery.py`: Shared module. Cross-platform process discovery (`/proc` on Linux, `lsof`/`ps` on macOS, `tasklist` on Windows). Reads/deduplicates/cleans session files. Used by all consumers.
+- `paths.py`: Runtime locations. `state_dir()` (`$TONGS_AGENTS_STATE_DIR`, else `$XDG_STATE_HOME/tongs-agents`, else `~/.local/state/tongs-agents`) and `sessions_dir()`; with `create=True` both are made private (0700) and symlinks are refused. `FLEET_DIR` is not read.
+- `legacy.py`: The only source module that spells claude-fleet-monitor 0.9.x markers (hook commands, `fleet` MCP key and module, Pi config and owner, `~/.claude/fleet`), used for cleanup and doctor.
 - `models.py`: Typed data models. `SessionStatus` enum, `FleetSession` frozen dataclass, `parse_session()` converter, `format_age()` utility.
 - `mcp_server.py`: FastMCP server exposing fleet tools to Claude Code and Codex sessions.
 - `tui.py`: Textual-based interactive dashboard (`FleetMonitorApp`). Polling, search/filter, desktop notifications, session focus.
 - `widgets/session_table.py`: `SessionTable(DataTable)` widget with status-colored rows. Shared between standalone TUI and tongs screen.
 - `views/fleet_screen.py`: `FleetScreen(Screen)` for embedding in tongs. Same features as standalone but escape pops back.
-- `tongs_plugin.py`: `FleetMonitorPlugin(TongsPlugin)` ABC implementation. Optional tongs dependency. Registers command palette entry and screen.
+- `tongs_plugin.py`: `FleetMonitorPlugin(TongsPlugin)` ABC implementation, registered as the `agents` entry point in `tongs.plugins` (tongs config `[plugins.agents]`). Optional tongs dependency. Registers command palette entry and screen.
 - `focus.py`: Session lookup and PID resolution. Delegates to terminal APIs for actual focus.
-- `cli.py`: Entry point for `tongs-agents` command. Installs Claude Code and Codex hooks and MCP configuration, then delegates to tui/focus/status.
+- `cli.py`: Entry point for `tongs-agents` command. Installs Claude Code and Codex hooks and the `tongs-agents` MCP server (`claude mcp add --scope user`, `codex mcp add`), removes claude-fleet-monitor leftovers, reports the rest with `doctor`, then delegates to tui/focus/status.
 
 ### Terminal APIs (`terminal_apis/`)
 
@@ -70,14 +72,15 @@ Pluggable terminal abstraction. Each terminal has a class implementing `Terminal
 
 Detection order: tmux > zellij > konsole > ghostty > iterm2 > macos_terminal > gnome > terminator > windows_terminal > kitty > screen > generic. tmux/zellij first because they run inside other terminals. Kitty and screen sit immediately before generic so every earlier result is unchanged. This env order applies only when the Linux ancestry walk finds no known terminal: on Linux the nearest known terminal or multiplexer ancestor wins over leaked markers (screen inside Konsole is labelled screen), and its adapter's `capture_env()` records whatever markers are present. Elsewhere leaked markers keep precedence (screen inside Konsole is labelled konsole).
 
-Terminal info is captured per-session in the hook (not guessed at focus time). Each session's fleet JSON stores `terminal` and `terminal_env` fields. Capture reads the environment plus, on Linux only, `/proc/<pid>/stat` of the hook's ancestors (approved 2026-10-10, #52). Never `/proc/<pid>/environ` or `cmdline`, no subprocess and no D-Bus at hook time; any walk failure falls back to env detection.
+Terminal info is captured per-session in the hook (not guessed at focus time). Each session's JSON record stores `terminal` and `terminal_env` fields. Capture reads the environment plus, on Linux only, `/proc/<pid>/stat` of the hook's ancestors (approved 2026-10-10, #52). Never `/proc/<pid>/environ` or `cmdline`, no subprocess and no D-Bus at hook time; any walk failure falls back to env detection.
 
 For nested terminals (tmux inside Konsole), `raise_window()` walks the process tree from the tmux client PID to the first name in `TERMINAL_PROCESS_NAMES` and routes through `parent.activate_parent()`. Terminator, Kitty and stop-listed emulators (generic) stop the walk and report activation unsupported; screen is never a parent.
 
 ## Key Design Decisions
 
 - No file copying after install. Hooks and MCP point to pip-installed entry points.
-- Fleet dir (`~/.claude/fleet/`) is filesystem-based pub/sub. No daemon, no database, no IPC.
+- The sessions dir (`$XDG_STATE_HOME/tongs-agents/sessions/`) is filesystem-based pub/sub. No daemon, no database, no IPC.
+- Runtime names are `tongs-agents` everywhere: MCP key, Pi config `tongs-agents.json` and owner marker, Pi runtime symbol `tongs-agents.pi.runtime.v1`, Pi package `tongs-agents-pi`. claude-fleet-monitor 0.9.x installs are cleaned up, never migrated; `~/.claude/fleet` is never deleted automatically.
 - Hook must be fast (runs on every Claude Code event). Python startup (~17ms) is acceptable.
 - Cross-platform: use `sys.platform` checks, never assume `/proc` exists.
 - Terminal detection at hook time, not focus time. Handles mixed terminal setups.

@@ -36,7 +36,7 @@ tongs-agents = "tongs_agents.cli:main"
 tongs-agents-hook = "tongs_agents.hook:main"
 
 [project.entry-points."tongs.plugins"]
-fleet-monitor = "tongs_agents.tongs_plugin:FleetMonitorPlugin"
+agents = "tongs_agents.tongs_plugin:FleetMonitorPlugin"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

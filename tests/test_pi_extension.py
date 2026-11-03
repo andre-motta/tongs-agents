@@ -37,9 +37,9 @@ def run_bridge(
         ))
         hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
     if configured:
-        (config_dir / "claude-fleet-monitor.json").write_text(json.dumps({
+        (config_dir / "tongs-agents.json").write_text(json.dumps({
             "schema_version": 1,
-            "owner": "claude-fleet-monitor",
+            "owner": "tongs-agents",
             "hook_path": str(hook),
             "extension_path": str(extension_path().parent.parent),
             "managed_paths": [str(extension_path().parent.parent)],
@@ -319,7 +319,7 @@ await fire('session_shutdown', { reason: 'quit' });
 def test_bridge_rejects_oversized_config_without_blocking_pi(tmp_path):
     config_dir = tmp_path / "Pi config Ω"
     config_dir.mkdir()
-    (config_dir / "claude-fleet-monitor.json").write_text(" " * (16 * 1024 + 1))
+    (config_dir / "tongs-agents.json").write_text(" " * (16 * 1024 + 1))
     runner = tmp_path / "runner.mjs"
     runner.write_text(
         f"import fleetMonitor from {json.dumps(extension_path().as_uri())};\n"
@@ -364,9 +364,9 @@ def test_only_current_extension_copy_registers_during_migration(
         "    stream.write(sys.stdin.read() + '\\n')\n"
     )
     hook.chmod(hook.stat().st_mode | stat.S_IXUSR)
-    (config_dir / "claude-fleet-monitor.json").write_text(json.dumps({
+    (config_dir / "tongs-agents.json").write_text(json.dumps({
         "schema_version": 1,
-        "owner": "claude-fleet-monitor",
+        "owner": "tongs-agents",
         "hook_path": str(hook),
         "extension_path": str(current),
         "managed_paths": [str(current), str(old)],

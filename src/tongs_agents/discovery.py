@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from tongs_agents import paths
 from tongs_agents.harnesses import ProcessIdentity, get_harness
 from tongs_agents.models import (
     SCHEMA_VERSION,
@@ -23,7 +24,6 @@ from tongs_agents.models import (
     canonical_session_id,
 )
 
-FLEET_DIR = Path(os.environ.get("FLEET_DIR", Path.home() / ".claude" / "fleet"))
 MAX_EVENT_BYTES = 64 * 1024
 MAX_RECORD_BYTES = 64 * 1024
 MAX_ID_LENGTH = 512
@@ -302,16 +302,19 @@ def _find_agent_processes():
 
 def _store_available(create: bool = False) -> bool:
     try:
-        if create:
-            FLEET_DIR.mkdir(parents=True, exist_ok=True)
-        return FLEET_DIR.is_dir() and not FLEET_DIR.is_symlink()
+        directory = paths.sessions_dir(create=create)
     except OSError:
         return False
+    return (
+        not paths.state_dir().is_symlink()
+        and directory.is_dir()
+        and not directory.is_symlink()
+    )
 
 
 def _record_path(canonical_id: str) -> Path:
     digest = canonical_id.rsplit(":", 1)[-1]
-    return FLEET_DIR / f"fleet-v{SCHEMA_VERSION}-{digest}.json"
+    return paths.sessions_dir() / f"fleet-v{SCHEMA_VERSION}-{digest}.json"
 
 
 def _path_is_regular(path: Path) -> bool:
@@ -570,7 +573,7 @@ def _file_lock(path: Path):
 @contextmanager
 def _record_lock(canonical_id: str):
     digest = canonical_id.rsplit(":", 1)[-1]
-    path = FLEET_DIR / f".fleet-v{SCHEMA_VERSION}-{digest}.lock"
+    path = paths.sessions_dir() / f".fleet-v{SCHEMA_VERSION}-{digest}.lock"
     with _file_lock(path):
         yield
 
@@ -589,7 +592,7 @@ def session_identity_lock(harness_id: str, session_id: str):
         separators=(",", ":"),
     ).encode("utf-8")
     digest = hashlib.sha256(identity).hexdigest()
-    path = FLEET_DIR / f".fleet-identity-v{SCHEMA_VERSION}-{digest}.lock"
+    path = paths.sessions_dir() / f".fleet-identity-v{SCHEMA_VERSION}-{digest}.lock"
     with _file_lock(path):
         yield
 
@@ -601,7 +604,7 @@ def _write_record_atomic(path: Path, data: dict) -> None:
     if len(payload) > MAX_RECORD_BYTES:
         raise ValueError("fleet record exceeds size limit")
     descriptor, temp_name = tempfile.mkstemp(
-        dir=FLEET_DIR, prefix=".fleet-tmp-", suffix=".tmp"
+        dir=paths.sessions_dir(), prefix=".fleet-tmp-", suffix=".tmp"
     )
     try:
         with os.fdopen(descriptor, "wb") as stream:
@@ -745,7 +748,7 @@ def _iter_record_paths():
     if not _store_available():
         return []
     try:
-        return list(FLEET_DIR.glob("*.json"))
+        return list(paths.sessions_dir().glob("*.json"))
     except OSError:
         return []
 
