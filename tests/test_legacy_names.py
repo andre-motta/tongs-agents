@@ -20,6 +20,9 @@ def _allowed(relative: str) -> bool:
     if relative in ALLOWED_FILES:
         return True
     parts = relative.split("/")
+    # docs/work holds dated planning and investigation records.
+    if parts[:2] == ["docs", "work"]:
+        return True
     # Committed evidence (validation/evidence/, validation/shells/evidence/, ...)
     # is historical and keeps the pre-rename names until it is rerun.
     return parts[0] == "validation" and "evidence" in parts[1:-1]
