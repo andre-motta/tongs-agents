@@ -180,16 +180,9 @@ class CompactApp(App):
         yield SessionTable(id="table", compact=True)
 
 
-@dataclasses.dataclass(frozen=True)
-class ProfiledSession(FleetSession):
-    profile_id: str = ""
-
-
 def test_session_name_prefers_profile_id():
     base = _session(repo="myrepo")
-    profiled = ProfiledSession(**{
-        f.name: getattr(base, f.name) for f in dataclasses.fields(FleetSession)
-    }, profile_id="reviewer")
+    profiled = dataclasses.replace(base, profile_id="reviewer")
     assert session_name(base) == "myrepo"
     assert session_name(profiled) == "reviewer"
     assert session_name(dataclasses.replace(profiled, profile_id="")) == "myrepo"

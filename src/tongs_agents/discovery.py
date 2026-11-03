@@ -22,6 +22,7 @@ from tongs_agents.models import (
     SessionStatus,
     UNRESOLVED_INSTANCE_ID,
     canonical_session_id,
+    validated_launch,
 )
 
 MAX_EVENT_BYTES = 64 * 1024
@@ -442,6 +443,12 @@ def _validate_record(data) -> dict | None:
     normalized["pid"] = str(data.get("pid", ""))
     normalized["ts"] = data.get("ts") if data.get("ts") is not None else 0
     normalized["status"] = data.get("status", "discovered")
+    if "launch" in normalized:
+        launch = validated_launch(normalized["launch"])
+        if launch is None:
+            normalized.pop("launch")
+        else:
+            normalized["launch"] = launch
     if normalized["pid"] and (
         not normalized["pid"].isdigit() or int(normalized["pid"]) <= 0
     ):
@@ -884,5 +891,8 @@ def read_sessions():
             status_value == "waiting"
             or (status_value == "idle" and record["age_seconds"] > 120)
         )
+        launch = record.get("launch") or {}
+        record["launch_id"] = launch.get("launch_id", "")
+        record["profile_id"] = launch.get("profile_id", "")
     records.sort(key=lambda record: record.get("repo", ""))
     return records
