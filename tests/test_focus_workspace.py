@@ -6,9 +6,9 @@ import subprocess
 import pytest
 
 import tongs_agents.focus as focus_module
-from tongs_agents.discovery import _record_path
-from tongs_agents.focus import focus_notification, focus_session
-from tongs_agents.models import canonical_session_id
+from tongs_agents.discovery import ProcessInfo, _record_path
+from tongs_agents.focus import focus, focus_notification, focus_session
+from tongs_agents.models import FocusOperation, FocusResult, canonical_session_id
 from tongs_agents.multiplexers import zellij as mux_zellij
 from tongs_agents.terminal_apis import zellij as terminal_zellij
 from tests.test_multiplexers import LIST_PANES, FakeZellij, _clients, _sequence
@@ -18,7 +18,7 @@ SOCKET_DIR = "/run/user/1000/zellij-test"
 
 
 def _record(fleet_dir, *, pane_id="3", session="agents", socket_dir=SOCKET_DIR,
-            kind="unavailable", session_id="wrapped-claude"):
+            kind="unavailable", session_id="wrapped-claude", status="running"):
     terminal_env = {"ZELLIJ": "0", "ZELLIJ_SESSION_NAME": session}
     if pane_id is not None:
         terminal_env["ZELLIJ_PANE_ID"] = pane_id
@@ -39,7 +39,7 @@ def _record(fleet_dir, *, pane_id="3", session="agents", socket_dir=SOCKET_DIR,
         "pid": "" if unresolved else "4242",
         "process_start": "" if unresolved else "1",
         "process_identity": "unresolved" if unresolved else "identified",
-        "status": "running",
+        "status": status,
         "ts": 1,
         "started": 1,
         "source": "hook",
@@ -123,9 +123,97 @@ def test_in_session_focus_with_two_clients_never_activates(
     for argv, kwargs in fake.calls:
         assert argv[:3] == [ZELLIJ, "--session", "agents"]
         assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+    assert result.pid is None
+    assert focus_notification(result, "example") == (
+        "Focused: example", "information"
+    )
+
+
+def test_in_session_focus_prints_focused_without_pid(
+    fleet_dir, caller, fake, existing_path, no_activation, capsys
+):
+    _record(fleet_dir)
+    assert focus("wrapped-claude") is True
+    assert capsys.readouterr() == ("Focused session via zellij\n", "")
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        FocusResult(
+            state="partial", reason="", backend="tmux", target_found=True,
+            selection=FocusOperation(True, True, "ok"),
+            activation=FocusOperation.unavailable("skipped: same zellij session"),
+        ),
+        FocusResult(
+            state="partial", reason="", backend="zellij", target_found=True,
+            selection=FocusOperation(True, True, "ok"),
+            activation=FocusOperation(True, False, "window activation"),
+        ),
+        FocusResult(
+            state="partial", reason="", backend="zellij", target_found=True,
+            selection=FocusOperation(True, True, "ok"),
+            activation=FocusOperation.unavailable("not attempted"),
+        ),
+    ],
+)
+def test_other_partial_results_still_warn(result):
     message, severity = focus_notification(result, "example")
-    assert "skipped: same zellij session" in message
+    assert message.startswith("Partially focused: example")
     assert severity == "warning"
+
+
+def _live_process(monkeypatch, seen):
+    process = ProcessInfo(4242, 1, "claude", "/usr/bin/claude", ("claude",), None, "1")
+
+    def resolve(session):
+        seen.append(session["session_id"])
+        return process
+
+    monkeypatch.setattr(focus_module, "resolve_session_process", resolve)
+
+
+def test_resolved_record_with_live_process_focuses_with_its_pid(
+    fleet_dir, caller, fake, no_activation, monkeypatch, capsys
+):
+    seen = []
+    _live_process(monkeypatch, seen)
+    _record(fleet_dir, kind="terminal")
+    assert focus("wrapped-claude") is True
+    assert capsys.readouterr() == ("Focused session via zellij (PID 4242)\n", "")
+    assert seen == ["wrapped-claude"]
+    assert any("focus-pane-id" in argv for argv, _ in fake.calls)
+
+
+def test_resolved_record_whose_process_is_gone_reports_stale_identity(
+    fleet_dir, caller, fake, existing_path
+):
+    _record(fleet_dir, kind="terminal")
+    result = focus_session("wrapped-claude")
+    assert result.state == "unavailable"
+    assert result.reason == "stored process identity is unavailable or stale"
+    assert fake.calls == []
+
+
+def test_ended_resolved_record_skips_the_in_session_branch(
+    fleet_dir, caller, fake, monkeypatch
+):
+    seen = []
+    _live_process(monkeypatch, seen)
+    monkeypatch.setattr(focus_module, "find_terminal_api", lambda terminal: None)
+    _record(fleet_dir, kind="terminal", status="ended")
+    result = focus_session("wrapped-claude")
+    assert result.reason == "captured terminal backend 'zellij' is unavailable"
+    assert seen == ["wrapped-claude"]
+    assert fake.calls == []
+
+
+def test_unresolved_record_relies_on_pane_presence_alone(
+    fleet_dir, caller, fake, existing_path, no_activation
+):
+    _record(fleet_dir, status="ended")
+    assert focus_session("wrapped-claude").selection.succeeded
+    assert existing_path == []
 
 
 def test_record_without_captured_socket_dir_uses_the_callers(

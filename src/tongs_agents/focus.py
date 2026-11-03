@@ -1,11 +1,13 @@
 """Cross-platform focus service for Fleet sessions."""
 
+import dataclasses
 import os
 import sys
 
 from tongs_agents.discovery import read_session_records, resolve_session_process
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers import MultiplexerError, PaneRef, get_multiplexer
+from tongs_agents.multiplexers.zellij import ACTIVATION_SKIPPED
 from tongs_agents.terminal_apis import find_terminal_api
 from tongs_agents.terminal_apis._env import is_decimal_id
 
@@ -102,8 +104,29 @@ def _details_suffix(result: FocusResult) -> str:
     return f" (selection: {selection}; activation: {activation})"
 
 
-def focus_notification(result: FocusResult, repo: str) -> tuple[str, str]:
+def _focused(result: FocusResult) -> bool:
+    """Complete, or a confirmed pane selection inside the caller's zellij session.
+
+    Inside the same session there is no window to raise, so the skipped
+    activation is not a missing step.
+    """
     if result.complete:
+        return True
+    return (
+        result.backend == "zellij"
+        and result.target_found
+        and result.selection.succeeded
+        and not result.activation.attempted
+        and result.activation.detail == ACTIVATION_SKIPPED
+    )
+
+
+def _pid_suffix(result: FocusResult) -> str:
+    return "" if result.pid is None else f" (PID {result.pid})"
+
+
+def focus_notification(result: FocusResult, repo: str) -> tuple[str, str]:
+    if _focused(result):
         return f"Focused: {repo}", "information"
     if result.successful:
         message, severity = f"Partially focused: {repo}", "warning"
@@ -119,7 +142,9 @@ def _in_session_focus(session) -> FocusResult | None:
     """Select the record's pane when the caller runs in the same zellij session.
 
     Keyed on the captured pane id rather than the process, so records from
-    wrappers whose process identity is unresolved still focus. Returns None
+    wrappers whose process identity is unresolved still focus. A record with
+    a resolved identity must still name a live process: after the session is
+    recreated, its pane id can belong to something unrelated. Returns None
     whenever the record is not provably in the caller's session.
     """
     if not os.environ.get("ZELLIJ"):
@@ -144,6 +169,14 @@ def _in_session_focus(session) -> FocusResult | None:
     socket_dir = terminal_env.get("ZELLIJ_SOCKET_DIR") or None
     if socket_dir is not None and socket_dir != os.environ.get("ZELLIJ_SOCKET_DIR"):
         return None
+    pid = None
+    if session.get("process_identity") != "unresolved":
+        if session.get("status") == "ended":
+            return None
+        process = resolve_session_process(session)
+        if process is None:
+            return None
+        pid = process.pid
     try:
         multiplexer = get_multiplexer("zellij", socket_dir=socket_dir)
         panes = multiplexer.list_panes(name)
@@ -152,15 +185,16 @@ def _in_session_focus(session) -> FocusResult | None:
     if not any(pane.ref.pane_id == pane_id for pane in panes):
         return None
     try:
-        return multiplexer.focus(PaneRef("zellij", name, pane_id, socket_dir))
+        result = multiplexer.focus(PaneRef("zellij", name, pane_id, socket_dir))
     except MultiplexerError as error:
-        return FocusResult(
+        result = FocusResult(
             state="failed",
             reason="zellij pane selection failed",
             backend="zellij",
             target_found=True,
             selection=FocusOperation(True, False, error.detail),
         )
+    return dataclasses.replace(result, pid=pid)
 
 
 def focus_session(query) -> FocusResult:
@@ -224,12 +258,12 @@ def focus_session(query) -> FocusResult:
 
 def focus(query):
     result = focus_session(query)
-    if result.complete:
-        print(f"Focused session via {result.backend} (PID {result.pid})")
+    if _focused(result):
+        print(f"Focused session via {result.backend}{_pid_suffix(result)}")
         return True
     if result.successful:
         print(
-            f"Partially focused session via {result.backend} (PID {result.pid})"
+            f"Partially focused session via {result.backend}{_pid_suffix(result)}"
             + _details_suffix(result)
         )
         return True

@@ -66,9 +66,14 @@ def plugin_settings(config: object) -> tuple[float, str, list[str]]:
 
 def _notify_not_ready() -> None:
     log.warning("%s command ran before the app was ready", PLUGIN_NAME)
-    app = active_app.get(None) if active_app is not None else None
-    if app is not None:
-        app.notify(NOT_READY_MESSAGE, severity="warning")
+    if active_app is None:
+        return
+    try:
+        app = active_app.get(None)
+        if app is not None:
+            app.notify(NOT_READY_MESSAGE, severity="warning")
+    except Exception:
+        log.warning("Could not show the not-ready notice", exc_info=True)
 
 
 def _make_plugin_class():

@@ -182,6 +182,30 @@ async def test_bell_rings_once_for_a_new_waiting_session(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_poll_after_removal_is_ignored():
+    feed = _all_status_feed()
+    app = FleetMonitorApp(refresh_interval=60, notify_level="none", feed=feed)
+    async with app.run_test(size=(40, 30)) as pilot:
+        await _settle(app, pilot)
+        panel = app.query_one(AgentsPanel)
+        shown = panel.sessions
+        await panel.remove()
+        await pilot.pause()
+        assert not panel.is_attached
+        panel.update_sessions(feed.snapshot())
+        panel._render_view()
+        assert panel.sessions == shown
+
+
+@pytest.mark.asyncio
+async def test_search_placeholder_names_agents():
+    app = FleetMonitorApp(refresh_interval=60, notify_level="none", feed=_all_status_feed())
+    async with app.run_test(size=(40, 30)) as pilot:
+        await _settle(app, pilot)
+        assert app.query_one(AgentsPanel).search_input.placeholder == "Filter agents..."
+
+
+@pytest.mark.asyncio
 async def test_no_bell_when_notifications_are_off(monkeypatch):
     feed = SessionFeed(MutableReader([_record(SessionStatus.WAITING, "billing")]))
     app = FleetMonitorApp(refresh_interval=60, notify_level="none", feed=feed)
