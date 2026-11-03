@@ -18,8 +18,6 @@ import os
 import stat
 from pathlib import Path
 
-from tongs_agents import legacy
-
 APP_NAME = "tongs-agents"
 STATE_DIR_ENV = "TONGS_AGENTS_STATE_DIR"
 CONFIG_DIR_ENV = "TONGS_AGENTS_CONFIG_DIR"
@@ -55,6 +53,10 @@ def _configured_config_dir() -> Path:
 
 
 def _refuse_legacy_overlap(path: Path) -> None:
+    # Imported here, not at module level: the hook imports paths and its
+    # import surface is pinned by tests, so legacy loads only when creating.
+    from tongs_agents import legacy
+
     owned = os.path.normcase(os.path.abspath(path))
     old = os.path.normcase(os.path.abspath(legacy.legacy_sessions_dir()))
     try:
