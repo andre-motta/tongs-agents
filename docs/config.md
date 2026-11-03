@@ -7,9 +7,10 @@ captures harness-side edits back. The directory format is
 item lands per harness is the approved
 [emitter strategy](work/emitter-strategy.md).
 
-A broken emitter module is reported as an error and exits 1. Any unexpected
-failure in a verb prints one line, `tongs-agents config: internal error: ...`,
-and exits 1.
+Emitters for Claude Code, Codex and Pi ship with tongs-agents. A broken
+emitter module is reported as an error and exits 1. Any unexpected failure in
+a verb prints one line, `tongs-agents config: internal error: ...`, and exits
+1. For a walkthrough, see the [dotfiles tutorial](tutorials/dotfiles.md).
 
 ## Choosing the dotfiles directory
 

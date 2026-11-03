@@ -1,7 +1,65 @@
-# How `tongs-agents install` changes harness files
+# Installing tongs-agents
 
-The README covers what `install` and `uninstall` do; this page covers how
-they change files and what is left behind.
+## Get the package
+
+tongs-agents needs Python 3.11 or newer. Its runtime dependencies are
+`textual` and `mcp`. Install it from source into a virtual environment:
+
+```bash
+git clone https://github.com/andre-motta/tongs-agents.git
+cd tongs-agents
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .              # or: pip install -e ".[tongs]" for the tongs plugin
+```
+
+Hooks and MCP registrations point at the entry points of this environment
+(`tongs-agents`, `tongs-agents-hook` and its Python). If you move or recreate
+the environment, run `tongs-agents install` again.
+
+The workspace needs a multiplexer: Zellij 0.44.2 or newer, or tmux 3.2 or
+newer. On Linux x86_64, `tongs-agents doctor --fix zellij` downloads the
+pinned Zellij build into the state directory; see
+[Zellij pins](zellij-pins.md#managed-download). Terminal focus uses optional
+tools when present (`qdbus`, `xdotool`, `kitten`, the `tmux`, `zellij` and
+`screen` CLIs); desktop notifications use `notify-send` on Linux.
+
+## Install the hooks
+
+```bash
+tongs-agents install                          # Claude Code, Codex and every profile's config dir
+tongs-agents install --agent pi               # also Pi (0.84.4 or newer); or --agent all
+tongs-agents install --claude-config-dir DIR  # only DIR, instead of the defaults; also --codex-home, --pi-agent-dir
+tongs-agents doctor                           # read-only report of what is missing
+```
+
+`install` writes Claude Code hooks to `settings.json` and Codex hooks to
+`hooks.json` in each config home, registers the `tongs-agents` MCP server
+through `claude mcp add --scope user` and `codex mcp add` when those CLIs are
+on `PATH`, and with Pi installs the packaged extension ([Pi](pi.md)). It is
+idempotent. Restart running agent sessions afterwards; in Codex, review and
+trust the new hooks with `/hooks`.
+
+Session records go to `$XDG_STATE_HOME/tongs-agents/sessions/`
+(`~/.local/state/tongs-agents/sessions/` by default), a private 0700
+directory. Set `TONGS_AGENTS_STATE_DIR` to move the whole state directory.
+
+`doctor` only reads. It exits 0 when nothing is worse than a note, 1 for a
+warning and 2 for an error. Each finding names its fix, for example a missing
+hook in a profile's config dir or a missing Zellij. `--json` prints the checks
+as JSON, and `--config-dir KIND=DIR` also checks one more config dir.
+
+## Uninstall
+
+```bash
+tongs-agents uninstall              # hooks, MCP entries and session records
+tongs-agents uninstall --keep-data  # keep the sessions directory
+tongs-agents uninstall --agent pi   # only the Pi extension
+pip uninstall tongs-agents
+```
+
+The rest of this page covers how `install` and `uninstall` change files and
+what is left behind.
 
 ## Order of operations
 
