@@ -142,8 +142,8 @@ warnings and 2 with errors.
 tongs-agents
 ```
 
-This creates a Zellij session named `agents` with only the sidebar, then
-attaches to it. If `tongs` is on `PATH`, a `tongs` tab is added. No agent
+This creates a Zellij session named `agents` with the sidebar and, beside it,
+a home pane where agents will show, one at a time; then it attaches to it. If `tongs` is on `PATH`, a `tongs` tab is added. No agent
 starts yet; you add them next. Run `tongs-agents` again later and it attaches
 to the same session.
 
@@ -182,10 +182,11 @@ state (`STARTING`, `RUNNING` or `EXITED`).
 
 | Key | Action |
 | --- | --- |
-| Enter or click | Focus that agent's pane |
+| Enter or click | Bring that agent into view next to the sidebar; the others keep running, collapsed to their title lines |
 | `n` | Jump to the next agent that needs you (waiting, or idle for more than two minutes) |
 | `+` | Add an agent: profile, folder and arguments |
 | `m` | Show or hide the chat panel ([tutorial 5](chat-and-web.md)) |
+| `u` | Resume the row's harness session in a new pane, for an agent that has ended ([resume](../resume.md#in-the-sidebar)) |
 | `r` | Refresh |
 | `q` | Quit the sidebar |
 | Ctrl+P | Command palette |

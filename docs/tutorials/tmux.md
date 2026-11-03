@@ -43,9 +43,21 @@ switches back for one run.
 
 ## 3. What the sidebar shows
 
-Agent panes split the window side by side, and a pane opens in a new window
-when there is no room left. Panes are named after their profile in the tmux
-pane option `@tongs_agents_name`.
+A new session shows one agent at a time: the sidebar's window holds the
+sidebar and the agent in view, and every other agent waits in its own
+window, named after its profile in the status bar. Select a row (Enter or a
+click) and that agent is swapped in next to the sidebar; the one it replaces
+goes back to a window of its own and keeps running. When the agent in view
+exits, the next one you select is joined beside the sidebar. Panes are named
+after their profile in the tmux pane option `@tongs_agents_name`.
+
+To lay agents out side by side instead (a pane opens in a new window when
+there is no room left), set this before you create the session:
+
+```toml
+[workspace]
+layout = "split"
+```
 
 On tmux the sidebar lists the panes the launcher started. A pane whose agent
 reports through hooks or `tongs-agents notify` shows that status (`RUNNING`,
@@ -79,6 +91,7 @@ and audited as on Zellij.
 | Web watching | Zellij only |
 | Session names | No `.` or `:` in a new session name |
 | `--print-command` | Creates a missing session detached right away, then prints the attach command |
+| One agent at a time | Parked windows and a swap into the sidebar's window instead of a stack; the parked windows show in the status bar, and resizing the terminal also resizes the sidebar |
 
 tmux calls always name the server socket with `-S`: the one in `TMUX` inside
 tmux, else tmux's default socket. tongs-agents checks that the default
@@ -88,6 +101,8 @@ socket directory is yours and private before it uses it.
 
 - `--multiplexer tmux`, or `[workspace] multiplexer = "tmux"`, runs the same
   workspace on tmux.
+- A new tmux session shows one agent at a time and swaps the one you select
+  into view; `layout = "split"` lays them out side by side.
 - The sidebar shows hook and `notify` status on tmux, joined by launch id,
   and the pane state for panes that report none.
 - Resurrect, the tongs tab, chat wake and web watching stay with Zellij.

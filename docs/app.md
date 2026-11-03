@@ -27,6 +27,7 @@ session = "agents"              # Zellij session opened by `tongs-agents workspa
 default_profiles = []           # profiles `workspace` starts in a new session, e.g. ["claude-alt"]
 tongs_tab = true                # add a tongs tab when tongs is on PATH
 multiplexer = "zellij"          # "zellij" or "tmux"; see below
+layout = "single"               # "single": one agent at a time; "split": side by side
 
 [ui]
 refresh_interval = 2            # seconds, 0.5 to 3600
@@ -61,8 +62,9 @@ default.
 
 ## Who reads what
 
-- `tongs-agents workspace` uses `session`, `tongs_tab`, `default_profiles`
-  and `multiplexer`.
+- `tongs-agents workspace` uses `session`, `tongs_tab`, `default_profiles`,
+  `multiplexer` and, for a new session, `layout` (see
+  [one agent at a time](workspace.md#one-agent-at-a-time)).
   The default profiles start only when the command creates a new session.
   Attaching to a running session, or running the command inside the
   workspace's multiplexer,
@@ -74,7 +76,8 @@ default.
   uses `session`, `tongs_tab` and `multiplexer` but never `default_profiles`,
   so the workspace opens with only the sidebar.
 - `tongs-agents run` uses `session` and `multiplexer` when it runs outside a
-  workspace, and `tongs_tab` when it has to start a new Zellij session.
+  workspace, `layout` when it has to start a new session, and `tongs_tab`
+  when that session is a Zellij one.
 - `tongs-agents monitor` uses all of `[ui]`. An invalid file prints the error
   and the monitor starts with the default settings.
 - The sidebar uses `refresh_interval`, `notify_level` and `theme`, and
@@ -105,11 +108,41 @@ to Textual's own entries (theme switcher, keys, quit) it lists:
 
 The monitor counts as inside a session when it runs in a Zellij pane (the
 sidebar also detects tmux); started elsewhere it offers only the last four
-commands. In the sidebar the
-palette also has the chat entries (`Grant chat`, `Grant chat and wake`,
+commands. In the sidebar the palette also has `Command line`, which opens the
+[sidebar command line](#sidebar-command-line) like `:`, `Resume in workspace`
+(same as `u`: resumes the selected agent's harness session in a new pane) and
+`Resume session…` (a list of the recent sessions in the session store; Enter
+resumes the chosen one), both described in
+[moving open sessions into the workspace](resume.md) (a session that already
+runs in this workspace is not resumed again, and one that runs elsewhere asks
+first), and the chat entries (`Grant chat`, `Grant chat and wake`,
 `Revoke chat`, `Post to chat`, `Toggle chat` and `Open chat pane`); see
 [agent chat](chat.md). A spawn that fails is shown as an error notification and
 its launch record is removed.
+
+## Sidebar command line
+
+`:` in the sidebar (or `Command line` in its palette) opens a one-line prompt
+at the bottom for workspace verbs. It takes them with exactly the syntax,
+checks and messages of the CLI, because it uses the CLI verb's own argument
+parser, and it always works on the session the sidebar runs in:
+
+| Verb | What it does |
+| --- | --- |
+| `run PROFILE [DIR] [-- ARGS ...]` | Same as [`tongs-agents run`](workspace.md#adding-agents-run) inside the session: adds a pane for the profile, in DIR, with ARGS appended for this launch. DIR defaults to the folder the sidebar started in, and a relative DIR is resolved from there. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
+| `resume [ID] [--profile NAME]` | Same as [`tongs-agents resume`](resume.md) inside the session: without ID it lists the sessions it can resume under the prompt; with an ID or a unique prefix it adds a pane that resumes that session in its recorded folder, with the matching profile. A session that already runs in this workspace is refused; a warning follows the result when the session still runs elsewhere. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
+
+The line is split like a shell line (`run alpha ~/src -- --resume 'two
+words'`) but never run through a shell: a first word that is not a verb, such
+as `ls` or `!make`, is refused and nothing runs. `run -h` shows the verb's
+help.
+
+| Key | Action |
+| --- | --- |
+| Enter | Run the line. The result (`started alpha in /src/app with --resume`) or the error (an unknown profile, a missing folder, an argparse usage error with the usage line) is shown under the prompt; a refused line stays in the prompt to be fixed, and the line of a command that fails while it runs (a pane the multiplexer cannot start, a session that cannot be resumed) is put back into the prompt unless you typed something new meanwhile. |
+| Up, Down | Older and newer lines from the history. The history keeps the last 100 submitted lines, in memory only, for as long as the sidebar runs; Down past the newest line brings back what you were typing. |
+| Tab | Completes the word at the end of the line: the verb, a profile name, or a folder (`~` expanded, relative to the sidebar's folder, hidden folders only after a typed dot). A folder with spaces is quoted after a bare `~/`, and Tab keeps completing inside a quoted word. When several remain it extends to their common start and lists them under the prompt. Arguments after `--` and options are not completed. |
+| Escape | Closes the prompt and returns to the agents list. |
 
 ## Theme
 

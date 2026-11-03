@@ -450,6 +450,15 @@ def test_an_invalid_config_still_runs_the_sidebar_with_defaults(tmp_path, sideba
     assert app.config_error.startswith(f"{path}: ui.theme")
 
 
+def test_the_layout_marker_is_accepted_and_checked(sidebar_runs, capsys):
+    token = "0123456789abcdef0123456789abcdef"
+    assert sidebar.main(["--compact", "--layout", "single", "--spawn-request", token]) == 0
+    assert sidebar_runs.apps[0].token == token
+    with pytest.raises(SystemExit):
+        sidebar.main(["--layout", "tabs"])
+    assert "invalid choice" in capsys.readouterr().err
+
+
 @pytest.mark.asyncio
 async def test_sidebar_applies_the_theme_and_shows_the_shared_shell():
     mux = FakeMux()

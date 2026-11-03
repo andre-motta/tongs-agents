@@ -20,8 +20,13 @@ Where the pane goes:
   (a Zellij spawn request and layout, or a detached tmux session), then
   attaches. An EXITED Zellij session of that name is deleted first.
 
-MCP ``agents_spawn`` never takes a folder or arguments; only this command and
-the sidebar's Add agent dialog, both run by the maintainer, write them.
+MCP ``agents_spawn`` never takes a folder or arguments; only this command,
+the sidebar's Add agent dialog and the sidebar command line, all run by the
+maintainer, write them.
+
+The sidebar command line (``widgets.command_line``) builds its ``run`` verb
+from ``add_arguments``, ``refuse_options`` and ``prepare``, so both accept the
+same syntax and refuse the same values with the same messages.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from collections.abc import Mapping
 
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import MULTIPLEXERS, AppConfigError, load_app_config
@@ -36,7 +42,7 @@ from tongs_agents.commands import workspace
 from tongs_agents.launches import LaunchError
 from tongs_agents.multiplexers import SESSION_RUNNING, MultiplexerError, get_multiplexer
 from tongs_agents.paths import UnsafePathError
-from tongs_agents.profiles import ProfileError, load_profiles, profiles_path
+from tongs_agents.profiles import Profile, ProfileError, load_profiles, profiles_path
 
 NAME = "run"
 HELP = "Add an agent pane for a profile to the workspace, in a folder, with extra arguments"
@@ -70,6 +76,14 @@ def add_arguments(parser):
     parser.set_defaults(extra=[])
 
 
+class RunRefused(Exception):
+    """A run refused before anything starts; ``code`` is the CLI's exit status."""
+
+    def __init__(self, message: str, code: int = EXIT_USAGE) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def _error(message: str, code: int = EXIT_ERROR) -> int:
     print(f"tongs-agents run: {message}", file=sys.stderr)
     return code
@@ -96,7 +110,8 @@ def resolve_folder(value: str | None, profile) -> str | None:
         return str(profile.cwd) if profile.cwd is not None else None
 
 
-def _described(profile, options) -> str:
+def described(profile, options) -> str:
+    """The profile name, plus " in FOLDER" when the launch names one."""
     text = profile.name
     if options["folder"] is not None:
         text += f" in {options['folder']}"
@@ -108,14 +123,30 @@ def _available(mux) -> str | None:
     return None if available else f"{detail}; run 'tongs-agents doctor' for details"
 
 
+def refuse_options(name: str, args, session: str | None = None) -> None:
+    """Refuse ``--multiplexer`` or ``--session`` naming another than the current one.
+
+    ``session`` is the current session, or None to check only the multiplexer.
+    """
+    label = workspace.LABELS[name][0]
+    if args.multiplexer not in (None, name):
+        raise RunRefused(
+            f"already inside {label}; refusing --multiplexer {args.multiplexer} "
+            "(run it outside, or drop --multiplexer)"
+        )
+    if session is not None and args.session is not None and args.session != session:
+        raise RunRefused(
+            f"already inside {label} session {session!r}; refusing to use "
+            f"--session {args.session!r} (run it outside {label}, or drop --session)"
+        )
+
+
 def _inside(name: str, args, profile, options) -> int:
     label, variable = workspace.LABELS[name]
-    if args.multiplexer not in (None, name):
-        return _error(
-            f"already inside {label}; refusing --multiplexer {args.multiplexer} "
-            "(run it outside, or drop --multiplexer)",
-            EXIT_USAGE,
-        )
+    try:
+        refuse_options(name, args)
+    except RunRefused as refused:
+        return _error(str(refused), refused.code)
     mux = get_multiplexer(name)
     problem = _available(mux)
     if problem is not None:
@@ -125,18 +156,16 @@ def _inside(name: str, args, profile, options) -> int:
         return _error(
             f"{variable} is set but the current {label} session cannot be identified"
         )
-    if args.session is not None and args.session != here.session:
-        return _error(
-            f"already inside {label} session {here.session!r}; refusing to use "
-            f"--session {args.session!r} (run it outside {label}, or drop --session)",
-            EXIT_USAGE,
-        )
+    try:
+        refuse_options(name, args, here.session)
+    except RunRefused as refused:
+        return _error(str(refused), refused.code)
     try:
         workspace_spawn.spawn_profiles(mux, here.session, [profile], **options)
         workspace_spawn.ensure_sidebar(mux, here.session)
     except (MultiplexerError, LaunchError, OSError) as error:
         return _error(getattr(error, "detail", None) or str(error))
-    _notice(f"started {_described(profile, options)} in session {here.session!r}")
+    _notice(f"started {described(profile, options)} in session {here.session!r}")
     return 0
 
 
@@ -164,7 +193,7 @@ def _outside(args, settings, profile, options) -> int:
             workspace_spawn.spawn_profiles(mux, session, [profile], **options)
             workspace_spawn.ensure_sidebar(mux, session)
             _notice(
-                f"started {_described(profile, options)} in the running session "
+                f"started {described(profile, options)} in the running session "
                 f"{session!r}; attach with '{_attach_hint(session, settings.session)}'"
             )
             return 0
@@ -172,10 +201,39 @@ def _outside(args, settings, profile, options) -> int:
         return _error(getattr(error, "detail", None) or str(error))
     plain = argparse.Namespace(resurrect=False, print_command=False, tongs=None)
     if name == "tmux":
-        return workspace._outside_tmux(mux, plain, session, [profile], [profile], options)
+        return workspace._outside_tmux(mux, plain, session, [profile], [profile], options,
+                                       layout=settings.layout)
     return workspace._outside(
-        mux, plain, session, [profile], [profile], settings.tongs_tab, options
+        mux, plain, session, [profile], [profile], settings.tongs_tab, options,
+        layout=settings.layout,
     )
+
+
+def prepare(args, profiles: Mapping[str, Profile],
+            prog: str = "tongs-agents run") -> tuple[Profile, dict]:
+    """The profile and the checked ``folder`` and ``args`` options for ``args``.
+
+    Raises RunRefused for an unknown profile, a DIR that cannot be resolved or
+    a folder or arguments ``workspace_spawn.check_launch`` refuses.
+    """
+    profile = profiles.get(args.profile)
+    if profile is None:
+        raise RunRefused(
+            f"unknown profile {args.profile!r:.80}; see 'tongs-agents profiles' "
+            f"and {profiles_path()}"
+        )
+    folder = resolve_folder(args.folder, profile)
+    if args.folder is not None and folder is None:
+        raise RunRefused(
+            f"cannot resolve {args.folder!r:.80}: the current directory is unreadable; "
+            "give an absolute path"
+        )
+    try:
+        folder, extra = workspace_spawn.check_launch(profile, folder, args.extra or ())
+    except LaunchError as error:
+        hint = "" if args.folder is not None else f"; name a folder: {prog} PROFILE DIR"
+        raise RunRefused(f"{error}{hint}") from None
+    return profile, {"folder": folder, "args": extra}
 
 
 def run(args) -> int:
@@ -191,26 +249,10 @@ def run(args) -> int:
         profiles = load_profiles()
     except ProfileError as error:
         return _error(str(error))
-    profile = profiles.get(args.profile)
-    if profile is None:
-        return _error(
-            f"unknown profile {args.profile!r:.80}; see 'tongs-agents profiles' "
-            f"and {profiles_path()}",
-            EXIT_USAGE,
-        )
-    folder = resolve_folder(args.folder, profile)
-    if args.folder is not None and folder is None:
-        return _error(
-            f"cannot resolve {args.folder!r:.80}: the current directory is unreadable; "
-            "give an absolute path",
-            EXIT_USAGE,
-        )
     try:
-        folder, extra = workspace_spawn.check_launch(profile, folder, args.extra or ())
-    except LaunchError as error:
-        hint = "" if args.folder is not None else "; name a folder: tongs-agents run PROFILE DIR"
-        return _error(f"{error}{hint}", EXIT_USAGE)
-    options = {"folder": folder, "args": extra}
+        profile, options = prepare(args, profiles)
+    except RunRefused as refused:
+        return _error(str(refused), refused.code)
     if os.environ.get("ZELLIJ") is not None:
         return _inside("zellij", args, profile, options)
     if os.environ.get("TMUX"):

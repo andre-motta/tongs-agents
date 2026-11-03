@@ -182,7 +182,10 @@ def open_workspace_in_zellij(mux: Multiplexer | None = None) -> WorkspaceOutcome
         # The scan above already found no sidebar; ensure_sidebar would list
         # the panes a second time.
         mux.spawn(
-            here.session, workspace_spawn.sidebar_argv(), name=SIDEBAR_PANE_NAME, focus=False
+            here.session,
+            workspace_spawn.sidebar_argv(
+                layout=workspace_spawn.session_layout(mux, here.session)),
+            name=SIDEBAR_PANE_NAME, focus=False,
         )
     except (MultiplexerError, LaunchError, OSError) as error:
         return WorkspaceOutcome(False, getattr(error, "detail", None) or str(error))

@@ -19,6 +19,54 @@ false), and a running one is attached to. In the sidebar, `+` opens the
 [Add agent](#add-agent-in-the-sidebar) dialog. `tongs-agents monitor` is still
 the fleet-wide view, and `tongs-agents --version` prints the version.
 
+## One agent at a time
+
+The workspace shows the sidebar on the left and one agent beside it, like
+terminal tabs. Selecting a row (Enter or a click), `tongs-agents run`, a
+palette `New agent` entry and the Add agent dialog bring that agent into the
+main area; the others keep running out of view, keep reporting status, and
+`send`, `read`, `wait` and chat still reach them.
+
+- **Zellij**: the main area is a stacked column headed by a
+  `tongs-agents-home` pane that shows a short hint. Every agent joins the
+  stack; the one in view is expanded and the others are collapsed to their
+  title lines (framed on 0.44.2, a compact list marked with `>` on 0.45.1),
+  which you can also click or reach with Zellij's own pane keys. The home
+  pane anchors the stack. If you close it, the next agent started brings it
+  back: the home pane is opened again and stacked onto an agent of the
+  column (when that does not work, the agent pane itself anchors the stack).
+  Only when every pane of the column is gone too does the new agent open
+  side by side, with a notice saying so (a warning in the sidebar, a
+  `notice:` line under its command line, a line on stderr for `run`,
+  `notices` in an MCP `agents_spawn` reply).
+- **tmux**: the sidebar's window holds the sidebar and one agent, the main
+  slot. Every other agent is parked in its own window (shown in the status
+  bar under the agent's name) and is swapped into the main slot when you
+  select it.
+
+`layout = "split"` in `[workspace]` keeps the earlier layout instead, with
+every agent side by side next to the sidebar:
+
+```toml
+[workspace]
+layout = "split"     # "single" (default): one agent at a time
+```
+
+The layout is chosen when a session is created and stays with it: Zellij
+reads it from the home pane, and from the sidebar pane's `--layout single`
+argument once the home pane is closed; tmux reads the session option
+`@tongs_agents_layout`. Changing the setting affects the next new session;
+a session created by an older tongs-agents, or a Zellij or tmux session the
+workspace did not create, keeps placing panes side by side. On Zellij, MCP
+`agents_spawn` panes join the stack like any other, and on tmux they are
+parked without changing the view.
+
+A Zellij stack fits the window's height minus five agents (16 in a 24-row
+terminal, the home pane included). When it is full, `run`, the dialog and
+the palette refuse with `the agent stack is full`; close an agent pane or
+make the terminal taller. A pane that Zellij does not place in the stack is
+closed again rather than left elsewhere.
+
 ## Adding agents: run
 
 ```console
@@ -69,6 +117,11 @@ sandbox folder or unbalanced quotes keep the dialog open with the reason.
 Escape cancels. The palette's `New agent: <profile>` entries still start a
 profile with its own defaults in one step.
 
+`:` in the sidebar opens a command line that takes the same
+`run PROFILE [DIR] [-- ARGS ...]` as the CLI, for the sidebar's session, with
+history and Tab completion of profiles and folders; see
+[sidebar command line](app.md#sidebar-command-line).
+
 ## The workspace verb
 
 `tongs-agents workspace` opens a Zellij session with the tongs-agents sidebar
@@ -113,9 +166,9 @@ the profile command. Panes are named after their profile.
 
 | Where you run it | Result |
 | --- | --- |
-| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so is `--print-command`; `--resurrect` is ignored with a notice. |
+| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session, shows each in turn, and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so is `--print-command`; `--resurrect` is ignored with a notice. |
 | Outside Zellij, session running | Spawns the profiles into that session (and a sidebar if it has none), then runs `zellij attach <session>`. |
-| Outside Zellij, no session | Writes a spawn request and a layout, then runs `zellij --session <session> --new-session-with-layout <layout>`. The sidebar in that layout spawns the profiles when it starts. |
+| Outside Zellij, no session | Writes a spawn request and a layout (`[workspace].layout`), then runs `zellij --session <session> --new-session-with-layout <layout>`. The sidebar in that layout spawns the profiles when it starts. |
 | Outside Zellij, session EXITED | Prints a one-line notice, runs `zellij delete-session <session>`, then creates it as above. With `--resurrect` it runs `zellij attach <session>` instead and starts nothing new. |
 
 ### Second run: EXITED sessions
@@ -157,7 +210,12 @@ created 0600 without following or replacing anything:
 - `layouts/<token>.kdl`: rendered from the packaged `layouts/agents.kdl.tmpl`.
   Only the Python interpreter path, the session name, the token and the
   `tongs` path are substituted, as escaped KDL strings; control characters are
-  refused. The sidebar deletes it on start.
+  refused. The template's `single` block (the sidebar, 40 columns wide and
+  started with `--layout single`, beside a `stacked=true` column holding the
+  home pane, which runs `<python> -m tongs_agents.workspace_spawn home`) or
+  its `split` block (the sidebar alone) is kept, as `[workspace].layout`
+  says. The sidebar deletes
+  it on start.
 
 ### Printing the command
 
@@ -177,8 +235,12 @@ created 0600 without following or replacing anything:
 
 ## Sidebar
 
-`tongs-agents sidebar [--spawn-request TOKEN] [--compact]` (started by the
-layout as `python -m tongs_agents.commands.sidebar`) runs the compact agents
+`tongs-agents sidebar [--spawn-request TOKEN] [--compact] [--layout {single,split}]`
+(started by the layout as `python -m tongs_agents.commands.sidebar`; the
+`single` layout passes `--layout single` so the agent stack can be found
+again without its home pane, and a sidebar re-added by `run`, `workspace` or
+the tongs plugin gets the same argument when the session has a home pane or
+an earlier marked sidebar, or records `single` on tmux) runs the compact agents
 panel inside a Zellij pane named `tongs-agents-sidebar` (or a tmux pane, see
 [tmux](#tmux)). It refuses to start outside a Zellij or tmux session. It shares the monitor's header, footer, theme and command
 palette (`Ctrl+P`, with `Add agent…`, `New agent: <profile>` and
@@ -205,10 +267,11 @@ Exited panes stay listed because Zellij keeps them open, so a launcher error
 earlier session with the same name are not shown: a claimed record whose
 process is gone while its pane runs something else is skipped.
 
-Enter or a click focuses the row's pane in the same session. Hook rows go
-through the same focus path as `tongs-agents focus`; hookless rows select
-their pane directly after checking that it is still listed. Spawn failures
-appear as notifications.
+Enter or a click focuses the row's pane in the same session: on Zellij the
+pane is expanded in the stack, on tmux a parked pane is swapped into the main
+slot. Hook rows go through the same focus path as `tongs-agents focus`;
+hookless rows select their pane directly after checking that it is still
+listed. Spawn failures appear as notifications.
 
 ## tmux
 
@@ -227,14 +290,22 @@ owned by you with no group or other access. Sessions are always named exactly
 | --- | --- |
 | Inside tmux (`TMUX` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never nests, attaches or execs. A different `--session` and `--print-command` are refused. |
 | Outside tmux, session running | Spawns the profiles into that session (and a sidebar if it has none), then runs `tmux -S <socket> attach-session -t =<session>`. |
-| Outside tmux, no session | Creates the session detached (`new-session -d`) with the sidebar as its first pane, spawns the profiles through the same spawn path, then attaches as above. |
+| Outside tmux, no session | Creates the session detached (`new-session -d`) with the sidebar as its first pane, records `[workspace].layout` on it, spawns the profiles through the same spawn path, then attaches as above. |
 | Inside Zellij | Refused with exit 2, so agent panes never inherit a Zellij pane identity. |
 
-Agent panes split the current window side by side and the row is spread
-evenly; when the window has no room left, the pane opens in a new window.
-Panes are named with the pane option `@tongs_agents_name`, which programs
-cannot overwrite the way they overwrite pane titles. Layouts beyond the
-sidebar plus panes are out of scope.
+In a `single` session (the default for a new one) every agent pane opens in
+its own detached window (`new-window -d`), named after its profile. Showing
+it swaps it into the sidebar's window with `swap-pane` (the agent it replaces
+moves into the parked window, which is renamed after it), or, when that
+window holds only the sidebar because the shown agent exited, joins it beside
+a sidebar about 40 columns wide with `join-pane`; then it is selected. Pane
+ids move with their programs, so control and readback keep working on parked
+panes. `tongs-agents focus` and the monitor swap a parked agent in before
+they select its window. In a `split` session, or one the workspace did not
+create, agent panes split the current window side by side and the row is
+spread evenly; when the window has no room left, the pane opens in a new
+window. Panes are named with the pane option `@tongs_agents_name`, which
+programs cannot overwrite the way they overwrite pane titles.
 
 tmux keeps no EXITED sessions, so `--resurrect` is ignored with a notice, and
 there is no tongs tab, so `--tongs` is ignored with a notice. With
@@ -251,9 +322,10 @@ launch was created for. Pane control (`tongs-agents send`, `read`, `wait`,
 log as on Zellij. A paste is loaded into a uniquely named tmux buffer from
 stdin and pasted with `paste-buffer -p -r -d`: bracketed when the program
 asked for it, line feeds kept, buffer deleted. Enter is sent separately with
-`send-keys`, and `read` uses `capture-pane -p -J`. Focus selects the window
-and pane and reads the active pane back with `display-message`; it never
-raises a client or an emulator window. `subscribe` is unsupported on tmux.
+`send-keys`, and `read` uses `capture-pane -p -J`. Focus shows a parked pane
+(see above) or selects the window and pane, and reads the active pane back
+with `display-message`; it never raises a client or an emulator window.
+`subscribe` is unsupported on tmux.
 
 The sidebar runs on whichever multiplexer encloses it (tmux when `TMUX` is
 set and `ZELLIJ` is not). On tmux it lists the panes the launcher started in
@@ -261,10 +333,13 @@ its session and joins each one's hook or `tongs-agents notify` status
 through the launch id, so working, done and needs-you reach the tmux sidebar,
 its `n` key and its notifications as they do on Zellij.
 
-`validation/tmux_workspace.py` checks all of this against real tmux servers
-on private sockets (a `-L tongs-<token>` socket and the default socket under
-a private `TMUX_TMPDIR`), and `.github/workflows/tmux-mux.yml` runs it on
-Ubuntu's apt tmux and records the version.
+`validation/tmux_workspace.py` checks all of this, parking and swapping
+included, against real tmux servers on private sockets (a
+`-L tongs-<token>` socket and the default socket under a private
+`TMUX_TMPDIR`), and `.github/workflows/tmux-mux.yml` runs it on Ubuntu's apt
+tmux and records the version. `validation/workspace.py` checks the Zellij
+stack on each pinned release: every agent joins it, a row selection expands
+its pane alone, and a full stack is refused with no pane left behind.
 
 ## Doctor
 
@@ -286,8 +361,17 @@ hides the harness are reported by the core doctor checks and by
   When the sandbox already exists it is reused as it is, so `run` with
   another folder does not upload that folder; delete the sandbox, or give
   the profile its own `sandbox.name`, to start from a different folder.
-- Zellij places new panes itself, so the sidebar shares the tab with the
-  agent panes it spawns and its width depends on how many there are.
+- With `layout = "split"`, Zellij places new panes itself, so the sidebar
+  shares the tab with the agent panes it spawns and its width depends on how
+  many there are.
+- On tmux the sidebar keeps its width when an agent is swapped in, but not
+  when the terminal is resized: tmux then spreads the change over both
+  panes. Parked agents show up as windows in tmux's status bar.
+- Closing the Zellij home pane and every agent pane of the stack leaves the
+  session placing new panes side by side, as a split session does, with a
+  notice; start a new workspace session to get the stack back. A session
+  created before the sidebar carried `--layout single` places new panes side
+  by side as soon as its home pane is closed.
 - A launch that fails before the launcher claims it shows in the sidebar only
   when that sidebar spawned it.
 - Zellij restores layouts, not agent processes; resurrecting an EXITED

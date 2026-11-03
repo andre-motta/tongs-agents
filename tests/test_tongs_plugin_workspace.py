@@ -81,6 +81,13 @@ class TestInsideZellij:
         }]
         assert mux.calls.count(("list_panes", HERE.session)) == 1
 
+    def test_a_readded_sidebar_keeps_the_sessions_layout(self):
+        mux = FakeMux(here=HERE, panes=[_other()])
+        mux.layout = lambda session: "single"
+        assert open_workspace_in_zellij(mux).ok
+        assert mux.spawned[0]["argv"] == workspace_spawn.sidebar_argv(layout="single")
+        assert mux.spawned[0]["argv"][-2:] == ["--layout", "single"]
+
     def test_exited_sidebar_does_not_count(self):
         mux = FakeMux(here=HERE, panes=[_sidebar(exited=True)])
         assert open_workspace_in_zellij(mux).ok

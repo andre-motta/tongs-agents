@@ -291,8 +291,13 @@ class McpControl:
             time.sleep(CLAIM_POLL)
 
     def spawn(self, profile_name: str) -> dict:
-        """Start ``profile_name`` in a new pane of the running workspace session."""
+        """Start ``profile_name`` in a new pane of the running workspace session.
+
+        Placement notices (a Zellij agent stack that is gone) are returned
+        under ``notices``.
+        """
         record = None
+        notices: list[str] = []
         try:
             config = self._config()
             loaded = self._profiles()
@@ -322,7 +327,7 @@ class McpControl:
                 record = launches.create_pending(
                     profile, session, mux.name, spawned_by=caller.launch_id
                 )
-                ref = workspace_spawn.spawn_launch(mux, record)
+                ref = workspace_spawn.spawn_launch(mux, record, notices=notices)
             except (MultiplexerError, LaunchError, OSError) as error:
                 if record is not None:
                     workspace_spawn.discard_launches([record])
@@ -334,7 +339,7 @@ class McpControl:
         control.audit(SPAWN, actor=self.actor, launch_id=record.launch_id, outcome="ok",
                       exit_code=control.EXIT_OK, caller=self.caller)
         claimed = self._await_claim(record.launch_id)
-        return {
+        result = {
             "ok": True,
             "launch_id": record.launch_id,
             "profile": record.profile,
@@ -342,3 +347,6 @@ class McpControl:
             "pane_id": (claimed.pane_id if claimed and claimed.pane_id else ref.pane_id),
             "state": claimed.state if claimed is not None else "unknown",
         }
+        if notices:
+            result["notices"] = notices
+        return result

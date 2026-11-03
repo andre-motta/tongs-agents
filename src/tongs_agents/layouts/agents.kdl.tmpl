@@ -1,5 +1,9 @@
 // tongs-agents workspace layout, rendered once per new session.
 // Only the interpreter, session name, request token and tongs path are filled in.
+// The single block (one agent at a time, a stack beside the sidebar) or the
+// split block (agents side by side) is kept, as [workspace] layout says.
+// The single block's sidebar also names its layout, so the agent column can
+// be found again when its home pane is closed.
 layout {
     default_tab_template {
         pane size=1 borderless=true {
@@ -11,9 +15,23 @@ layout {
         }
     }
     tab name="@SESSION@" focus=true {
+        // @SINGLE_BEGIN@
+        pane split_direction="vertical" {
+            pane name="tongs-agents-sidebar" size=40 focus=true command="@PYTHON@" {
+                args "-m" "tongs_agents.commands.sidebar" "--compact" "--layout" "single" "--spawn-request" "@TOKEN@"
+            }
+            pane stacked=true {
+                pane name="tongs-agents-home" command="@PYTHON@" {
+                    args "-m" "tongs_agents.workspace_spawn" "home"
+                }
+            }
+        }
+        // @SINGLE_END@
+        // @SPLIT_BEGIN@
         pane name="tongs-agents-sidebar" command="@PYTHON@" {
             args "-m" "tongs_agents.commands.sidebar" "--compact" "--spawn-request" "@TOKEN@"
         }
+        // @SPLIT_END@
     }
     // @TONGS_TAB_BEGIN@
     tab name="tongs" {

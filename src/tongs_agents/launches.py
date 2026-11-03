@@ -361,7 +361,8 @@ def list_records(session: str | None = None) -> list[LaunchRecord]:
     return sorted(records, key=lambda record: (record.created, record.launch_id))
 
 
-def _alive(record: LaunchRecord) -> bool:
+def alive(record: LaunchRecord) -> bool:
+    """True when the claimed process of ``record`` runs, with its start token."""
     if record.pid is None:
         return False
     info = discovery.get_process_info(record.pid)
@@ -401,7 +402,7 @@ def prune(max_age_days: int = 7) -> int:
     cutoff = time.time() - max_age_days * 86400
     removed = 0
     for record in list_records():
-        if record.created > cutoff or _alive(record):
+        if record.created > cutoff or alive(record):
             continue
         path = paths.launches_dir() / f"{record.launch_id}.json"
         for entry in (path, path.with_name(f".{record.launch_id}.claim")):

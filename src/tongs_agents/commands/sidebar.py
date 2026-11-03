@@ -12,6 +12,20 @@ hookless rows by selecting their pane directly after checking it is listed.
 folder with path completion and optional extra arguments, started through
 the same spawn path as ``tongs-agents run``.
 
+``:`` (or the palette's Command line) opens the command line
+(``widgets.command_line``): ``run PROFILE [DIR] [-- ARGS]`` and
+``resume [ID] [--profile NAME]`` with the CLI's syntax and checks, in this
+session, with history and Tab completion; the result or the error shows
+under the prompt and Escape closes it.
+
+``u`` (or the palette's Resume in workspace) resumes the selected row's
+harness session in this session; the palette's Resume session… lists the
+recent sessions of the store to pick one (``commands.resume``). A session
+whose process already runs in this session is not resumed again: the
+sidebar offers to show its pane instead. One whose process runs elsewhere
+is resumed only after a confirmation; that process is never stopped. While
+a session is being resumed, another request for it is ignored.
+
 Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
 the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
 selected launched pane, each confirmed in a dialog), Post to chat and Open
@@ -44,18 +58,39 @@ from textual.binding import Binding
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import AppConfig, AppConfigError, load_app_config
 from tongs_agents.commands import CommandParser
-from tongs_agents.models import FleetSession, FocusResult
+from tongs_agents.models import FleetSession, FocusResult, SessionStatus
 from tongs_agents.multiplexers import (
+    LAYOUT_OPTION,
+    LAYOUTS,
     Multiplexer,
     MultiplexerError,
     PaneRef,
     get_multiplexer,
 )
-from tongs_agents.palette import AppShell, PaletteCommand
+from tongs_agents.commands import resume as resume_command
+from tongs_agents.palette import (
+    COMMAND_LINE,
+    RESUME_SELECTED,
+    RESUME_SESSION,
+    AppShell,
+    PaletteCommand,
+)
+from tongs_agents.profiles import load_profiles
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
-from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel
+from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel, ConfirmScreen
+from tongs_agents.widgets.command_line import (
+    CommandContext,
+    CommandError,
+    CommandLine,
+    ResumeCheck,
+    ResumeGuard,
+    already_resuming,
+    check_resume,
+    start_resume,
+)
+from tongs_agents.widgets.resume_picker import ResumePickerScreen
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 NAME = "sidebar"
@@ -69,6 +104,11 @@ def add_arguments(parser):
         help="Consume this spawn request and start its agent panes",
     )
     parser.add_argument("--compact", action="store_true", help="Always use compact rows")
+    parser.add_argument(
+        LAYOUT_OPTION, choices=LAYOUTS, default=None,
+        help="The session's layout; the workspace layout sets it so that panes can find "
+             "the agent stack again after its home pane was closed",
+    )
 
 
 def focus_pane(mux: Multiplexer, ref: PaneRef) -> FocusResult:
@@ -119,12 +159,15 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("plus", "add_agent", "Add agent", show=True),
+        Binding("colon", "command_line", "Command", show=True, key_display=":"),
+        Binding("u", "resume_selected", "Resume", show=False),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
         Binding("a", "review_access", "Access", show=True),
     ]
 
     agents_panel_id = "agents-panel"
+    command_line_id = "command-line"
 
     def __init__(
         self,
@@ -157,6 +200,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         )
         self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
+        self.command_context = CommandContext(multiplexer, session, load_profiles)
         self.init_approvals(self.feed, approval_interval)
 
     def compose(self) -> ComposeResult:
@@ -172,6 +216,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
                          refusal=self.chat_refusal, id=self.chat_panel_id)
         chat.display = False
         yield chat
+        yield CommandLine(self.command_context, id=self.command_line_id)
         yield AppFooter()
 
     def on_mount(self) -> None:
@@ -188,19 +233,208 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         commands = super().palette_commands()
         chat = len(self.chat_commands()) if self.chat_enabled else 0
         at = len(commands) - chat
-        return [*commands[:at], *self.approval_commands(), *commands[at:]]
+        entry = PaletteCommand(
+            COMMAND_LINE,
+            f"Type a workspace verb (run PROFILE [DIR] [-- ARGS]) for session {self.session}",
+            self.action_command_line,
+        )
+        resume = [
+            PaletteCommand(
+                RESUME_SELECTED,
+                f"Resume the selected agent's session in a new pane of session {self.session}",
+                self.action_resume_selected,
+            ),
+            PaletteCommand(
+                RESUME_SESSION,
+                f"Pick a recent session to resume in session {self.session}",
+                self.action_resume_session,
+            ),
+        ]
+        return [*commands[:at], entry, *resume, *self.approval_commands(), *commands[at:]]
+
+    @property
+    def command_line(self) -> CommandLine:
+        return self.query_one(f"#{self.command_line_id}", CommandLine)
+
+    def action_command_line(self) -> None:
+        self.command_line.open()
+
+    def on_command_line_ran(self, event: CommandLine.Ran) -> None:
+        if event.ok:
+            self.agents_panel.poll()
+
+    def on_command_line_closed(self, event: CommandLine.Closed) -> None:
+        self.agents_panel.table.focus()
+
+    # -- Resume --
+
+    def action_resume_selected(self) -> None:
+        session = self.agents_panel.selected_session()
+        if session is None:
+            self.notify("No agent selected", timeout=2)
+            return
+        if (session.source == LAUNCH_SOURCE
+                or session.agent not in resume_command.RESUME_ARGS
+                or not resume_command.SESSION_ID_RE.match(session.session_id)):
+            self.notify(
+                f"{session.repo or session.agent}: no harness session to resume yet",
+                title="Resume", severity="warning", timeout=6,
+            )
+            return
+        self.resume_in_workspace(session.session_id)
+
+    @work(thread=True, exclusive=True, group="resume-list")
+    def action_resume_session(self) -> None:
+        sessions = resume_command.recent_sessions()
+        self.call_from_thread(self._pick_resume, sessions)
+
+    def _pick_resume(self, sessions: list[resume_command.Resumable]) -> None:
+        if not sessions:
+            self.notify("No sessions to resume in the session store", title="Resume",
+                        timeout=5)
+            return
+        self.push_screen(
+            ResumePickerScreen(sessions[:resume_command.LIST_LIMIT], self.session),
+            self._resume_chosen,
+        )
+
+    def _resume_chosen(self, session_id: str | None) -> None:
+        if session_id is not None:
+            self.resume_in_workspace(session_id)
+
+    @property
+    def resuming(self) -> ResumeGuard:
+        """Session ids being resumed, shared with the command line's ``:resume``."""
+        return self.command_context.resuming
+
+    def resume_in_workspace(self, session_id: str) -> None:
+        """Check, confirm when needed, then resume ``session_id`` in this session.
+
+        The id is held in ``resuming`` from before the check until the pane
+        is spawned or the attempt ends; a request for an id already held
+        (from ``u``, the picker or ``:resume``) is ignored with a notice.
+        Each session id has its own exclusive worker groups, one for the
+        check and one for the spawn.
+        """
+        if not self.resuming.acquire(session_id):
+            self.notify(already_resuming(session_id)[0].upper()
+                        + already_resuming(session_id)[1:], title="Resume", timeout=3)
+            return
+        self.run_worker(
+            lambda: self._check_resume(session_id), thread=True,
+            group=f"resume-check-{session_id}", exclusive=True,
+        )
+
+    def _check_resume(self, session_id: str) -> None:
+        try:
+            checked = check_resume(self.command_context, session_id)
+        except CommandError as error:
+            self.call_from_thread(self._resume_failed, session_id, str(error))
+            return
+        except Exception as error:  # noqa: BLE001 - report, never crash the sidebar
+            self.call_from_thread(self._resume_failed, session_id,
+                                  f"{type(error).__name__}: {error}")
+            return
+        self.call_from_thread(self._resume_checked, session_id, checked)
+
+    def _resume_checked(self, session_id: str, checked: ResumeCheck) -> None:
+        if checked.refusal is not None:
+            self.resuming.release(session_id)
+            self._offer_focus(session_id, checked)
+            return
+        if checked.warning is not None:
+            self.push_screen(
+                ConfirmScreen(
+                    "Resume a session that still runs?",
+                    f"{checked.plan.summary}\n\n{checked.warning[0].upper()}"
+                    f"{checked.warning[1:]}.\n\nResume it here anyway?",
+                ),
+                lambda yes: self._resume_confirmed(session_id, checked, yes),
+            )
+            return
+        self._start_resume(session_id, checked)
+
+    def _resume_confirmed(self, session_id: str, checked: ResumeCheck, yes: bool) -> None:
+        if yes:
+            self._start_resume(session_id, checked)
+        else:
+            self.resuming.release(session_id)
+
+    def _start_resume(self, session_id: str, checked: ResumeCheck) -> None:
+        self.run_worker(
+            lambda: self._run_resume(session_id, checked), thread=True,
+            group=f"resume-{session_id}", exclusive=True,
+        )
+
+    def _run_resume(self, session_id: str, checked: ResumeCheck) -> None:
+        try:
+            # The confirmation dialog may have been open for a while: another
+            # terminal could have resumed the same session in this workspace.
+            again = check_resume(self.command_context, session_id)
+            if again.refusal is not None:
+                self.call_from_thread(self._resume_failed, session_id, again.refusal)
+                return
+            notices = start_resume(self.command_context, checked.plan)
+        except CommandError as error:
+            self.call_from_thread(self._resume_failed, session_id, str(error))
+            return
+        except Exception as error:  # noqa: BLE001 - report, never crash the sidebar
+            self.call_from_thread(self._resume_failed, session_id,
+                                  f"{type(error).__name__}: {error}")
+            return
+        self.call_from_thread(self._resumed, session_id, checked.plan.summary,
+                              checked.warning, notices)
+
+    def _live_row(self, session_id: str, live) -> FleetSession | None:
+        """The row of the live process: its pid, else a row that has not ended."""
+        rows = [session for session in self.agents_panel.sessions
+                if session.session_id == session_id]
+        if live is not None and live.pid is not None:
+            for row in rows:
+                if str(row.pid) == str(live.pid):
+                    return row
+        return next((row for row in rows if row.status != SessionStatus.ENDED), None)
+
+    def _offer_focus(self, session_id: str, checked: ResumeCheck) -> None:
+        """Refuse a duplicate and offer to show the pane the session already has."""
+        row = self._live_row(session_id, checked.live)
+        message = checked.refusal[0].upper() + checked.refusal[1:]
+        if row is None:
+            self.notify(message, title="Already running here", severity="warning",
+                        timeout=10)
+            return
+        self.push_screen(
+            ConfirmScreen("Already running here", f"{message}.\n\nShow its pane now?"),
+            lambda yes: self._do_focus(row) if yes else None,
+        )
+
+    def _resume_failed(self, session_id: str, message: str) -> None:
+        self.resuming.release(session_id)
+        self.notify(message, title="Resume failed", severity="error", timeout=15)
+
+    def _resumed(self, session_id: str, summary: str, warning: str | None,
+                 notices: list[str] = ()) -> None:
+        self.resuming.release(session_id)
+        self.notify(f"Resumed {summary}", title="Resume", timeout=5)
+        if warning is not None:
+            self.notify(warning, title="Still running", severity="warning", timeout=20)
+        self.notify_placement(notices)
+        self.agents_panel.poll()
 
     @work(thread=True, exclusive=True, group="spawn-request")
     def consume_spawn_request(self) -> None:
+        notices: list[str] = []
         failures = workspace_spawn.spawn_requested(
             self.multiplexer, self.session, self.token, self.feed.note_spawned,
+            notices=notices,
         )
-        self.call_from_thread(self._spawned, failures)
+        self.call_from_thread(self._spawned, failures, notices)
 
-    def _spawned(self, failures: list[str]) -> None:
+    def _spawned(self, failures: list[str], notices: list[str] = ()) -> None:
         self.spawn_failures.extend(failures)
         for message in failures:
             self.notify(message, title="Spawn failed", severity="error", timeout=15)
+        self.notify_placement(notices)
         self.agents_panel.poll()
 
     def _do_focus(self, session: FleetSession) -> None:

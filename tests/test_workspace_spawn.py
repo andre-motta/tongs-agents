@@ -18,12 +18,16 @@ POSIX_MODES = pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
 
 
 class FakeMux:
-    """A Multiplexer double that records spawns and focus calls."""
+    """A Multiplexer double that records spawns, focus, show and layout calls."""
 
     name = "zellij"
 
     def __init__(self, *, here=None, exists=False, available=(True, "zellij 0.45.1"),
-                 panes=(), fail_spawn=None, state=None, fail_delete=False):
+                 panes=(), fail_spawn=None, state=None, fail_delete=False,
+                 fail_show=False):
+        self.fail_show = fail_show
+        self.shown = []
+        self.layouts = []
         self.here = here
         self.exists = exists
         self.state = state
@@ -81,6 +85,19 @@ class FakeMux:
             activation=FocusOperation.unavailable(ACTIVATION_SKIPPED),
         )
 
+    def show(self, ref):
+        self.shown.append(ref)
+        if self.fail_show:
+            raise MultiplexerError("no client to show it to")
+        return FocusResult(
+            state="partial", reason="pane selected", backend=self.name, target_found=True,
+            selection=FocusOperation(True, True, "tab or pane selection"),
+            activation=FocusOperation.unavailable(ACTIVATION_SKIPPED),
+        )
+
+    def set_layout(self, session, layout):
+        self.layouts.append((session, layout))
+
 
 def profile(name, harness="other", argv=("sleep", "600")):
     return Profile(name=name, harness=harness, argv=tuple(argv))
@@ -119,6 +136,54 @@ def test_spawn_profiles_runs_the_launcher_for_each_profile():
     for record in records:
         stored = launches.get(record.launch_id)
         assert (stored.state, stored.session, stored.multiplexer) == ("pending", "agents", "zellij")
+
+
+class NoticingMux(FakeMux):
+    """A FakeMux whose spawns leave a placement notice, as Zellij's does."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.notices = []
+
+    def spawn(self, session, argv, **kwargs):
+        self.notices.append(f"notice for {kwargs.get('name')}")
+        return super().spawn(session, argv, **kwargs)
+
+    def take_notices(self):
+        notices, self.notices = self.notices, []
+        return notices
+
+
+def test_placement_notices_go_to_the_callers_list_or_stderr(capsys):
+    mux = NoticingMux()
+    notices = []
+    workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha")], notices=notices)
+    assert notices == ["notice for alpha"]
+    assert capsys.readouterr().err == ""
+    workspace_spawn.spawn_profiles(mux, "agents", [profile("beta")])
+    assert capsys.readouterr().err == "tongs-agents: notice: notice for beta\n"
+    assert workspace_spawn.take_notices(FakeMux()) == []
+
+
+def test_a_readded_sidebar_carries_the_sessions_layout():
+    assert workspace_spawn.sidebar_argv("ab" * 16, "single")[3:] == [
+        "--compact", "--layout", "single", "--spawn-request", "ab" * 16]
+    mux = FakeMux()
+    mux.layout = lambda session: "single"
+    workspace_spawn.ensure_sidebar(mux, "agents")
+    assert mux.spawned[-1]["argv"] == workspace_spawn.sidebar_argv(layout="single")
+    split = FakeMux()
+    split.layout = lambda session: None
+    workspace_spawn.ensure_sidebar(split, "agents")
+    assert "--layout" not in split.spawned[-1]["argv"]
+    failing = FakeMux()
+
+    def broken(session):
+        raise MultiplexerError("no answer")
+
+    failing.layout = broken
+    assert workspace_spawn.session_layout(failing, "agents") is None
+    assert workspace_spawn.session_layout(FakeMux(), "agents") is None
 
 
 def test_spawn_profiles_stops_at_the_first_failure():
@@ -375,3 +440,70 @@ def test_check_launch_keeps_the_sandbox_upload_rules(tmp_path, monkeypatch):
 def test_check_launch_refuses_a_string_for_args():
     with pytest.raises(workspace_spawn.LaunchOptionError, match="list of strings"):
         workspace_spawn.check_launch(profile("alpha"), None, "--resume")
+
+
+def test_spawn_profiles_shows_each_pane_once_it_is_up():
+    mux = FakeMux()
+    workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha"), profile("beta")])
+    assert [ref.pane_id for ref in mux.shown] == ["1", "2"]
+    assert mux.focused == []
+
+
+def test_spawn_launch_shows_nothing_unless_asked():
+    mux = FakeMux()
+    record = launches.create_pending(profile("alpha"), "agents", "zellij")
+    ref = workspace_spawn.spawn_launch(mux, record)
+    assert mux.shown == []
+    assert workspace_spawn.spawn_launch(mux, record, show=True) != ref
+    assert len(mux.shown) == 1
+
+
+def test_a_failed_show_does_not_fail_the_spawn():
+    mux = FakeMux(fail_show=True)
+    records = workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha")])
+    assert [record.profile for record in records] == ["alpha"]
+    assert len(mux.shown) == 1
+    assert launches.get(records[0].launch_id) is not None
+
+
+def test_spawn_requested_shows_the_spawned_panes():
+    mux = FakeMux()
+    records = workspace_spawn.create_launches("zellij", "agents", [profile("alpha")])
+    token = workspace_spawn.write_spawn_request("agents", [r.launch_id for r in records])
+    assert workspace_spawn.spawn_requested(mux, "agents", token) == []
+    assert [ref.pane_id for ref in mux.shown] == ["1"]
+
+
+def test_ensure_sidebar_never_shows_the_sidebar():
+    mux = FakeMux()
+    workspace_spawn.ensure_sidebar(mux, "agents")
+    assert [call["name"] for call in mux.spawned] == [SIDEBAR_PANE_NAME] and mux.shown == []
+
+
+def test_home_argv_runs_this_module():
+    assert workspace_spawn.home_argv() == [
+        sys.executable, "-m", "tongs_agents.workspace_spawn", "home",
+    ]
+
+
+def test_home_prints_the_hint_and_stays_up(monkeypatch, capsys):
+    class Stop(Exception):
+        pass
+
+    def sleep(seconds):
+        raise Stop
+
+    ignored = []
+    monkeypatch.setattr(workspace_spawn.time, "sleep", sleep)
+    monkeypatch.setattr(workspace_spawn.signal, "signal",
+                        lambda number, handler: ignored.append((number, handler)))
+    with pytest.raises(Stop):
+        workspace_spawn.main(["home"])
+    assert "Select one in the sidebar" in capsys.readouterr().out
+    assert ignored == [(workspace_spawn.signal.SIGINT, workspace_spawn.signal.SIG_IGN)]
+
+
+def test_main_refuses_anything_but_home(capsys):
+    assert workspace_spawn.main([]) == 2
+    assert workspace_spawn.main(["home", "x"]) == 2
+    assert "usage" in capsys.readouterr().err
