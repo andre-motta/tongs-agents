@@ -14,7 +14,7 @@ evidence for the CTO, not product code; nothing under `src/` changes.
 | --- | --- |
 | **live** | The installed harness binary ran in isolated config dirs and the probe observed what it did: files it wrote, CLI output, its session init message, or hook subprocesses it spawned. Model turns used a synthetic provider on 127.0.0.1. |
 | **instrumented** | Real code observed through a stand-in for part of the system. No answer below needed this label. |
-| **unvalidated** | Read from shipped documentation, changelogs or binary strings, not exercised. |
+| **unvalidated** | Read from shipped documentation, changelogs or binary strings, or carried over from development notes, and not exercised by the probe. |
 
 ## Environment
 
@@ -24,7 +24,7 @@ evidence for the CTO, not product code; nothing under `src/` changes.
 | Claude Code | 2.1.317 (native binary; the `claude` command is a symlink to `versions/2.1.317`) |
 | Codex | codex-cli 0.166.0 (static musl standalone release) |
 | Pi | `@earendil-works/pi-coding-agent` 1.5.0 (npm global) |
-| Probe | [`validation/harness_facts.py`](../../validation/harness_facts.py), sha256 `fd45ad6003c70df591041d4ce17016fd02b5e789ba0820094ef3b3715f112ab3`; recorded run 2026-11-03T02:54Z, exit 0 |
+| Probe | [`validation/harness_facts.py`](../../validation/harness_facts.py). Original run 2026-11-03T02:54Z, exit 0 (JSON not committed). Committed run after cleanup #44 added the changed-command and daemon-stop steps: sha256 `29d2ea62f2c723c657bdfd31ac87599c59534743d3c4354292b4c7121c17fdc3`, 2026-11-03T05:14Z, exit 0, same harness versions. Every earlier finding held; the new steps added the changed-command row and the late daemon `SessionEnd` in (b), where the original run had only waited 5 s and reported none |
 
 ## Method
 
@@ -76,9 +76,13 @@ credential or API key reaches a harness.
   with no survivors. Evidence JSON replaces the private root, home, user and
   host names with placeholders and the probe refuses to write if any leak.
 
-The evidence JSON is not committed by this item; rerun the command above to
-regenerate it. Steps needing a real account were not required: every question
-below was answered with the synthetic provider.
+The redacted evidence of the recorded run is committed as
+[`validation/evidence/harness-facts-fedora44.json`](../../validation/evidence/harness-facts-fedora44.json)
+and checked by `tests/test_harness_facts_probe.py`. That run (cleanup #44)
+also had no network: the probe ran in a private user and network namespace
+with only loopback up, mapped to the same uid, so the synthetic provider was
+the only reachable endpoint. Steps needing a real account were not required:
+every question below was answered with the synthetic provider.
 
 ## Answers
 
@@ -120,11 +124,14 @@ and uninstall, and have doctor report it as a legacy leftover.
 | Question | Answer | Label |
 | --- | --- | --- |
 | Is `$CODEX_HOME/hooks.json` honoured? | **Yes.** `hooks/list` reports all six events with source `user` and `sourcePath` in the private `CODEX_HOME`. | live |
-| Do new hooks run immediately? | **No.** Every new hook is `untrusted` and a `codex exec` turn ran none of them. Trust is stored in `$CODEX_HOME/config.toml` as `[hooks.state."<hooks.json path>:<event>:<group>:<handler>"] trusted_hash = "sha256:..."`. A changed command yields a different hash, so moving the virtualenv (a new `tongs-agents-hook` path) needs a new review. | live |
-| Does `SessionEnd` fire? | **Yes** in `codex exec`, in `codex --no-daemon` and with `daemon_auto_start` disabled and no daemon running. **No** when a default TUI attached to the shared daemon exits (runs tui-1 and tui-2). Codex also clamps its timeout to 3 s, matching our installer. | live |
+| Do new hooks run immediately? | **No.** Every new hook is `untrusted` and a `codex exec` turn ran none of them. Trust is stored in `$CODEX_HOME/config.toml` as `[hooks.state."<hooks.json path>:<event>:<group>:<handler>"] trusted_hash = "sha256:..."`. | live |
+| Does a changed hook command need a new review? | **Yes.** After every trusted command was given a different argument, `hooks/list` kept the same keys but reported a new `currentHash` and `trustStatus` `modified` for each; restoring the original commands made them `trusted` again. Moving the virtualenv (a new `tongs-agents-hook` path) therefore needs a new `/hooks` review. | live |
+| Does `SessionEnd` fire? | **Yes** in `codex exec`, in `codex --no-daemon` and with `daemon_auto_start` disabled and no daemon running, each within 5 s of exit. **Late** for a default TUI attached to the shared daemon (runs tui-1 and tui-2): nothing within 5 s of the TUI's exit, then about 58 s after each exit the daemon ran `SessionEnd` with the **first launch's environment** (tui-1's launch id, also for tui-2), long before `codex app-server daemon stop`. No hook ran during the stop or in the 10 s after it. | live |
 | Does `PermissionRequest` fire? | **Yes** in the interactive TUI (`--no-daemon`) when the model requests an escalated command. Not in `codex exec`, which refuses approvals outright. | live |
 | Does `codex mcp add` respect `CODEX_HOME`? | **Yes.** The entry lands in `$CODEX_HOME/config.toml` as `[mcp_servers.<name>]`, `codex mcp get --json` finds it, and no `$HOME/.codex` is created. | live |
-| Does `codex --profile X` share hooks? | **Yes.** In 0.166.0 `--profile X` layers `$CODEX_HOME/X.config.toml` on the base config (the legacy `[profiles]` selector can no longer be written). A turn under `--profile probe` fired the base `hooks.json` hooks with the base trust entries. | live |
+| Does `codex --profile X` share hooks? | **Yes.** A `codex exec --profile probe` turn, with `$CODEX_HOME/probe.config.toml` present, fired the base `hooks.json` hooks with the base trust entries. | live |
+| How does 0.166.0 select a profile? | `--profile X` layers `$CODEX_HOME/X.config.toml` on the base config, and the legacy `[profiles]` table selector can no longer be written. The probe only used the file form; it never wrote or read a `[profiles]` table. Source: development notes for this item (Codex docs or help output), not recorded. | unvalidated |
+| Does Codex clamp hook timeouts? | Development notes for this item say Codex clamps the `SessionEnd` timeout to 3 s, matching our installer. The probe always writes `timeout: 3` for `SessionEnd` itself, so it never observed a clamp. Source not recorded. | unvalidated |
 
 **Recommended installer behaviour:** keep both `SessionEnd` and
 `PermissionRequest` in `CODEX_HOOK_EVENTS` (consistent with the CTO evidence
@@ -132,7 +139,8 @@ correction). Keep `--codex-home DIR` writing `DIR/hooks.json` and running
 `codex mcp` with `CODEX_HOME=DIR`. A Codex profile needs no separate install
 because it shares its `CODEX_HOME`. The installer must not write trust
 entries itself: trust is Codex's security review. It should keep printing the
-`/hooks` instruction, and doctor should report `untrusted` or `modified` hooks.
+`/hooks` instruction, and doctor should report `untrusted` or `modified` hooks
+(a changed command was observed as `modified`).
 `codex app-server` `hooks/list` exposes `trustStatus` per hook, but the
 app-server protocol is marked experimental, so doctor should treat it as
 best-effort and fall back to "review with /hooks".
@@ -183,7 +191,9 @@ in-process whether or not a daemon is running.
   change shared daemon settings for other clients.
 - **Hook (M1-C):** launch identity from env is reliable for Claude, Pi and
   non-daemon Codex. M1-C can rely on it in the M1 gate once the launcher
-  forces `--no-daemon`.
+  forces `--no-daemon`. For a daemon-hosted session, `SessionEnd` arrives
+  about a minute after the TUI exits and carries the first launch's identity
+  (see (b)), so such an event must not end the first launch's record.
 - **Doctor (M1-G):** warn on a `codex` profile without `--no-daemon`, and
   (separately, for the shipped monitor) on a running daemon for a monitored
   `CODEX_HOME`.
@@ -204,7 +214,7 @@ from inside the harness finds a match. All rows are live.
 | Shell alias (`bash -c` with an alias to `claude`) | `claude` / `2.1.317` / `claude` (bash execs the last command) | yes | yes | yes |
 | `codex` on PATH, env-only profile, exec wrapper, alias | `codex` / `codex` / `codex` | yes | yes | yes |
 | Codex non-exec wrapper | `codex-plain` / `bash` / `sh` | **no** | **no** | yes, at the child |
-| Codex differently named symlink `codex-personal` | `codex-personal` / `codex` / `codex-personal` | yes (exe only) | yes | yes |
+| Codex differently named symlink `codex-alt` | `codex-alt` / `codex` / `codex-alt` | yes (exe only) | yes | yes |
 
 The kernel names a process after the path it executed, not the symlink
 target, so Claude matches only through the literal name `claude`: its exe
@@ -270,5 +280,8 @@ check. This is a CTO choice because it changes a hosted gate.
 - Claude was exercised in print mode (`-p`). The interactive TUI uses the same
   process model for hooks, but it was not driven here.
 - Codex `PermissionRequest` was observed with an escalated shell command only.
+- The late daemon `SessionEnd` delay (about 58 s for both runs) comes from one
+  committed run; an earlier uncommitted run during this cleanup showed the same
+  arrival order. What triggers it (an idle unload is likely) was not observed.
 - The synthetic provider is not a real model; it proves which hooks the
   harness runs for a given turn shape, not how a model behaves.

@@ -273,6 +273,31 @@ which keeps one run per pin with source hashes. The maintainer's live run with
 real profiles is separate; see the
 [runbook](../docs/work/workspace-live-run.md).
 
+## Investigation probes
+
+Two local-only Linux probes back investigation records rather than a product
+gate. Neither runs in CI.
+
+```console
+python validation/harness_facts.py --output <scratch>/harness-facts.json
+python validation/workspace_spike.py --zellij-dir <dir with extracted zellij> --out <scratch>/spike.json
+```
+
+`harness_facts.py` runs the installed Claude Code, Codex and Pi binaries with
+a private `HOME`, XDG dirs and agent config dir each, against a synthetic
+model provider on 127.0.0.1; no account or API key is used. It hashes the
+user's agent config files before and after and fails if any changed.
+`workspace_spike.py` drives one extracted upstream Zellij binary in private
+dirs, sockets and PTYs, with a private tmux socket for its tmux step. Both
+redact their JSON and refuse to emit home paths, user names or host names.
+The records are
+[`harness-facts-fedora44.json`](evidence/harness-facts-fedora44.json) for
+[harness facts](../docs/work/harness-facts.md) and
+`workspace-spike-fedora44-zellij-<version>.json` for the
+[workspace spike](../docs/work/workspace-spike.md);
+`tests/test_harness_facts_probe.py` and `tests/test_workspace_spike_probe.py`
+cover their pure helpers and the committed records.
+
 ## Kitty remote-control selection and KWin activation on Linux
 
 ```console
