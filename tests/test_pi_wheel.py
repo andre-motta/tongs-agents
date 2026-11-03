@@ -26,7 +26,7 @@ def test_wheel_contains_loadable_pi_extension(tmp_path):
         timeout=60,
         env={
             **os.environ,
-            "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_CLAUDE_FLEET_MONITOR": "0.0.0",
+            "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS_AGENTS": "0.0.0",
         },
     )
     assert result.returncode == 0, result.stdout + result.stderr

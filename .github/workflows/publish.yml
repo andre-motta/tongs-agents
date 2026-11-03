@@ -6,41 +6,148 @@ on:
       - "v*"
 
 permissions:
-  id-token: write
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  tests:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/test.yml
+
+  shells:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/shells.yml
+
+  pi:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/pi.yml
+
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      - name: Install hash-pinned release tools
+        run: >-
+          python -m pip install
+          --require-hashes
+          --only-binary :all:
+          -r .github/release-requirements.txt
 
       - name: Build package
-        run: python -m build
+        run: python -m build --no-isolation
 
-      - uses: actions/upload-artifact@v4
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the tag commit is on main
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin '+refs/heads/main:refs/remotes/origin/main'
+          tag_commit="$(git rev-parse --verify "refs/tags/${TAG_NAME}^{commit}")"
+          test "$tag_commit" = "$(git rev-parse --verify "${GITHUB_SHA}^{commit}")"
+          git merge-base --is-ancestor "$tag_commit" refs/remotes/origin/main
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
 
+      - name: Verify the built version equals the tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import tarfile
+          import zipfile
+          from email.parser import HeaderParser
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          release = r"v(\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?)"
+          match = re.fullmatch(release, tag)
+          if match is None:
+              sys.exit(f"tag {tag!r} is not a release version without dev or local suffix")
+          expected = match.group(1)
+
+          files = sorted(Path("dist").iterdir())
+          wheels = [path for path in files if path.name.endswith(".whl")]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          if len(files) != 2 or len(wheels) != 1 or len(sdists) != 1:
+              sys.exit(f"expected one wheel and one sdist, found {[p.name for p in files]}")
+
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              metadata = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+              if len(metadata) != 1:
+                  sys.exit("wheel has no single METADATA file")
+              wheel_version = HeaderParser().parsestr(wheel.read(metadata[0]).decode())["Version"]
+
+          with tarfile.open(sdists[0]) as sdist:
+              pkg_info = [m for m in sdist.getmembers() if re.fullmatch(r"[^/]+/PKG-INFO", m.name)]
+              if len(pkg_info) != 1:
+                  sys.exit("sdist has no single top-level PKG-INFO file")
+              sdist_version = HeaderParser().parsestr(sdist.extractfile(pkg_info[0]).read().decode())["Version"]
+
+          for label, version in (("wheel", wheel_version), ("sdist", sdist_version)):
+              if version != expected:
+                  sys.exit(f"{label} version {version!r} does not equal tag {tag!r}")
+          if not wheels[0].name.startswith(f"tongs_agents-{expected}-"):
+              sys.exit(f"unexpected wheel name {wheels[0].name}")
+          if sdists[0].name != f"tongs_agents-{expected}.tar.gz":
+              sys.exit(f"unexpected sdist name {sdists[0].name}")
+          print(f"dist matches {tag}: {[p.name for p in files]}")
+          PY
+
   publish:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
+    needs: [tests, shells, pi, build, verify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tongs-agents
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist/
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3

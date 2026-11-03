@@ -17,14 +17,14 @@ active initiative until a migration is agreed again.
 | Setup | `python3 -m venv .venv`, then `.venv/bin/python -m pip install -e ".[dev]"`; Windows uses `.venv/Scripts/python.exe` |
 | Focused checks | Relevant pytest modules, applicable functional checks and `git diff --check` |
 | Integrated checks | Full pytest and available local Python matrix; `.[dev,tongs]` when changing Tongs integration; actual affected CLI/MCP/harness journeys |
-| Hosted gates | Workflow semantic lint, Python matrix with headless TUI journey, strict Podman shell validation and real Pi lifecycle/tmux validation on PRs into `main` and `feat/**`, plus pushes to `main` |
+| Hosted gates | Workflow semantic lint, Python matrix with headless TUI journey, Python 3.12 run with the `tongs` extra, strict Podman shell validation and real Pi lifecycle/tmux validation on PRs into `main` and `feat/**`, plus pushes to `main` |
 | Documentation checks | Relative links, command accuracy, policy consistency and `git diff --check` |
 | Platforms | Preserve Linux/macOS/Windows behavior using platform mocks; require live evidence for newly claimed terminal or desktop capabilities |
 | Commit rules | Imperative title under 50 characters, blank line, one-line why body, issue reference and trailers; `git commit -s`; `Co-Authored-By` naming the actual Claude model without context-size annotation |
 | Tracker authority | Maintain the initiative's issues, links and public-safe progress |
 | Publication authority | Per initiative, as Andre states it. Current (tongs-agents, until v0.10.0 is tagged): one PR per issue into `main`; the orchestrator squash-merges on green CI when review found no blockers and posts the squash message in the PR. After v0.10.0: squash-merged after Andre approves the squash message |
 | Reserved CTO gate | Design approval, final acceptance and merge into `main`; direct main pushes, tags, releases and deployments require covered authorization |
-| Publication effects | `main` and PR CI as above; `v*` tags publish to PyPI using the `pypi` environment; no Pages workflow found |
+| Publication effects | `main` and PR CI as above; a `v*` tag publishes to PyPI through the `pypi` environment only after the reusable Tests, Shell validation and Pi validation gates pass on the tagged commit, that commit is on `main`, and the hash-pinned build has the tag's exact version and passes `twine check --strict`; no Pages workflow found |
 | Evidence | Public-safe records under `docs/work/` and validation artifacts; no private conversation content, credentials or personal absolute paths |
 
 Use the environment's Python. Standard tests must not require live agents,

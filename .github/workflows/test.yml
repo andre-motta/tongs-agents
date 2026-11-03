@@ -4,17 +4,19 @@ on:
   push:
     branches:
       - main
-      - feat/harnesses-desktop
   pull_request:
     branches:
       - main
       - 'feat/**'
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # A fixed prefix: in a called workflow github.workflow names the caller,
+  # so the three gates called by publish.yml would cancel each other.
+  group: tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -41,6 +43,24 @@ jobs:
 
       - name: Validate headless TUI journey
         run: python validation/tui.py
+
+  tongs-plugin:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with dev and tongs dependencies
+        run: pip install -e ".[dev,tongs]"
+
+      - name: Run tests with the tongs plugin installed
+        run: pytest -v
 
   workflow-lint:
     runs-on: ubuntu-24.04

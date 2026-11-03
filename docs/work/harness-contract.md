@@ -7,7 +7,7 @@ backends.
 
 ## Registry and compatibility
 
-`claude_fleet_monitor.harnesses` is the built-in registry. A `HarnessSpec`
+`tongs_agents.harnesses` is the built-in registry. A `HarnessSpec`
 declares a stable lowercase harness ID, display name, exact process names,
 accepted event names, process identity mode and capabilities. Claude Code and
 Codex use discoverable process identity. Pi is registered for extension events
@@ -43,7 +43,7 @@ so they cannot inject a canonical consumer key.
 An extension invokes the installed hook entry point as:
 
 ```text
-claude-fleet-hook fleet-event --agent <harness-id>
+tongs-agents-hook fleet-event --agent <harness-id>
 ```
 
 It writes one UTF-8 JSON object to standard input. The maximum encoded payload
