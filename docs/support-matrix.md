@@ -57,7 +57,7 @@ hands-on run with real profiles has not been recorded yet
 | **Zellij older than 0.44.2** | No: `workspace` stops and `doctor` reports an error | -- | -- | mocked; the [version floor](../validation/evidence/zellij-version-floor-fedora44.json) is live for pane selection |
 | **Zellij newer than 0.45.1** | Allowed with a `doctor` warning | Unvalidated | Unvalidated | mocked |
 | **Zellij on macOS or Linux aarch64** | Not run | Unvalidated | Unvalidated | unvalidated |
-| **tmux 3.2 or newer** | Yes: `workspace --multiplexer tmux` creates the session detached with the sidebar as its first pane, spawns the profiles and attaches | Yes: inside tmux it adds panes to the current session | The sidebar lists launch rows with the pane state; hook status shows in `monitor` and `agent-status`. Pane focus selects the window and pane with readback (validator, not through a sidebar row) | instrumented (validator on real tmux servers with fake REPL fixtures, [JSON](../validation/evidence/tmux-workspace-linux-x86_64.json)); mocked |
+| **tmux 3.2 or newer** | Yes: `workspace --multiplexer tmux` creates the session detached with the sidebar as its first pane, spawns the profiles and attaches | Yes: inside tmux it adds panes to the current session | The sidebar lists launch rows joined to their hook or `notify` status by launch id (mocked), else with the pane state. Pane focus selects the window and pane with readback (validator, not through a sidebar row) | instrumented (validator on real tmux servers with fake REPL fixtures, [JSON](../validation/evidence/tmux-workspace-linux-x86_64.json)); mocked |
 | **Windows** | No: `workspace` reports unsupported and exits 2 | -- | -- | mocked |
 
 | Profile kind | What the launcher sets | Status in the sidebar | Evidence |

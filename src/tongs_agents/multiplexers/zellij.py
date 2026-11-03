@@ -8,7 +8,9 @@ Focus moves only the client that most recently sent input and is confirmed by
 `list-clients` readback; no emulator window is ever activated.
 
 Pane I/O always names the pane with `--pane-id`: `paste` (bracketed when the
-pane's program turned bracketed paste on, at most 64 KiB), `send-keys`,
+pane's program turned bracketed paste on, at most 64 KiB; 0.44.2 and 0.45.1
+take the text only as an argument, never from stdin or a file, so it shows in
+the process list while the call runs), `send-keys`,
 `dump-screen --full` into a 0600 temp file under runtime_dir() that is read
 and unlinked, and a bounded `subscribe --format json` stream. `action` exits 0
 for an unknown pane id, so callers verify the pane first (control.py); the
