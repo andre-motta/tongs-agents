@@ -34,6 +34,37 @@ The evidence behind this table has defined limits:
   mocked. No live Claude or Codex runtime or desktop GUI acceptance is included
   in this matrix.
 
+## Agent workspace, multiplexers and profiles
+
+The [agent workspace](workspace.md) runs agents as panes of a Zellij session
+next to the tongs-agents sidebar; [profiles](profiles.md) name the commands it
+starts. The instrumented evidence comes from the
+[workspace validator](../validation/README.md#agent-workspace-on-linux), which
+runs the real `install`, `workspace`, sidebar, launcher and hook against real
+Zellij servers and PTY clients in a private root, with fake harness fixtures
+in place of agents. It runs locally and in the hosted `workspace-validation`
+job on both pinned Zellij releases
+([JSON](../validation/evidence/workspace-linux-x86_64.json)). The maintainer's
+hands-on run with real profiles has not been recorded yet
+([runbook](work/workspace-live-run.md)), so no workspace row is labelled live.
+
+| Multiplexer | Workspace session and spawn request | In-session rerun | Row focus from the sidebar | Evidence |
+| --- | --- | --- | --- | --- |
+| **Zellij 0.44.2 and 0.45.1** (Linux x86_64) | Yes: `workspace --profile ... --no-tongs` creates the session in under 5 s with the sidebar plus one pane per profile; the sidebar consumes the spawn request once and removes the layout | Yes: run inside the session it adds panes to the same session, keeps one sidebar and starts no second server | Yes: Enter on a hook or launch row selects that pane for the most recent input client, confirmed by `list-clients` with a second client attached; window activation is skipped, never attempted | instrumented (validator on both pins, [JSON](../validation/evidence/workspace-linux-x86_64.json)); mocked; live run pending ([runbook](work/workspace-live-run.md)) |
+| **Zellij older than 0.44.2** | No: `workspace` stops and `doctor` reports an error | -- | -- | mocked; the [version floor](../validation/evidence/zellij-version-floor-fedora44.json) is live for pane selection |
+| **Zellij newer than 0.45.1** | Allowed with a `doctor` warning | Unvalidated | Unvalidated | mocked |
+| **Zellij on macOS or Linux aarch64** | Not run | Unvalidated | Unvalidated | unvalidated |
+| **tmux** | No workspace yet (M3) | -- | `focus` selects the pane; see [Supported terminals](#supported-terminals) | -- |
+| **Windows** | No: `workspace` reports unsupported and exits 2 | -- | -- | mocked |
+
+| Profile kind | What the launcher sets | Status in the sidebar | Evidence |
+| --- | --- | --- | --- |
+| Any profile in the workspace | `TONGS_AGENTS_LAUNCH_ID` and `TONGS_AGENTS_PROFILE`; `TMUX` dropped inside Zellij | A hook row joined to its launch record within 4 s of the pane appearing, named after the profile; a launch row with the pane state until the first hook event | instrumented (pi and Claude fixtures report the inherited launch identity and pane, and the hook record carries it); mocked |
+| Claude Code with `config_dir` | `CLAUDE_CONFIG_DIR` | Hook status once `install --claude-config-dir DIR` (or a profile-driven `install`) wrote the hooks into that dir; without them only a `discovered` launch row | instrumented (a fixture runs the hooks installed in its own config dir; an uninstalled control dir stays `discovered`; MCP registration targeted the dir through a stub CLI); mocked (two dirs, HOME untouched); live pending |
+| Codex with `config_dir` or `--profile` | `CODEX_HOME`; `--no-daemon` appended so hooks fire in-process | Hook status from the Codex hooks | mocked; live pending |
+| pi with `config_dir`, `--provider` and `--model` | `PI_CODING_AGENT_DIR`; arguments passed as argv | Hook status from the pi extension's `fleet-event` records | instrumented (fixture sends `fleet-event` through `tongs-agents-hook` with its own pid); mocked; live pending |
+| `other` (any command or wrapper) | Identity variables only | Launch row with the pane state (`starting`, `running`, `exited N`) unless the command runs a hook | mocked |
+
 ## Supported terminals
 
 The table lists implemented backend capabilities and the strongest evidence
@@ -242,7 +273,7 @@ Focus command reads session JSON
 - **Kitty windows:** Window raise is KDE Plasma (KWin) only, verified on Plasma Wayland (Plasma X11 and XWayland kitty are not verified), and needs a single OS window per kitty process; other desktops, several OS windows (including `--single-instance`), and sessions recorded before `KITTY_PID` was captured report activation unavailable with the reason.
 - **GNU screen windows:** Selection is read back, but no GUI window activation is claimed. A screen session owns no window.
 - **zellij windows:** Window activation is Linux only and needs exactly one attached interactive client; with several clients, or a `zellij watch`, `zellij web` or other non-interactive zellij process connected, tongs-agents cannot tell which window shows the pane and reports activation unavailable. Elsewhere zellij activation is unavailable. Real GUI activation through the client's emulator is not live-validated yet: the live validator routes to an instrumented parent only.
-- **GNU screen and zellij with several displays or clients:** GNU screen switches only the most recently attached display, and zellij moves only the client that most recently received input; other displays and clients keep their own window or pane. Both need an attached display or client: a detached session reports a failed selection.
+- **GNU screen and zellij with several displays or clients:** GNU screen switches only the most recently attached display, and zellij moves only the client that most recently received input; other displays and clients keep their own window or pane. Both need an attached display or client: a detached session reports a failed selection. One exception was observed by the workspace validator on zellij 0.44.2 and 0.45.1: with zellij's default `stacked_resize`, another client that sits on a pane in the same stack as the target follows the expanded pane.
 - **zellij socket directory:** Every zellij call targets the session's socket directory: on Linux it is derived from the zellij server's command line, otherwise the `ZELLIJ_SOCKET_DIR` captured at hook time is used, and without either zellij's default applies. A session that cannot be found reports which socket directory was searched.
 - **zellij selection proof:** Selection succeeds only when a client that was elsewhere moves to the pane, or when every attached client already showed it ("pane already focused"). An idle client that already showed the pane while the active client did not move is a failure.
 - **Generic fallback:** Unknown terminals get no selection or window raise; the earlier best-effort raise could activate an unrelated window and was removed.

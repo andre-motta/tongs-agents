@@ -250,3 +250,168 @@ jobs:
           path: ${{ runner.temp }}/zellij-validation/
           if-no-files-found: error
           retention-days: 7
+
+  workspace-validation:
+    needs: pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        zellij-version: ${{ fromJSON(needs.pins.outputs.versions) }}
+    env:
+      ZELLIJ_VERSION: ${{ matrix.zellij-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record checkout metadata
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/workspace-validation"
+          mkdir -p "$evidence_dir"
+          {
+            printf 'checkout_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'checkout_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'zellij_version=%s\n' "$ZELLIJ_VERSION"
+            printf 'pin_table=src/tongs_agents/data/zellij_pins.json\n'
+            printf 'kernel_release=%s\n' "$(uname -r)"
+            printf 'intended_zellij_process=real pinned zellij server and clients\n'
+            printf 'intended_agents=fake harness fixtures calling tongs-agents-hook\n'
+            printf 'intended_gui_window_focus=not exercised\n'
+            printf 'observed_outcomes=evidence.json, diagnostics.txt and validator-exit-code.txt\n'
+          } > "$evidence_dir/metadata.txt"
+
+      - name: Download and verify Zellij
+        run: |
+          set -euo pipefail
+          fields="$(python3 -I - src/tongs_agents/data/zellij_pins.json "$ZELLIJ_VERSION" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              entry = json.load(handle)["pins"][sys.argv[2]]["linux-x86_64"]
+          if entry["flavor"] != "no-web":
+              sys.exit(f"unexpected flavor {entry['flavor']!r}")
+          print(entry["asset"], entry["url"], entry["sha256"], entry["size"],
+                entry["binary_sha256"])
+          PY
+          )"
+          read -r asset url expected_sha256 expected_size expected_binary_sha256 <<< "$fields"
+          download_dir="$RUNNER_TEMP/zellij-download"
+          bin_dir="$RUNNER_TEMP/zellij-bin"
+          archive_path="$download_dir/$asset"
+          mkdir -p "$download_dir"
+          mkdir "$bin_dir"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 300 \
+            --proto '=https' \
+            --tlsv1.2 \
+            --output "$archive_path" \
+            "$url"
+          test "$(stat -c %s "$archive_path")" = "$expected_size"
+          actual_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+          test "$actual_sha256" = "$expected_sha256"
+          tar -xzf "$archive_path" -C "$bin_dir" --no-same-owner zellij
+          test "$(ls -A "$bin_dir")" = 'zellij'
+          test -f "$bin_dir/zellij"
+          test ! -L "$bin_dir/zellij"
+          test -x "$bin_dir/zellij"
+          actual_binary_sha256="$(sha256sum "$bin_dir/zellij" | awk '{print $1}')"
+          test "$actual_binary_sha256" = "$expected_binary_sha256"
+          reported="$("$bin_dir/zellij" --version)"
+          test "$reported" = "zellij $ZELLIJ_VERSION"
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+          {
+            printf 'zellij_asset=%s\n' "$asset"
+            printf 'zellij_url=%s\n' "$url"
+            printf 'zellij_archive_sha256=%s\n' "$actual_sha256"
+            printf 'zellij_binary_sha256=%s\n' "$actual_binary_sha256"
+            printf 'zellij_reported_version=%s\n' "$reported"
+          } >> "$RUNNER_TEMP/workspace-validation/metadata.txt"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: python -m pip install -e .
+
+      - name: Probe hosted capabilities
+        id: probe
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/workspace-validation"
+          python - "$evidence_dir/capabilities.txt" "$GITHUB_OUTPUT" <<'PY'
+          import os
+          import pty
+          import sys
+
+
+          def pty_label():
+              try:
+                  pid, descriptor = pty.fork()
+              except OSError as error:
+                  return f"unavailable ({error})"
+              if pid == 0:
+                  os._exit(0)
+              _, status = os.waitpid(pid, 0)
+              os.close(descriptor)
+              return "available" if os.waitstatus_to_exitcode(status) == 0 else "unavailable"
+
+
+          label = pty_label()
+          skip = "" if label == "available" else f"pty {label} on the hosted runner"
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              handle.write(f"pty={label}\n")
+          with open(sys.argv[2], "a", encoding="utf-8") as handle:
+              handle.write(f"validator={'skip' if skip else 'run'}\n")
+              handle.write(f"skip_label={skip}\n")
+          PY
+          cat "$evidence_dir/capabilities.txt" >> "$evidence_dir/metadata.txt"
+
+      - name: Run the workspace validator
+        env:
+          VALIDATOR_MODE: ${{ steps.probe.outputs.validator }}
+          SKIP_LABEL: ${{ steps.probe.outputs.skip_label }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/workspace-validation"
+          if [ "$VALIDATOR_MODE" != 'run' ]; then
+            printf 'skipped: %s\n' "$SKIP_LABEL" > "$evidence_dir/validator-skipped.txt"
+            printf 'skipped\n' > "$evidence_dir/validator-exit-code.txt"
+            printf 'validator_exit_code=skipped (%s)\n' "$SKIP_LABEL" \
+              >> "$evidence_dir/metadata.txt"
+            printf 'Workspace %s validator skipped: %s\n' "$ZELLIJ_VERSION" "$SKIP_LABEL" \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Workspace validator skipped::$SKIP_LABEL"
+            exit 0
+          fi
+          status=0
+          python validation/workspace.py --no-write \
+            > "$evidence_dir/evidence.json" \
+            2> "$evidence_dir/diagnostics.txt" || status=$?
+          printf '%s\n' "$status" > "$evidence_dir/validator-exit-code.txt"
+          printf 'validator_exit_code=%s\n' "$status" >> "$evidence_dir/metadata.txt"
+          printf 'Workspace %s validator exit code: %s\n' "$ZELLIJ_VERSION" "$status" \
+            >> "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 0
+
+      - name: Upload workspace validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace-validation-evidence-${{ matrix.zellij-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/workspace-validation/
+          if-no-files-found: error
+          retention-days: 7

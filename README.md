@@ -16,11 +16,12 @@ tongs is optional.
 > (no date).
 >
 > - **Works today:** hook-based status for Claude Code, Codex and pi, the
->   `monitor` TUI, `focus`, `status`, `doctor`, an MCP server and an optional
->   tongs plugin screen. See [What works today](#what-works-today).
-> - **Coming:** the `tongs-agents workspace` command with a Zellij session and
->   sidebar, launch profiles, config emitters, agent control, agent chat and
->   sandboxing. None of these are available yet.
+>   `monitor` TUI, `focus`, `status`, `doctor`, an MCP server, an optional
+>   tongs plugin screen, and from source the `workspace` command with its
+>   Zellij sidebar and launch profiles (instrumented evidence; the live run is
+>   pending). See [What works today](#what-works-today).
+> - **Coming:** config emitters, agent control, agent chat and sandboxing.
+>   None of these are available yet.
 > - **Plan:** [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md)
 >   and tracker [issue #1](https://github.com/andre-motta/tongs-agents/issues/1).
 >
@@ -100,7 +101,11 @@ has the reproduction commands.
 | `uninstall [--keep-data] [--agent ...]` | Removes hooks and MCP entries, including legacy ones; deletes session records for the default or `all` selection unless `--keep-data`; session records are kept while the Pi extension is installed | mocked |
 | `monitor [--refresh N] [--notify all\|waiting\|none]` | Textual list of sessions with search, sort, status filters, details, attention jumping and focus; compact layout on narrow terminals | instrumented (headless Textual check in CI) |
 | `focus <query>` | Matches exactly, then by substring, over session ID, repo and PID, and focuses the captured terminal; reports complete, partial, unavailable or failed, or lists the candidates when several sessions match | per terminal, see [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md#supported-terminals) |
-| In-session Zellij focus | When you run `focus` inside the agent's Zellij session, selects its pane directly | mocked |
+| In-session Zellij focus | When you run `focus`, or select a sidebar row, inside the agent's Zellij session, selects its pane directly and never activates a window | instrumented (sidebar row select with a second client attached, `list-clients` readback), mocked |
+| `workspace [--profile NAME]... [--session NAME] [--no-tongs]` | Opens a Zellij session with the sidebar and one pane per [profile](https://github.com/andre-motta/tongs-agents/blob/main/docs/profiles.md); inside Zellij it adds panes to the current session without nesting | instrumented ([workspace validator](https://github.com/andre-motta/tongs-agents/blob/main/validation/README.md#agent-workspace-on-linux) on Zellij 0.44.2 and 0.45.1 with fake agents, hosted CI); live run pending |
+| `sidebar` | Runs in the workspace: consumes the spawn request once, lists each launched pane with hook status or pane state | instrumented (same validator) |
+| Launch profiles and `profiles` | Named argv commands with their own config dir, cwd, env and model arguments | instrumented (fixture profiles with private config dirs), mocked |
+| `install --claude-config-dir DIR` (also `--codex-home`, `--pi-agent-dir`) | Installs hooks into one harness config dir and leaves the default untouched | instrumented for Claude (a fixture in that dir reports hook status), mocked |
 | `status` | Plain table of agent, repo, status, detail and age | unvalidated |
 | `doctor` | Read-only report of claude-fleet-monitor leftovers | mocked |
 | `tongs-agents-hook` | Hook entry point for Claude Code, Codex and pi events | instrumented (nine shells in Podman, synthetic payloads) |
@@ -113,9 +118,8 @@ hook fires; they show as `discovered`. Session states are `started`,
 `running`, `idle`, `waiting`, `error`, `ended` and `discovered`
 (`status` prints them in uppercase).
 
-Launch profiles, the `workspace` command, the sidebar, the plugin action, agent
-chat, config emitters and sandboxing are in progress on other branches and are
-not available.
+The plugin action, agent chat, config emitters and sandboxing are in progress
+on other branches and are not available.
 
 ### Monitor keys
 
@@ -162,6 +166,13 @@ choose "Agents". Its `refresh_interval` and `notify_level` settings live in
 | Codex | Native hooks | Yes, by exact process name | Yes, when the CLI is found |
 | Pi | Optional extension | No; the extension reports the exact PID | None |
 
+The agent workspace needs Zellij 0.44.2 or newer on Linux x86_64 (0.44.2 and
+0.45.1 are validated, instrumented; the maintainer's live run is pending);
+macOS and Linux aarch64 are unvalidated and Windows is unsupported. Profiles
+with their own Claude, Codex or pi config dir report hook status once
+`install` has written hooks into that dir. See
+[Agent workspace, multiplexers and profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md#agent-workspace-multiplexers-and-profiles).
+
 Terminal focus support differs by backend. Konsole, tmux, Zellij, Kitty and
 GNU screen are validated live on Linux; Ghostty, GNOME Terminal, iTerm2, macOS
 Terminal and Windows Terminal are mocked or inspected only; Terminator is
@@ -175,7 +186,7 @@ are in the
 From the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md):
 
 - **M0, release safety foundations:** upgrade adoption, publish hardening, plan record, harness facts. Merged.
-- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol and pinned Zellij CI merged; launch profiles, `tongs-agents workspace`, sidebar and plugin action in progress.
+- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol, pinned Zellij CI, launch profiles, `tongs-agents workspace`, sidebar and the instrumented workspace validator done; plugin action and the maintainer's live run in progress.
 - **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. Planned.
 - **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. Planned.
 - **M4, session store hardening:** read-only readers and one cleanup owner. Planned.
