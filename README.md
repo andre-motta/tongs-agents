@@ -1,505 +1,219 @@
-# Tongs Agents
+# tongs-agents
 
-[![PyPI version](https://img.shields.io/pypi/v/tongs-agents)](https://pypi.org/project/tongs-agents/)
-[![Downloads](https://img.shields.io/pypi/dm/tongs-agents)](https://pypistats.org/packages/tongs-agents)
-[![License](https://img.shields.io/pypi/l/tongs-agents)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
-[![Python](https://img.shields.io/pypi/pyversions/tongs-agents)](https://pypi.org/project/tongs-agents/)
+[![Tests](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
 
-A standalone agent workspace companion app for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://learn.chatgpt.com/codex) sessions, with optional [Pi](https://github.com/earendil-works/pi) lifecycle integration. See all your running agent sessions at a glance, get notified when one needs input, and jump to the right terminal tab instantly. It runs on its own; the [tongs](https://github.com/andre-motta/tongs) plugin is an optional extra.
+tongs-agents shows your Claude Code, Codex and pi sessions in one list, tells
+you which one needs input, and takes you to its terminal. It reads status from
+each harness's own hooks, so it works whichever harness an agent runs in. It is
+growing into a Zellij agent workspace (in progress). It is a standalone,
+harness-agnostic companion app in the
+[tongs](https://github.com/andre-motta/tongs) family: it runs on its own, and
+tongs is optional.
 
-> **Formerly `claude-fleet-monitor`.** tongs-agents continues that project under a new name as a standalone companion app, with its own runtime names: sessions live in `$XDG_STATE_HOME/tongs-agents/sessions/`, the MCP server is named `tongs-agents`, the Pi configuration file is `tongs-agents.json` and the tongs plugin entry point is `agents`. `tongs-agents install` cleans up a claude-fleet-monitor 0.9.x install. See [Upgrading from claude-fleet-monitor](#upgrading-from-claude-fleet-monitor). Issue and PR numbers before the rename refer to the [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
+> **Status: pre-release.** tongs-agents is not on PyPI yet; install it from
+> source. v0.10.0 will be the first release and will ship milestones M0 to M5
+> (no date).
+>
+> - **Works today:** hook-based status for Claude Code, Codex and pi, the
+>   `monitor` TUI, `focus`, `status`, `doctor`, an MCP server and an optional
+>   tongs plugin screen. See [What works today](#what-works-today).
+> - **Coming:** the `tongs-agents workspace` command with a Zellij session and
+>   sidebar, launch profiles, config emitters, agent control, agent chat and
+>   sandboxing. None of these are available yet.
+> - **Plan:** [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md)
+>   and tracker [issue #1](https://github.com/andre-motta/tongs-agents/issues/1).
+>
+> Formerly `claude-fleet-monitor`; see
+> [Upgrading from claude-fleet-monitor](#upgrading-from-claude-fleet-monitor).
 
-## Features
+## How it fits with tongs
 
-- **TUI Dashboard** -- Textual-based interactive UI with search/filter, status-colored rows, and click-to-focus
-- **Optional tongs Plugin** -- also embeds as a screen in [tongs](https://github.com/andre-motta/tongs) via the TongsPlugin ABC
-- **Process Discovery** -- finds running Claude Code and Codex sessions cross-platform even before hooks fire
-- **MCP Server** -- Claude Code and Codex sessions can query fleet status programmatically
-- **Terminal Focus** -- switch to a session's tab and raise the window, across supported terminal backends
-- **Desktop Notifications** -- `notify-send` alerts when a session has been idle for over 2 minutes
-- **Hooks Integration** -- Claude Code and Codex hooks emit real-time status (running, idle, waiting, error) per session
-- **Per-Session Terminal Detection** -- each session captures its terminal type at hook time, not at focus time
+[tongs](https://github.com/andre-motta/tongs) is the MR and CI terminal UI.
+tongs-agents works without it. Today, with the `[tongs]` extra, tongs gets an
+Agents screen (see [tongs plugin](#tongs-plugin)).
 
-## Harness support
+The planned shape, part of milestone M1 and not available yet:
 
-The support matrix separates lifecycle ingestion from process identity and
-focus. A lifecycle event does not by itself prove that a process is
-discoverable, that a terminal target can be selected, or that a desktop window
-can be activated. See the [adapter author guide](docs/harness-adapters.md) and
-the implemented [event, identity and focus contract](docs/work/harness-contract.md)
-before adding another harness.
+- tongs-agents owns its own Textual sidebar app and a Zellij session in which
+  Claude Code, Codex and pi run as real panes. There is no terminal emulation
+  inside Textual.
+- tongs is an optional neighbour tab in that Zellij session.
+- A thin, optional tongs plugin (entry point `agents`) adds an agents screen
+  and an "Open agent workspace" action to tongs. No tongs core changes are
+  needed.
+- Status comes from harness hooks. No daemon, no telemetry.
 
-| Harness | Lifecycle ingestion | Process identity | Terminal selection | GUI window activation | MCP consumer access | Native harness MCP registration |
-| --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | Installed native hooks for start, prompt, tool, permission, stop, failure, elicitation and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | The `tongs-agents` MCP server is available to configured Claude Code sessions | When the Claude Code CLI is available, the default installer registers it with `claude mcp add --scope user` |
-| Codex | Installed native hooks for start, prompt, tool, permission, stop and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | The `tongs-agents` MCP server is available to configured Codex sessions | When the Codex CLI is available, the default installer registers it with `codex mcp add` |
-| Pi | Optional dependency-free extension emits normalized `fleet-event` records | Emitter supplies the exact Pi PID, native session ID, extension instance and sequence; Pi is not process-name discovered | Accepted live validation selected the exact tmux pane for a real Pi process; other terminal backends require their own evidence | No live desktop GUI result is claimed; detached tmux has no GUI parent and reports activation separately | Consumers can read Pi records, but Pi itself has no tongs-agents MCP client | None; Pi installation adds the lifecycle extension only |
+## Quick start (from source)
 
-The evidence behind this table has defined limits:
-
-- The strict [shell validation](validation/shells/README.md) runs the existing
-  hook through nine real shells in rootless Podman. Its 18 lifecycle cases,
-  nine manual quoted-path controls and 108 generated-command checks use
-  synthetic payloads. They do not prove live Claude or Codex processes, TTY
-  discovery, terminal focus or GUI activation.
-- The [Pi validation](validation/pi/README.md) runs a real Pi 0.85.0 process
-  with Node.js 22.23.1 and Python 3.12.14 against a synthetic localhost
-  provider. It validates lifecycle behavior and exact tmux pane selection in an
-  isolated server. It does not claim a desktop window result.
-- Platform-specific process and terminal behavior in the regular test suite is
-  mocked. No live Claude or Codex runtime or desktop GUI acceptance is included
-  in this matrix.
-
-## Supported Terminals
-
-The table lists implemented backend capabilities and the strongest evidence
-behind each claim. Runtime availability, selected-target proof and window
-activation vary by environment and are reported as structured focus outcomes;
-a successful command alone is never reported as focus. Evidence labels:
-**live** (real program observed on Fedora 44 KDE Plasma Wayland),
-**instrumented** (real program with Fleet calls recorded), **mocked** (pytest
-with substituted OS calls), **inspected** (source or documentation only) and
-**unverified** (not observed).
-
-| Terminal | Tab or pane selection | Window raise | Nested support | Evidence |
-|----------|:---:|:---:|:---:|---|
-| **KDE Konsole** | Yes (qdbus, qdbus6 or qdbus-qt6, D-Bus readback) | Yes (KWin, one unique owned window, readback) | -- | live: Konsole 26.08 tab selection ([JSON](validation/evidence/konsole-fedora44.json)); cross-window tab plus window confirmed hands-on through the TUI; mocked; as a tmux parent the Konsole service owned by the client's nearest ancestor is used (mocked) |
-| **tmux** | Yes (stable IDs, readback) | Via parent terminal, per attached client; failures name the reason (no attached client, no parent emulator, unsupported or unconfirmed parent) | Yes | live: tmux 3.7c selection ([JSON](validation/evidence/tmux-fedora44.json)); parent routing instrumented and mocked; failure details mocked |
-| **zellij** | Yes (`focus-pane-id`, `list-clients` before and after readback); needs an attached client; custom socket dirs supported | Linux only, via parent terminal when exactly one client is attached (client found by its socket peer) | Yes | live: zellij 0.45.1 selection, custom and derived socket dirs, client mapping and refusals ([JSON](validation/evidence/zellij-fedora44.json)); floor 0.44.2, validator passing on 0.44.2 to 0.45.1 ([JSON](validation/evidence/zellij-version-floor-fedora44.json)); parent routing instrumented and mocked |
-| **Kitty** | Yes, opt-in remote control with a `unix:` listen_on socket (`kitten @ ls` readback); needs the captured `KITTY_PID` to own the socket's window and the session | KDE Plasma only (verified on Plasma Wayland; X11 not verified): KWin activates the single normal window owned by the captured `KITTY_PID`, confirmed by kitty's OS window `is_focused` readback; needs one OS window per kitty process and a session started after upgrading | -- | live: kitty 0.47.1 on Plasma Wayland, selection and window raise verified between two probe instances ([JSON](validation/evidence/kitty-fedora44.json)) |
-| **GNU screen** | Yes (`-X select`, `-Q number` readback); needs an attached display, and with several only the most recently attached one switches | No (no GUI window) | -- | live: screen 5.0.1 ([JSON](validation/evidence/screen-fedora44.json)) |
-| **Ghostty (Linux)** | Best effort (ydotool/xdotool Alt+N), only after confirmed activation | Requires exactly one window-manager-managed window (minimized or on another desktop counts) owned by the Ghostty process the session descends from; KWin is asked first but success needs xdotool `getactivewindow` readback, so X11 only | -- | mocked and inspected; unvalidated on this branch (Ghostty not installed on the validation host) |
-| **GNOME Terminal** | No | Exact owner window only: the single window-manager-managed window (minimized or on another desktop counts) of the session's gnome-terminal-server, X11 only (xdotool readback) | -- | mocked; not live-validated |
-| **Terminator** | No (detection only, #47) | No | -- | detection live (terminator 2.1.5 [probe](validation/evidence/terminal-probe-fedora44.json)); mocked; #47 inspection |
-| **iTerm2** | Yes (osascript; the session whose `unique ID` (from a well-formed `ITERM_SESSION_ID`) and `tty` both match the agent, readback of the current window's current session) | Yes (the target's own window, un-minimized; readback that iTerm2 is frontmost and its current window holds the session) | -- | mocked and inspected (iTerm2 source); unvalidated on macOS ([#55](https://github.com/andre-motta/claude-fleet-monitor/issues/55)); as a tmux parent the single session using the client's tty is matched (mocked) |
-| **macOS Terminal** | Yes (osascript; tab matched by the agent's controlling tty from `ps`, readback of the front window's selected tab) | Yes (the target's own window, un-minimized; readback that Terminal is frontmost and its front window holds the tab) | -- | mocked and inspected; unvalidated on macOS ([#55](https://github.com/andre-motta/claude-fleet-monitor/issues/55)); as a tmux parent the client's tty is matched (mocked) |
-| **Windows Terminal** | No (detection only) | No (owner window not identifiable) | -- | mocked; unvalidated on Windows |
-| **WezTerm** | No (no adapter) | No | -- | not validated (skipped); labelled generic, also when launched from a supported terminal (mocked) |
-| **Generic fallback** | No | No | -- | mocked |
-
-"Yes" means the operation is attempted and reported as succeeded only after
-independent readback. Version support is the one version validated on the
-host, except zellij: the isolated validator passes on 0.44.2 through 0.45.1.
-zellij 0.44.1, the first release with `focus-pane-id`, selects panes but did
-not pass the two-client check; 0.44.0 and older have no `focus-pane-id`, so
-selection reports a failure instead of a guess.
-
-On macOS, captured identifiers are validated (`ITERM_SESSION_ID` must be
-`w<N>t<N>p<N>:<UUID>`) and reach `osascript` only as arguments to the
-script's run handler, never as AppleScript source. Both adapters match the
-agent's controlling tty, read with `ps` at focus time; an agent without one has
-no target. When a session ID was captured, iTerm2 also requires it to match,
-so an `ITERM_SESSION_ID` inherited by a program launched from an iTerm2 shell
-cannot select the wrong session; without one (nested tmux parent routing) the
-tty alone must identify exactly one session. Terminal.app's AppleScript exposes no session ID, so its tab is
-matched by tty alone. Readback is part of the design, but neither
-adapter has been run on a Mac yet; see
-[#55](https://github.com/andre-motta/claude-fleet-monitor/issues/55).
-
-Nested terminals (e.g. tmux inside Konsole) are handled automatically: the
-focus command selects the exact pane, then routes window activation to the
-terminal emulator hosting a client that is attached to that pane. The
-structured result reports selection and activation separately, so a detached
-session or an unsupported parent gives an honest partial result. Kitty and
-Terminator stop the parent walk and report activation unsupported rather than
-climbing to whatever launched them (a multiplexer client carries no kitty
-socket or `KITTY_PID`, so kitty cannot raise its window as a parent). A
-zellij server is daemonized, so its
-ancestry never reaches a GUI. On Linux, Fleet instead finds the server in the
-agent's ancestry, maps its accepted sockets to client PIDs (a `sock_diag`
-netlink dump plus `/proc/<pid>/fd` links of your own `zellij` processes) and
-routes activation to the emulator hosting the one attached client. Only a
-plain `zellij` client or `zellij attach` counts as interactive and transient
-`zellij action` calls are ignored. Any other connected zellij process (`web`,
-`watch`, `pipe`, `subscribe`, `run`, `edit`, `plugin` or an unrecognized
-command line) is refused, because it may show the session somewhere else. It
-also refuses when several clients are attached, when the client processes do
-not match `list-clients`, when the session was renamed, or when the client
-exited meanwhile.
-
-tmux selection uses stable session, window and pane IDs with selection readback.
-Parent-window routing considers only clients attached to the target session;
-detached sessions can still select their pane without activating a GUI window.
-When several attached clients show the target pane in different emulator
-windows, each client's parent is tried in turn. Routing stops after the
-first parent that sent a raise request (a KWin activation script that ran, an
-`xdotool windowactivate`, or a call to a parent's raise), even when the window
-or tab could not be confirmed afterwards. Focus then reports why, for example
-`parent terminal konsole may have raised its window but could not confirm it
-(...)`, instead of trying another window. A parent that fails before sending
-any request (no unique GNOME or Ghostty X11 window, Konsole D-Bus owner
-unreadable, qdbus missing) lets the next client be tried. For Konsole, window
-matching happens inside the KWin script, so a script that ran but matched no
-unique window also stops routing. One rare case can still raise two windows: a KWin script run call that
-fails or times out is treated as no request, although KWin may have run it.
-See the [isolated tmux validation](validation/README.md#stable-tmux-selection-and-client-routing-on-linux)
-for the tested routing behavior and its GUI evidence limits.
-
-Terminator is detection only ([#47](https://github.com/andre-motta/claude-fleet-monitor/issues/47),
-reported by @EmilienM). Sessions are labelled `terminator` and capture
-`TERMINATOR_UUID`, `TERMINATOR_DBUS_NAME` and `TERMINATOR_DBUS_PATH`, but
-focus reports an honest unsupported failure: Terminator's D-Bus interface
-cannot select a terminal or raise a window.
-
-### Kitty remote control
-
-Kitty selection needs remote control, which Fleet never enables for you and
-never writes into `kitty.conf`. Add both settings yourself and restart kitty:
-
-```conf
-allow_remote_control socket-only
-listen_on unix:${XDG_RUNTIME_DIR}/kitty-{kitty_pid}
-```
-
-Kitty then exports `KITTY_LISTEN_ON`, which the hook captures with
-`KITTY_WINDOW_ID`. Only `unix:` socket addresses (an absolute path or an
-`@abstract` name) are used; `tcp:`, `fd:` and relative addresses are dropped
-at capture. Without remote control or a `unix:` listen_on socket, focus reports
-"kitty remote control unavailable: needs allow_remote_control and a unix:
-listen_on socket" and changes nothing.
-
-Selection also needs `KITTY_PID`, which the hook captures since this release:
-the kitty process it names must be an ancestor of the agent process and of
-the target window's child process that `kitten @ ls` reports. This keeps
-kitty variables leaked into another terminal, or a nested kitty that
-inherited an outer `KITTY_LISTEN_ON`, from selecting a same-numbered window
-in the wrong kitty. Sessions recorded earlier have no `KITTY_PID` and report
-"restart the agent session to enable kitty focus" without selecting.
-
-**Upgrade note:** kitty sessions recorded before this release lose selection
-until the agent session is restarted, and kitty versions that do not export
-`KITTY_PID` lose selection.
-
-**Security warning:** with `allow_remote_control` enabled, any local process
-that can reach the socket can control kitty, including sending text to its
-windows and running commands. Prefer `socket-only` over `yes`, keep the socket
-in a directory only you can access (as `$XDG_RUNTIME_DIR` above), avoid
-abstract `@` sockets on shared hosts, and turn remote control off when you do
-not need it. Fleet only runs `ls` and `focus-window` and never sends a remote
-control password; if kitty requires one, focus reports the refusal instead of
-selecting.
-
-Kitty window raise works on KDE Plasma only and needs, besides the selection
-requirements above:
-
-- Exactly one OS window in that kitty process. KWin sees every OS window of a
-  kitty process (including `--single-instance` windows) under one pid and
-  cannot tell them apart, so focus then selects the tab but reports activation
-  unavailable.
-- qdbus and KWin on the session bus. KWin activates the single normal window
-  owned by `KITTY_PID`; success needs the script to confirm KWin accepted
-  that window as active and kitty to report the OS window focused within one
-  second and still focused 0.2 s later.
-
-### Terminal detection limits
-
-Terminal markers leak into child processes: Kitty started from a Konsole
-shell inherits `KONSOLE_*`, anything started from a Terminator shell inherits
-`TERMINATOR_UUID`, and a terminal launched from a tmux pane inherits `TMUX`.
-On Linux the hook therefore first walks its own process ancestry, reading only
-the process name and parent PID from `/proc/<pid>/stat` (never the environment
-or command line of another process, at most 64 steps). The nearest Konsole,
-Ghostty, GNOME Terminal, Terminator, Kitty, tmux, zellij or GNU screen ancestor
-sets the label, and that adapter records whichever of its markers are present.
-So Kitty started from Konsole is labelled `kitty`, GNU screen or zellij inside
-tmux or Konsole is labelled `screen` or `zellij`, and a Konsole window opened
-from a tmux pane is labelled `konsole`. A known emulator without a Fleet
-adapter also stops the walk and labels the session `generic`, which never
-selects or activates: Alacritty, foot, xterm, rxvt-unicode, WezTerm, xfce4-terminal,
-MATE Terminal, LXTerminal, QTerminal, Tilix, Ptyxis, GNOME Console (kgx),
-Terminology, Sakura, Tilda, Guake, cool-retro-term, Contour and the VS Code,
-VSCodium and Cursor terminals. So Alacritty launched from a tmux pane, foot
-launched from Kitty or WezTerm launched from Ghostty is labelled `generic`
-instead of targeting the launching terminal through its leaked markers.
-Yakuake, Kate and Dolphin embed Konsole, so they are not on that list. When
-the walk finds no known terminal or cannot read `/proc`, detection falls back
-to the fixed environment-variable order. Remaining limits:
-
-- On macOS and Windows detection uses environment variables only, so the
-  leaked-marker cases above keep the label of the launching terminal.
-- A terminal adapter selected by ancestry can lack its own markers (for
-  example Kitty without remote control), so focus reports its usual
-  unavailable or unsupported failure rather than using the leaked markers.
-- The same list stops the tmux and zellij parent walk: a multiplexer client
-  inside one of these emulators reports that its parent terminal emulator has
-  no Fleet adapter instead of raising the emulator that launched it. On macOS
-  and Windows only the parent walk uses the list, and only names that match
-  there (for example Alacritty and WezTerm; the VS Code family runs under
-  different process names on macOS).
-- An emulator missing from both lists is passed over, so the walk and the
-  leaked markers can still reach the terminal that launched it.
-- Records captured before an upgrade keep their old label and environment;
-  start a fresh agent session to pick up new capture keys such as
-  `ZELLIJ_PANE_ID`.
-
-## Install
-
-```bash
-pip install tongs-agents
-tongs-agents install
-```
-
-Or install from source:
+Requires Python 3.10 or newer and git.
 
 ```bash
 git clone https://github.com/andre-motta/tongs-agents.git
 cd tongs-agents
-pip install .
-tongs-agents install
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e .              # or: pip install -e ".[tongs]" for the tongs plugin
+tongs-agents install          # Claude Code and Codex; then --agent pi for Pi, or use --agent all
 ```
 
-The installer writes Claude Code hooks to `~/.claude/settings.json` and Codex
-hooks to `~/.codex/hooks.json`, and registers the `tongs-agents` MCP server
-through the Claude Code CLI (`claude mcp add --scope user`, which writes
-`~/.claude.json`) and the Codex CLI (`codex mcp add`) when they are installed.
+Restart your agent sessions after the first install. Codex asks you to review
+and trust the installed hooks through `/hooks` before they run. Then:
+
+```bash
+tongs-agents monitor          # live list of sessions; Enter focuses one
+tongs-agents focus my-repo    # jump to a session by repo, session ID or PID
+```
+
+`tongs-agents install` writes:
+
+- Claude Code hooks to `~/.claude/settings.json` and Codex hooks to
+  `~/.codex/hooks.json`.
+- The `tongs-agents` MCP server through `claude mcp add --scope user` and
+  `codex mcp add`, only when those CLIs are on `PATH`.
+- With `--agent pi` (Pi 0.84.4 or newer), a dependency-free Pi lifecycle
+  extension. It needs `pi` on `PATH` and `tongs-agents-hook` resolvable to
+  an absolute path, keeps your other Pi extensions and registers no MCP
+  server. See the
+  [Pi integration guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/pi.md).
+
 Session records go to `$XDG_STATE_HOME/tongs-agents/sessions/`
-(`~/.local/state/tongs-agents/sessions/` by default), a private directory.
-Restart your sessions after the first install. Codex requires you to review and trust the installed hooks
-through `/hooks` before they run.
+(`~/.local/state/tongs-agents/sessions/` by default), a private 0700
+directory. Set `TONGS_AGENTS_STATE_DIR` to move it.
 
-Pi support is optional and requires Pi 0.84.4 or newer:
+Runtime dependencies are `textual` and `mcp`. Terminal focus uses optional
+tools when present (`qdbus`, `xdotool`, `kitten`, the `tmux`, `zellij` and
+`screen` CLIs); desktop notifications use `notify-send` on Linux.
 
-```bash
-tongs-agents install --agent pi
-```
+## What works today
 
-This installs the dependency-free Pi lifecycle extension packaged with Fleet.
-It preserves other Pi extensions and does not register an MCP server. See the
-[Pi integration guide](docs/pi.md) for lifecycle, privacy, upgrade and removal
-behavior. `--agent all` installs Claude Code, Codex and Pi together.
+Evidence labels: **live** (real program observed on Fedora 44 KDE Plasma
+Wayland), **instrumented** (real program with tongs-agents calls recorded),
+**mocked** (pytest with substituted OS calls), **inspected** (source or
+documentation only) and **unvalidated** (not observed). The
+[validation guide](https://github.com/andre-motta/tongs-agents/blob/main/validation/README.md)
+has the reproduction commands.
 
-### tongs Integration
+| Command or part | What it does | Evidence |
+| --- | --- | --- |
+| `install [--agent claude\|codex\|pi\|all]` | Installs hooks and MCP registration; cleans up claude-fleet-monitor 0.9.x entries | mocked |
+| `uninstall [--keep-data] [--agent ...]` | Removes hooks and MCP entries, including legacy ones; deletes session records for the default or `all` selection unless `--keep-data`; session records are kept while the Pi extension is installed | mocked |
+| `monitor [--refresh N] [--notify all\|waiting\|none]` | Textual list of sessions with search, sort, status filters, details, attention jumping and focus; compact layout on narrow terminals | instrumented (headless Textual check in CI) |
+| `focus <query>` | Matches exactly, then by substring, over session ID, repo and PID, and focuses the captured terminal; reports complete, partial, unavailable or failed, or lists the candidates when several sessions match | per terminal, see [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md#supported-terminals) |
+| In-session Zellij focus | When you run `focus` inside the agent's Zellij session, selects its pane directly | mocked |
+| `status` | Plain table of agent, repo, status, detail and age | unvalidated |
+| `doctor` | Read-only report of claude-fleet-monitor leftovers | mocked |
+| `tongs-agents-hook` | Hook entry point for Claude Code, Codex and pi events | instrumented (nine shells in Podman, synthetic payloads) |
+| MCP server `tongs-agents` | Five tools for agents to read and focus sessions (below) | instrumented (real server over stdio, synthetic session), mocked |
+| Pi extension | Lifecycle events from pi | instrumented (real Pi 0.85.0 in hosted CI, synthetic provider, tmux pane selection; no GUI) |
+| tongs plugin | Palette command "Agents" opens the agents screen | mocked (CI job against tongs) |
 
-Tongs Agents works without tongs. To also use it as an optional plugin inside
-[tongs](https://github.com/andre-motta/tongs):
+Process discovery also finds running `claude` and `codex` processes before any
+hook fires; they show as `discovered`. Session states are `started`,
+`running`, `idle`, `waiting`, `error`, `ended` and `discovered`
+(`status` prints them in uppercase).
 
-```bash
-pip install tongs-agents[tongs]
-```
+Launch profiles, the `workspace` command, the sidebar, the plugin action, agent
+chat, config emitters and sandboxing are in progress on other branches and are
+not available.
 
-The plugin registers under the `tongs.plugins` entry point `agents` (tongs
-config key `[plugins.agents]`). Launch tongs and open the command palette
-(Ctrl+P) to find "Fleet Monitor".
+### Monitor keys
 
-### Upgrading
+| Key | Action |
+| --- | --- |
+| Enter or click | Focus the session's terminal |
+| `/`, Esc | Search by repo, detail or status; clear |
+| `1` `2` `3` `4`, `0` | Filter running, idle, waiting, error; show all |
+| `s` | Cycle sort |
+| `d` | Toggle the detail panel |
+| `n`, `N` | Next or previous session needing attention |
+| `o` | Open the session's directory |
+| `c`, `C` | Copy a summary or the JSON record |
+| `r`, `q` | Refresh; quit |
 
-```bash
-pip install --upgrade tongs-agents
-```
+A session needs attention when it is `waiting`, or `idle` for more than two
+minutes. With the default `--notify all`, `monitor` sends a `notify-send`
+alert for each one (Linux only) and rings the terminal bell for waiting
+sessions. `--notify waiting` alerts on waiting sessions only; `--notify none`
+turns alerts off.
 
-Claude Code and Codex hooks point to pip-installed entry points, so their
-upgrades take effect immediately. If Fleet moves to another virtual environment,
-run `tongs-agents install --agent pi` again to update Pi's exact extension and
-hook paths.
-
-### Upgrading from claude-fleet-monitor
-
-Run `tongs-agents install` (add `--agent all` if you used Pi). It removes the
-claude-fleet-monitor hooks, its `fleet` MCP entries and its Pi extension, and
-keeps everything else. Then run `pip uninstall claude-fleet-monitor` and
-`tongs-agents doctor`, which reports anything left over, including the old
-`~/.claude/fleet/` directory and the command to remove it. Nothing is
-migrated: old session records are live status that goes stale within minutes.
-See the [migration guide](docs/migration.md).
-
-### Dependencies
-
-- `python3` >= 3.10
-- `textual` >= 4, < 9
-
-Optional (for terminal focus):
-- `qdbus`, `qdbus6` or `qdbus-qt6` -- Konsole tab switching and KWin activation for Konsole and Kitty (KDE)
-- `xdotool` -- GNOME Terminal / X11 window focus
-- `kitten` or `kitty` with remote control enabled -- Kitty window selection
-- `zellij` and `screen` CLIs -- pane and window selection for those multiplexers
-- `notify-send` -- desktop notifications (Linux)
-
-Optional agent integration:
-- Pi >= 0.84.4 and Node.js, installed separately
-
-## Usage
-
-### TUI Dashboard
-
-```bash
-tongs-agents monitor              # default 2s refresh
-tongs-agents monitor --refresh 5  # 5s refresh
-```
-
-Navigate with arrow keys or mouse. Press Enter or click a row to focus that session's terminal. Press `/` to search/filter by repo name, detail, or status. Press `q` to quit.
-
-### Focus a Session
-
-```bash
-tongs-agents focus autofix         # by repo name
-tongs-agents focus 2467709         # by PID
-tongs-agents focus abc123          # by session ID prefix
-```
-
-The focus command reads the session's stored terminal type and uses the right
-API. It reports complete, partial or unavailable outcomes, with capability and
-evidence varying by terminal backend.
-
-### Quick Status (no TUI)
-
-```bash
-tongs-agents status
-```
-
-### MCP Tools
-
-Any Claude Code or Codex session with the `tongs-agents` MCP server can use these tools:
+### MCP tools
 
 | Tool | Description |
-|------|-------------|
+| --- | --- |
 | `fleet_status` | All sessions with summary counts |
-| `fleet_session` | Single session detail by ID or prefix |
-| `fleet_sessions_needing_attention` | Sessions idle over 2 minutes or waiting for input |
-| `fleet_focus` | Focus terminal tab for a session |
-| `fleet_cleanup` | Remove stale ended session files |
+| `fleet_session` | One session by ID or prefix |
+| `fleet_sessions_needing_attention` | Sessions waiting for input, or idle for more than 2 minutes |
+| `fleet_focus` | Focus a session's terminal |
+| `fleet_cleanup` | Remove ended session records older than 5 minutes |
 
-Ask your agent: "what sessions are running?" or "focus on the autofix session".
+### tongs plugin
 
-## How It Works
+With `pip install -e ".[tongs]"`, tongs finds the plugin under the
+`tongs.plugins` entry point `agents`. Open the command palette (Ctrl+P) and
+choose "Agents". Its `refresh_interval` and `notify_level` settings live in
+`[plugins.agents]` in the tongs config.
 
-```
-                                                              <-- MCP server
-Claude Code sessions --\                                      <-- TUI monitor
-  (hooks per event)     |                                      <-- tongs plugin
-                       |-- write --> sessions/*.json           <-- CLI status
-Codex sessions --------|                                      <-- focus command
-  (hooks per event)     |
-Pi sessions ------------|
-  (optional extension)  |
-                       /
-  (process discovery) -
-```
+## Harness support
 
-1. **Hooks** fire on Claude Code and Codex events; the optional Pi extension translates Pi lifecycle events
-2. Each hook captures the session's **terminal type** and **PID**, writes to the private sessions directory (`$XDG_STATE_HOME/tongs-agents/sessions/`)
-3. **Process discovery** scans for `claude` and `codex` processes cross-platform to find sessions without hooks
-4. **Consumers** (TUI, MCP, tongs plugin, CLI, focus) read the JSON files
-5. **Focus** reads the session's `terminal` field and dispatches to the right terminal API
+| Harness | Status source | Process discovery | MCP registration |
+| --- | --- | --- | --- |
+| Claude Code | Native hooks | Yes, by exact process name | Yes, when the CLI is found |
+| Codex | Native hooks | Yes, by exact process name | Yes, when the CLI is found |
+| Pi | Optional extension | No; the extension reports the exact PID | None |
 
-### Terminal Detection Flow
+Terminal focus support differs by backend. Konsole, tmux, Zellij, Kitty and
+GNU screen are validated live on Linux; Ghostty, GNOME Terminal, iTerm2, macOS
+Terminal and Windows Terminal are mocked or inspected only; Terminator is
+detection only. The full harness and terminal matrices, with evidence for each
+claim, nested terminal routing, Kitty remote-control setup and known limits,
+are in the
+[support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md).
 
-```
-Hook fires inside session
-  --> Linux: nearest known terminal or multiplexer ancestor (/proc/<pid>/stat only)
-  --> otherwise detect terminal via env vars (TMUX, KONSOLE_VERSION, ITERM_SESSION_ID, ...)
-  --> capture terminal-specific env (socket paths, DBus service, session IDs)
-  --> store in the session JSON: {"terminal": "tmux", "terminal_env": {"TMUX": "..."}}
+## Roadmap
 
-Focus command reads session JSON
-  --> get_terminal_api("tmux") --> TmuxAPI
-  --> find_tab(pid) --> switch_tab() --> raise_window()
-  --> for nested terminals: detect parent terminal, chain to parent API
-```
+From the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md):
 
-### Session States
+- **M0, release safety foundations:** upgrade adoption, publish hardening, plan record, harness facts. Merged.
+- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol and pinned Zellij CI merged; launch profiles, `tongs-agents workspace`, sidebar and plugin action in progress.
+- **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. Planned.
+- **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. Planned.
+- **M4, session store hardening:** read-only readers and one cleanup owner. Planned.
+- **M5, agent chat:** off by default, granted per session. Planned.
+- **M6, release v0.10.0 and sunset:** first PyPI release with M0 to M5, then the claude-fleet-monitor sunset. Planned.
+- **M7, sandboxed agents with OpenShell:** sandboxed profiles, policies and approvals in the sidebar. Later.
 
-| State | Meaning |
-|-------|---------|
-| `STARTED` | Session just began |
-| `RUNNING` | Processing a prompt or using tools |
-| `IDLE` | Finished responding, waiting for next prompt |
-| `WAITING` | Blocked on permission request or user input |
-| `ERROR` | Turn failed (API error) |
-| `ENDED` | Session closed |
-| `DISCOVERED` | Found via process scan, no hook data yet |
+## Upgrading from claude-fleet-monitor
 
-## Architecture
+Install tongs-agents from source, then run `tongs-agents install` (add
+`--agent all` if you used Pi). It removes the claude-fleet-monitor hooks, its
+`fleet` MCP entries and its Pi extension, and keeps everything else. Then run
+`pip uninstall claude-fleet-monitor` and `tongs-agents doctor`, which reports
+anything left over, including the old `~/.claude/fleet/` directory and the
+command to remove it. Old session records are not migrated; they go stale
+within minutes. Issue and PR numbers from before the rename refer to the
+[claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
+See the [migration guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/migration.md).
 
-```
-src/tongs_agents/
-    models.py           # SessionStatus enum, FleetSession dataclass
-    hook.py             # Claude Code and Codex hook handler
-    discovery.py        # Process discovery, session file I/O
-    tui.py              # Textual standalone app (FleetMonitorApp)
-    cli.py              # tongs-agents CLI entry point
-    paths.py            # State and sessions directories
-    legacy.py           # claude-fleet-monitor cleanup markers
-    pi_install.py       # Optional Pi package lifecycle
-    pi_extension/       # Dependency-free packaged Pi bridge
-    focus.py            # Session lookup + terminal focus dispatch
-    mcp_server.py       # FastMCP server
-    tongs_plugin.py     # TongsPlugin ABC implementation
-    widgets/
-        session_table.py  # SessionTable(DataTable) widget
-    views/
-        fleet_screen.py   # FleetScreen(Screen) for tongs
-    terminal_apis/
-        base.py           # TerminalAPI ABC
-        konsole.py        # KDE Konsole
-        tmux.py           # tmux
-        zellij.py         # zellij
-        _unix_peers.py    # Linux unix-socket peer lookup (zellij clients)
-        ghostty.py        # Ghostty (Linux, owner-window KWin/X11)
-        gnome.py          # GNOME Terminal
-        terminator.py     # Terminator (detection only)
-        iterm2.py         # iTerm2
-        macos_terminal.py # macOS Terminal.app
-        windows_terminal.py # Windows Terminal (detection only)
-        kitty.py          # Kitty (opt-in remote control)
-        screen.py         # GNU screen
-        generic.py        # Fallback (no target)
-        parent.py         # Nested parent-terminal routing
-        _env.py           # Env-only capture helpers
-        _ancestry.py      # Linux hook-time ancestry walk (comm and ppid only)
-        _applescript.py   # macOS osascript runner (argv-only data) and tty lookup
-```
-
-## Known Limitations
-
-- **Same-title tabs in different windows (Konsole/KDE):** Konsole window activation must match exactly one window of the owning Konsole process. When two windows show the same caption, focus selects the tab but reports activation as failed ("no unique Konsole window matched the tab title") instead of raising a guess.
-- **Wayland window activation:** On Wayland/KDE, window raising uses KWin scripting via DBus. Other Wayland compositors may not support programmatic window activation.
-- **GNOME Terminal:** No tab switching API available; window raise only for the exact owning window on X11. A server with several windows, including minimized ones or ones on other desktops, reports activation unavailable.
-- **Ghostty:** Window activation requires a single managed Ghostty window (minimized and other-desktop windows count) and an X11 readback; with several windows, or on Wayland without xdotool readback, activation fails with a detail and no Alt+N keys are sent. This path is mocked only.
-- **Windows Terminal:** Detection only. Its window titles follow the active tab and all windows usually share one process, so the session window cannot be identified without Win32 enumeration validated on Windows.
-- **Terminator:** Detection only. Its D-Bus interface has no select or raise method, so focus reports an unsupported failure until Terminator gains one (#47).
-- **Kitty windows:** Window raise is KDE Plasma (KWin) only, verified on Plasma Wayland (Plasma X11 and XWayland kitty are not verified), and needs a single OS window per kitty process; other desktops, several OS windows (including `--single-instance`), and sessions recorded before `KITTY_PID` was captured report activation unavailable with the reason.
-- **GNU screen windows:** Selection is read back, but no GUI window activation is claimed. A screen session owns no window.
-- **zellij windows:** Window activation is Linux only and needs exactly one attached interactive client; with several clients, or a `zellij watch`, `zellij web` or other non-interactive zellij process connected, Fleet cannot tell which window shows the pane and reports activation unavailable. Elsewhere zellij activation is unavailable. Real GUI activation through the client's emulator is not live-validated yet: the live validator routes to an instrumented parent only.
-- **GNU screen and zellij with several displays or clients:** GNU screen switches only the most recently attached display, and zellij moves only the client that most recently received input; other displays and clients keep their own window or pane. Both need an attached display or client: a detached session reports a failed selection.
-- **zellij socket directory:** Every zellij call targets the session's socket directory: on Linux it is derived from the zellij server's command line, otherwise the `ZELLIJ_SOCKET_DIR` captured at hook time is used, and without either zellij's default applies. A session that cannot be found reports which socket directory was searched.
-- **zellij selection proof:** Selection succeeds only when a client that was elsewhere moves to the pane, or when every attached client already showed it ("pane already focused"). An idle client that already showed the pane while the active client did not move is a failure.
-- **Generic fallback:** Unknown terminals get no selection or window raise; the earlier best-effort raise could activate an unrelated window and was removed.
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TONGS_AGENTS_STATE_DIR` | `$XDG_STATE_HOME/tongs-agents` (`~/.local/state/tongs-agents`) | State directory; session status files live in its `sessions/` subdirectory |
-| `XDG_STATE_HOME` | `~/.local/state` | Base of the default state directory (ignored when relative) |
-
-`FLEET_DIR` is no longer read.
-
-### Uninstall
+## Uninstall
 
 ```bash
-tongs-agents uninstall              # removes hooks, MCP config, and session records
-tongs-agents uninstall --keep-data  # keeps the sessions directory
-tongs-agents uninstall --agent pi   # removes only the Pi extensions tongs-agents owns
-tongs-agents doctor                 # reports claude-fleet-monitor leftovers
+tongs-agents uninstall              # hooks, MCP entries and session records
+tongs-agents uninstall --keep-data  # keep the sessions directory
+tongs-agents uninstall --agent pi   # only the Pi extension (and any claude-fleet-monitor Pi leftovers)
 ```
 
-Uninstall also removes the claude-fleet-monitor hooks and MCP entries of the
-selected agents, and its Pi extension with `--agent pi` or `--agent all`. It never deletes the old `~/.claude/fleet/` directory; `doctor`
-prints the command to remove it.
+Session records are kept while the Pi extension is still installed. Then run
+`pip uninstall tongs-agents`.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, code style, and PR process.
-Harness contributors should follow the [adapter author guide](docs/harness-adapters.md)
-and the [implemented harness contract](docs/work/harness-contract.md).
-Agent-led initiatives follow [the SDLC profile](docs/SDLC.md).
-Future desktop UI work is tracked in
-[harnesses and desktop](docs/work/harnesses-desktop.md). Focusing ChatGPT
-desktop conversations is not supported
-([evidence](docs/work/chatgpt-focus-evidence.md)).
+See [CONTRIBUTING.md](https://github.com/andre-motta/tongs-agents/blob/main/CONTRIBUTING.md)
+for development setup and the PR process. Harness contributors should follow
+the [adapter author guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/harness-adapters.md)
+and the [harness contract](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/harness-contract.md).
+Agent-led initiatives follow the [SDLC profile](https://github.com/andre-motta/tongs-agents/blob/main/docs/SDLC.md).
 
 ## License
 
-MIT
+[MIT](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
