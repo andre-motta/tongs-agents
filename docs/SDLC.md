@@ -22,7 +22,7 @@ active initiative until a migration is agreed again.
 | Platforms | Preserve Linux/macOS/Windows behavior using platform mocks; require live evidence for newly claimed terminal or desktop capabilities |
 | Commit rules | Imperative title under 50 characters, blank line, one-line why body, issue reference and trailers; `git commit -s`; `Co-Authored-By` naming the actual Claude model without context-size annotation |
 | Tracker authority | Maintain the initiative's issues, links and public-safe progress |
-| Publication authority | Per initiative, as Andre states it. Current: one PR per issue into `main`, squash-merged after Andre approves the squash message |
+| Publication authority | Per initiative, as Andre states it. Current (tongs-agents, until v0.10.0 is tagged): one PR per issue into `main`; the orchestrator squash-merges on green CI when review found no blockers and posts the squash message in the PR. After v0.10.0: squash-merged after Andre approves the squash message |
 | Reserved CTO gate | Design approval, final acceptance and merge into `main`; direct main pushes, tags, releases and deployments require covered authorization |
 | Publication effects | `main` and PR CI as above; `v*` tags publish to PyPI using the `pypi` environment; no Pages workflow found |
 | Evidence | Public-safe records under `docs/work/` and validation artifacts; no private conversation content, credentials or personal absolute paths |
@@ -84,6 +84,13 @@ live evidence explicitly.
   ChatGPT desktop conversation focus is not supported (decision 2026-10-10,
   #28): without a native, supported integration Fleet reports a capability as
   unsupported rather than working around the target application.
+
+- Pre-v0.10.0 fast iteration (Andre, 2026-11-02): until v0.10.0 is tagged, every item
+  gets at most one review and no re-review rounds. Only failing checks, possible
+  damage to user configuration or data, and security issues block; other findings
+  become follow-up issues labelled `cleanup`. Before the v0.10.0 tag, one full
+  review of the integrated work runs and every `cleanup` issue is fixed or
+  explicitly deferred. Tags and releases still need Andre's authorization.
 
 ## Initiatives
 
