@@ -1,0 +1,179 @@
+name: Release dry run
+
+# Runs publish.yml's build and verify steps without publishing, so a broken
+# hash pin, build backend, metadata check, version check or wheel smoke test
+# shows up before a v* tag. The steps are copies that
+# tests/test_publish_workflow.py keeps identical to publish.yml; only the
+# version comes from a pretend value instead of the tag, and the tag-on-main
+# check is left out because there is no tag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to build, without the leading v
+        required: true
+        default: "0.10.0"
+        type: string
+  pull_request:
+    branches:
+      - main
+    paths:
+      - ".github/release-requirements.txt"
+      - ".github/workflows/publish.yml"
+      - ".github/workflows/release-dry-run.yml"
+      - "pyproject.toml"
+      - "README.md"
+      - "LICENSE"
+      - ".gitignore"
+      - "src/tongs_agents/data/**"
+      - "src/tongs_agents/layouts/**"
+      - "src/tongs_agents/pi_extension/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-dry-run-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS_AGENTS: ${{ inputs.version || '0.10.0' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-pinned release tools
+        run: >-
+          python -m pip install
+          --require-hashes
+          --only-binary :all:
+          -r .github/release-requirements.txt
+
+      - name: Build package
+        run: python -m build --no-isolation
+
+      - name: Check distribution metadata
+        run: python -m twine check --strict dist/*
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+
+      - name: Verify the built version equals the tag
+        env:
+          TAG_NAME: v${{ inputs.version || '0.10.0' }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import tarfile
+          import zipfile
+          from email.parser import HeaderParser
+          from pathlib import Path
+
+          tag = os.environ["TAG_NAME"]
+          release = r"v(\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?)"
+          match = re.fullmatch(release, tag)
+          if match is None:
+              sys.exit(f"tag {tag!r} is not a release version without dev or local suffix")
+          expected = match.group(1)
+
+          files = sorted(Path("dist").iterdir())
+          wheels = [path for path in files if path.name.endswith(".whl")]
+          sdists = [path for path in files if path.name.endswith(".tar.gz")]
+          if len(files) != 2 or len(wheels) != 1 or len(sdists) != 1:
+              sys.exit(f"expected one wheel and one sdist, found {[p.name for p in files]}")
+
+          with zipfile.ZipFile(wheels[0]) as wheel:
+              metadata = [n for n in wheel.namelist() if n.endswith(".dist-info/METADATA")]
+              if len(metadata) != 1:
+                  sys.exit("wheel has no single METADATA file")
+              wheel_version = HeaderParser().parsestr(wheel.read(metadata[0]).decode())["Version"]
+
+          with tarfile.open(sdists[0]) as sdist:
+              pkg_info = [m for m in sdist.getmembers() if re.fullmatch(r"[^/]+/PKG-INFO", m.name)]
+              if len(pkg_info) != 1:
+                  sys.exit("sdist has no single top-level PKG-INFO file")
+              sdist_version = HeaderParser().parsestr(sdist.extractfile(pkg_info[0]).read().decode())["Version"]
+
+          for label, version in (("wheel", wheel_version), ("sdist", sdist_version)):
+              if version != expected:
+                  sys.exit(f"{label} version {version!r} does not equal tag {tag!r}")
+          if not wheels[0].name.startswith(f"tongs_agents-{expected}-"):
+              sys.exit(f"unexpected wheel name {wheels[0].name}")
+          if sdists[0].name != f"tongs_agents-{expected}.tar.gz":
+              sys.exit(f"unexpected sdist name {sdists[0].name}")
+          print(f"dist matches {tag}: {[p.name for p in files]}")
+          PY
+
+      - name: Install the built wheel in a clean venv and run it
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/wheel-smoke"
+          python3 -m venv "$smoke/venv"
+          mkdir "$smoke/home"
+          wheels=(dist/*.whl)
+          "$smoke/venv/bin/python" -m pip install --only-binary :all: "${wheels[@]}"
+          cd "$smoke"
+          HOME="$smoke/home" XDG_CONFIG_HOME="$smoke/home/.config" \
+            XDG_STATE_HOME="$smoke/home/.local/state" \
+            "$smoke/venv/bin/tongs-agents" --help > /dev/null
+          "$smoke/venv/bin/python" -I - <<'PY'
+          import json
+          from importlib import metadata, resources
+
+          from tongs_agents import zellij_download
+          from tongs_agents.commands import workspace
+          from tongs_agents.pi_install import pi_extension_path
+
+          if not workspace.load_template().strip():
+              raise SystemExit("the workspace layout template is empty")
+          zellij_download.load_pins()
+          json.loads(resources.files("tongs_agents").joinpath("data", "pi_pins.json").read_text("utf-8"))
+          if not (pi_extension_path() / "package.json").is_file():
+              raise SystemExit("the Pi extension is missing")
+          points = {(e.group, e.name, e.value) for e in metadata.distribution("tongs-agents").entry_points}
+          expected = {
+              ("console_scripts", "tongs-agents", "tongs_agents.cli:main"),
+              ("console_scripts", "tongs-agents-hook", "tongs_agents.hook:main"),
+              ("tongs.plugins", "agents", "tongs_agents.tongs_plugin:FleetMonitorPlugin"),
+          }
+          if points != expected:
+              raise SystemExit(f"unexpected entry points {sorted(points)}")
+          print("installed wheel runs and loads its data files")
+          PY

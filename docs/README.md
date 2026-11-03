@@ -17,7 +17,7 @@ New here? Start with [your first workspace](tutorials/first-workspace.md).
 
 ## Tutorials
 
-1. [Your first workspace](tutorials/first-workspace.md): install, profiles
+1. [Your first workspace](tutorials/first-workspace.md): install from PyPI, profiles
    for two Claude Code config dirs, Codex and Pi, `install`, `doctor`,
    `workspace` and the sidebar.
 2. [Any command as a pane](tutorials/any-command.md): profiles with harness
@@ -40,7 +40,7 @@ New here? Start with [your first workspace](tutorials/first-workspace.md).
 
 | Task | Page |
 | --- | --- |
-| Install tongs-agents, and see what `install` changes in harness files | [Installing](install.md) |
+| Install tongs-agents from PyPI or a clone, and see what `install` changes in harness files | [Installing](install.md) |
 | Define agents with their own config dir, cwd, env or model | [Agent profiles](profiles.md) |
 | Report status from a script or an agent without hooks | [Reporting state from any command](profiles.md#reporting-state-from-any-command) |
 | Open, reopen or resurrect a workspace | [Agent workspace](workspace.md) |

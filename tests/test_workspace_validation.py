@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -250,6 +251,199 @@ def test_rerun_stderr_wrapper_execs_the_command(tmp_path):
     assert result.returncode == 3
     assert result.stdout == "out\n"
     assert stderr.read_text() == "err\n"
+
+
+class _Clock:
+    """A fake monotonic clock that each sleep, and each wait, moves forward."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class _Target:
+    def __init__(self, sessions, panes):
+        self._sessions = sessions
+        self._panes = panes
+
+    def sessions(self):
+        return list(self._sessions)
+
+    def panes(self):
+        return list(self._panes)
+
+    def action(self, *arguments):
+        return 0, "sidebar screen line\n", ""
+
+
+class _Client:
+    def __init__(self, *arguments):
+        pass
+
+    def screen(self):
+        return "zellij: \x07could not start\nlast line\n"
+
+
+class _Tracker:
+    def sweep(self):
+        pass
+
+
+TOKEN = "ab" * 16
+
+
+def _workspace_panes():
+    return [
+        {"id": 0, "title": validator.workspace_spawn.SIDEBAR_PANE_NAME,
+         "terminal_command": f"tongs-agents sidebar --spawn-request {TOKEN}"},
+        {"id": 1, "title": "f1"},
+        {"id": 2, "title": "f2"},
+    ]
+
+
+def _create(monkeypatch, tmp_path, target, session_after, panes_after=1.0):
+    """Run create_workspace with the session listed ``session_after`` s after start."""
+    clock = _Clock()
+    waits = []
+
+    def wait_until(predicate, timeout, step=0.1):
+        waits.append(timeout)
+        clock.now += session_after if len(waits) == 1 else panes_after
+        return predicate()
+
+    monkeypatch.setattr(validator, "time", clock)
+    monkeypatch.setattr(validator, "wait_until", wait_until)
+    monkeypatch.setattr(validator, "CapturingClient", _Client)
+    observations = {}
+    try:
+        token = validator.create_workspace(tmp_path, "s1", {}, "tongs-agents", target,
+                                           _Tracker(), observations)
+    except validator.Check as failure:
+        return failure, observations, waits
+    return token, observations, waits
+
+
+@linux_only
+def test_ceilings_are_generous_and_above_the_recorded_budgets():
+    assert validator.SESSION_BUDGET == 5.0 and validator.STATUS_BUDGET == 4.0
+    assert validator.SESSION_CEILING >= 4 * validator.SESSION_BUDGET
+    assert validator.PANES_CEILING >= validator.SESSION_CEILING
+    assert validator.STATUS_CEILING >= 3 * validator.STATUS_BUDGET
+
+
+@linux_only
+def test_slow_session_past_the_budget_is_recorded_not_failed(monkeypatch, tmp_path):
+    target = _Target(["s1"], _workspace_panes())
+
+    token, observations, waits = _create(monkeypatch, tmp_path, target, session_after=7.5)
+
+    assert token == TOKEN
+    assert waits[:2] == [validator.SESSION_CEILING, validator.PANES_CEILING]
+    workspace = observations["workspace"]
+    assert workspace["session_listed_seconds"] == 7.5
+    assert workspace["session_budget_seconds"] == validator.SESSION_BUDGET
+    assert workspace["session_within_budget"] is False
+    assert workspace["session_ceiling_seconds"] == validator.SESSION_CEILING
+    assert "client_screen" not in workspace
+
+
+@linux_only
+def test_session_within_the_budget_is_marked_within(monkeypatch, tmp_path):
+    target = _Target(["s1"], _workspace_panes())
+
+    _, observations, _ = _create(monkeypatch, tmp_path, target, session_after=1.2)
+
+    assert observations["workspace"]["session_within_budget"] is True
+
+
+@linux_only
+def test_session_past_the_ceiling_fails(monkeypatch, tmp_path):
+    target = _Target(["s1"], _workspace_panes())
+
+    failure, _, _ = _create(monkeypatch, tmp_path, target,
+                            session_after=validator.SESSION_CEILING + 1)
+
+    assert isinstance(failure, validator.Check)
+    assert "ceiling" in str(failure)
+
+
+@linux_only
+def test_missing_session_records_the_client_screen(monkeypatch, tmp_path):
+    target = _Target([], [])
+
+    failure, observations, _ = _create(monkeypatch, tmp_path, target,
+                                       session_after=validator.SESSION_CEILING)
+
+    assert isinstance(failure, validator.Check)
+    assert "workspace.client_screen" in str(failure)
+    workspace = observations["workspace"]
+    assert workspace["session_listed"] is False
+    assert workspace["session_within_budget"] is False
+    assert workspace["client_screen"] == ["zellij: \x07could not start", "last line"]
+
+
+@linux_only
+def test_missing_panes_record_the_client_and_sidebar_screens(monkeypatch, tmp_path):
+    target = _Target(["s1"], _workspace_panes()[:2])
+
+    failure, observations, _ = _create(monkeypatch, tmp_path, target, session_after=1.0)
+
+    assert isinstance(failure, validator.Check)
+    assert "expected 3 panes, got 2" in str(failure)
+    workspace = observations["workspace"]
+    assert workspace["client_screen"] == ["zellij: \x07could not start", "last line"]
+    assert workspace["sidebar_screen"] == ["sidebar screen line"]
+
+
+def _hook_rows(monkeypatch, found_after):
+    clock = _Clock()
+    record = SimpleNamespace(launch_id="L1", profile="f1", pid=42, pane_id="1")
+    row = SimpleNamespace(source="hook", status=SimpleNamespace(value="idle"), agent="pi",
+                          launch_id="L1", profile_id="f1", pid="42",
+                          terminal_env={"ZELLIJ_PANE_ID": "1", "ZELLIJ_SESSION_NAME": "s1"})
+    monkeypatch.setattr(validator, "time", clock)
+    monkeypatch.setattr(validator, "records_by_profile", lambda session: {"f1": record})
+    monkeypatch.setattr(validator, "rows_by_launch",
+                        lambda feed: {"L1": row} if clock.now >= found_after else {})
+    observations = {}
+    try:
+        validator.hook_rows("s1", None, None, ("f1",), 0.0, observations, "first")
+    except validator.Check as failure:
+        return failure, observations
+    return None, observations
+
+
+@linux_only
+def test_slow_hook_row_past_the_status_budget_is_recorded_not_failed(monkeypatch):
+    failure, observations = _hook_rows(monkeypatch, found_after=6.0)
+
+    assert failure is None
+    facts = observations["first"]
+    assert facts["status_budget_seconds"] == validator.STATUS_BUDGET
+    assert facts["status_ceiling_seconds"] == validator.STATUS_CEILING
+    assert facts["profiles"]["f1"]["seconds_after_panes_listed"] >= 6.0
+    assert facts["profiles"]["f1"]["within_status_budget"] is False
+
+
+@linux_only
+def test_hook_row_missing_past_the_status_ceiling_fails(monkeypatch):
+    failure, observations = _hook_rows(monkeypatch,
+                                       found_after=validator.STATUS_CEILING + 1)
+
+    assert isinstance(failure, validator.Check)
+    assert observations["first"]["profiles"]["f1"] == {"hook_row": False}
+
+
+@linux_only
+def test_screen_text_strips_terminal_sequences():
+    raw = b"\x1b[2J\x1b[1;1Hzellij \x1b[31merror\x1b[0m\r\n\x1b]0;title\x07next\rline"
+
+    assert validator.screen_text(raw) == "zellij error\nnext\nline"
 
 
 @linux_only
