@@ -26,7 +26,13 @@ kept in the ledger ``state_dir()/emit/entries.json``:
 - otherwise (a shared file the emitter edits by key) drift is not tracked.
 
 An emitter may also define ``disabled(target, path, data) -> bool`` to report
-an entry the user disabled in the harness.
+an entry the user disabled in the harness. Any exception from either hook
+becomes a plan problem naming the target, never a traceback.
+
+An orphan (a recorded entry no longer planned) that tongs-agents owns and
+nobody edited is removed. A drifted orphan, or one in a shared file, stays
+recorded until a forced apply: that backs up and removes an owned file, or
+forgets the record of a shared one and leaves the file as it is.
 
 ``CanonicalFragment.data`` from ``Emitter.capture`` may hold ``instructions``
 (text), ``skills`` ({name: {relative path: bytes or text}}), ``mcp_servers``
@@ -78,6 +84,10 @@ class EngineError(RuntimeError):
 
 class ConflictError(EngineError):
     """A planned path exists without our marker; nothing was written."""
+
+
+class EmitterHookError(EngineError):
+    """An emitter's ``entry_values`` or ``disabled`` hook raised."""
 
 
 @dataclass(frozen=True)
@@ -157,7 +167,11 @@ class ApplyResult:
 
 
 def load_emitters() -> Registry:
-    """``EMITTERS`` from the emitters package; an ImportError means no emitters."""
+    """``EMITTERS`` from the emitters package.
+
+    Only a missing emitters package means no emitters; any other ImportError
+    (a broken emitter module) is reported as the registry problem.
+    """
     try:
         module = importlib.import_module(EMITTERS_MODULE)
     except ImportError as error:
@@ -273,13 +287,28 @@ def _is_ours(path: Path, data: bytes | None) -> bool:
     return parsed is not None and parsed.owner == owned.OWNER
 
 
+def _call_hook(emitter: Any, name: str, target: ProfileTarget, path: Path, data: bytes | None):
+    """``emitter.<name>(target, path, data)``, None when the emitter has no such hook."""
+    hook = getattr(emitter, name, None)
+    if not callable(hook):
+        return None
+    try:
+        return hook(target, path, data)
+    except Exception as error:
+        harness = getattr(emitter, "harness_id", "unknown")
+        raise EmitterHookError(
+            f"the {harness} emitter's {name} failed for {path}: {type(error).__name__}: {error}"
+        ) from error
+
+
 def entry_digest(emitter: Any, target: ProfileTarget, path: Path, data: bytes | None) -> str | None:
-    """The drift digest of ``path`` holding ``data``; None when drift is not tracked."""
-    hook = getattr(emitter, "entry_values", None)
-    if callable(hook):
-        values = hook(target, path, data)
-        if values is not None:
-            return canonical_digest(values)
+    """The drift digest of ``path`` holding ``data``; None when drift is not tracked.
+
+    Raises ``EmitterHookError`` when the emitter's ``entry_values`` raises.
+    """
+    values = _call_hook(emitter, "entry_values", target, path, data)
+    if values is not None:
+        return canonical_digest(values)
     if data is None or not _is_ours(path, data):
         return None
     if path.suffix.lower() == ".toml":
@@ -308,8 +337,7 @@ def _ledger_target(target: ProfileTarget, entries: dict) -> dict:
 
 
 def _disabled(emitter: Any, target: ProfileTarget, path: Path, data: bytes | None) -> bool:
-    hook = getattr(emitter, "disabled", None)
-    return bool(callable(hook) and hook(target, path, data))
+    return bool(_call_hook(emitter, "disabled", target, path, data))
 
 
 def _drift_backup(path: Path, current: bytes) -> Change:
@@ -384,29 +412,48 @@ def _classify(
     }
 
 
+_ORPHAN_FORGOTTEN = "no longer in the dotfiles; forgotten, the file is left as it is"
+
+
 def _orphan(
-    resolved: ResolvedTarget, emitter: Any, name: str, record: dict
+    resolved: ResolvedTarget, emitter: Any, name: str, record: dict, force: bool, plan: Plan,
 ) -> tuple[Entry, dict | None]:
+    """The entry for a recorded path no longer planned and its kept record (None drops it).
+
+    Without ``force`` a drifted or shared orphan keeps its record; with it an
+    owned file is backed up and removed, and a shared file is forgotten.
+    """
     path = Path(name)
     current = _read(path)
     emitter_id = record["emitter"]
     if current is None:
         return Entry(resolved, path, ORPHANED, emitter_id, None, "already removed"), None
     recorded = record.get("digest")
-    if recorded is not None and entry_digest(emitter, resolved.target, path, current) != recorded:
+    ours = _is_ours(path, current)
+    drifted = (
+        recorded is not None and entry_digest(emitter, resolved.target, path, current) != recorded
+    )
+    if drifted and not force:
+        remedy = "backs it up and removes it" if ours else "forgets it and leaves the file"
         return Entry(
             resolved, path, ORPHANED, emitter_id, None,
-            "no longer in the dotfiles but edited since the last apply; left in place", current,
-        ), record
-    if _is_ours(path, current):
-        change = owned.plan_delete_owned(path, owner=owned.OWNER)
-        return Entry(
-            resolved, path, ORPHANED, emitter_id, change, "no longer in the dotfiles; removed",
+            "no longer in the dotfiles but edited since the last apply; left in place; "
+            f"'config apply --force' {remedy}",
             current,
-        ), None
+        ), record
+    if ours:
+        change = owned.plan_delete_owned(path, owner=owned.OWNER)
+        detail = "no longer in the dotfiles; removed"
+        if drifted:
+            plan.backups.append(_drift_backup(path, current))
+            detail = "no longer in the dotfiles; removed after a backup"
+        return Entry(resolved, path, ORPHANED, emitter_id, change, detail, current), None
+    if force:
+        return Entry(resolved, path, ORPHANED, emitter_id, None, _ORPHAN_FORGOTTEN, current), None
     return Entry(
         resolved, path, ORPHANED, emitter_id, None,
-        "no longer in the dotfiles; its emitter removes its entries from this shared file",
+        "no longer in the dotfiles; its emitter removes its entries from this shared file; "
+        "'config apply --force' forgets it and leaves the file",
         current,
     ), record
 
@@ -481,7 +528,7 @@ def plan(
                 entry, record = _classify(
                     resolved, emitter, emitter.harness_id, change, records.get(name), force, result,
                 )
-            except OSError as error:
+            except (OSError, EmitterHookError) as error:
                 result.problems.append(f"{resolved.describe()}: {error}")
                 if name in records:
                     entries[name] = records[name]
@@ -503,8 +550,8 @@ def plan(
                 after.setdefault(key, _ledger_target(resolved.target, {}))["entries"][name] = record
                 continue
             try:
-                entry, kept = _orphan(resolved, emitter, name, record)
-            except OSError as error:
+                entry, kept = _orphan(resolved, emitter, name, record, force, result)
+            except (OSError, EmitterHookError) as error:
                 result.problems.append(f"{resolved.describe()}: {error}")
                 kept = record
                 entry = None

@@ -1,16 +1,19 @@
 """Byte-for-byte install output, pinned from the installer before owned.py.
 
 Synthetic: HOME, the state and config dirs are temporary; the harness CLIs
-are absent, so only settings.json and hooks.json are written.
+are absent, so only settings.json and hooks.json are written. Each scenario
+also pins their file modes and the ``*.tongs-agents.bak`` side files next to
+them (name and mode).
 """
 
 import json
+import stat
 import sys
 from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import cli, legacy, paths
+from tongs_agents import cli, legacy, owned, paths
 
 HOOK = "/opt/tongs agents/bin/tongs-agents-hook"
 LEGACY_HOOK = legacy.LEGACY_HOOK_COMMANDS[0]
@@ -70,11 +73,32 @@ def _environment(root, monkeypatch):
     return home
 
 
+SEED_MODE = 0o644
+
+
+def _write_seed(path, text):
+    path.write_text(text, encoding="utf-8")
+    path.chmod(SEED_MODE)
+
+
 def _seed(directory, settings=SETTINGS_INPUT, codex=CODEX_INPUT):
     (directory / "claude").mkdir(parents=True)
     (directory / "codex").mkdir(parents=True)
-    (directory / "claude" / "settings.json").write_text(settings, encoding="utf-8")
-    (directory / "codex" / "hooks.json").write_text(codex, encoding="utf-8")
+    _write_seed(directory / "claude" / "settings.json", settings)
+    _write_seed(directory / "codex" / "hooks.json", codex)
+
+
+def _mode(path):
+    return stat.S_IMODE(path.stat().st_mode)
+
+
+def _backups(files):
+    """{name: mode} of every backup side file in the directories of ``files``."""
+    found = {}
+    for directory in sorted({path.parent for path in files.values()}):
+        for path in sorted(directory.glob("*" + owned.BACKUP_SUFFIX)):
+            found[path.name] = _mode(path)
+    return found
 
 
 def _install(**options):
@@ -92,7 +116,7 @@ def _uninstall(**options):
 
 
 def run_scenario(name, root, monkeypatch):
-    """Run one installer scenario under ``root``; return {label: bytes}."""
+    """Run one installer scenario under ``root``; return {label: bytes}, modes and backups."""
     home = _environment(root, monkeypatch)
     defaults = {"settings": cli.SETTINGS_FILE, "hooks": cli.CODEX_HOOKS_FILE}
     if name == "fresh":
@@ -101,8 +125,8 @@ def run_scenario(name, root, monkeypatch):
     elif name in ("existing", "reinstall", "uninstall"):
         cli.SETTINGS_FILE.parent.mkdir(parents=True)
         cli.CODEX_HOOKS_FILE.parent.mkdir(parents=True)
-        cli.SETTINGS_FILE.write_text(SETTINGS_INPUT, encoding="utf-8")
-        cli.CODEX_HOOKS_FILE.write_text(CODEX_INPUT, encoding="utf-8")
+        _write_seed(cli.SETTINGS_FILE, SETTINGS_INPUT)
+        _write_seed(cli.CODEX_HOOKS_FILE, CODEX_INPUT)
         _install()
         if name == "reinstall":
             _install()
@@ -118,7 +142,10 @@ def run_scenario(name, root, monkeypatch):
                  "hooks": homes / "codex" / "hooks.json"}
     else:
         raise ValueError(name)
-    return {label: path.read_bytes() for label, path in files.items()}
+    result = {label: path.read_bytes() for label, path in files.items()}
+    result["modes"] = {label: _mode(path) for label, path in files.items()}
+    result["backups"] = _backups(files)
+    return result
 
 
 SCENARIOS = ("fresh", "existing", "reinstall", "uninstall", "config_dirs")
@@ -555,12 +582,26 @@ UNINSTALL_HOOKS = r'''{
 }
 '''.encode()
 
+NEW_MODES = {"settings": 0o600, "hooks": 0o600}
+KEPT_MODES = {"settings": SEED_MODE, "hooks": SEED_MODE}
+# One backup per edited shared file, taken before the first edit only and kept
+# by uninstall; owner-only whatever the original mode.
+BACKUPS = {
+    "settings.json" + owned.BACKUP_SUFFIX: 0o600,
+    "hooks.json" + owned.BACKUP_SUFFIX: 0o600,
+}
+
 EXPECTED = {
-    "fresh": {"settings": FRESH_SETTINGS, "hooks": FRESH_HOOKS},
-    "existing": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS},
-    "reinstall": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS},
-    "uninstall": {"settings": UNINSTALL_SETTINGS, "hooks": UNINSTALL_HOOKS},
-    "config_dirs": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS},
+    "fresh": {"settings": FRESH_SETTINGS, "hooks": FRESH_HOOKS,
+              "modes": NEW_MODES, "backups": {}},
+    "existing": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS,
+                 "modes": KEPT_MODES, "backups": BACKUPS},
+    "reinstall": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS,
+                  "modes": KEPT_MODES, "backups": BACKUPS},
+    "uninstall": {"settings": UNINSTALL_SETTINGS, "hooks": UNINSTALL_HOOKS,
+                  "modes": KEPT_MODES, "backups": BACKUPS},
+    "config_dirs": {"settings": EXISTING_SETTINGS, "hooks": EXISTING_HOOKS,
+                    "modes": KEPT_MODES, "backups": BACKUPS},
 }
 
 
@@ -569,3 +610,11 @@ EXPECTED = {
 def test_install_output_is_byte_identical(name, tmp_path, monkeypatch):
     result = run_scenario(name, tmp_path, monkeypatch)
     assert result == EXPECTED[name]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes")
+@pytest.mark.parametrize("name", ("reinstall", "uninstall"))
+def test_backup_keeps_the_original_after_later_edits(name, tmp_path, monkeypatch):
+    run_scenario(name, tmp_path, monkeypatch)
+    for path, original in ((cli.SETTINGS_FILE, SETTINGS_INPUT), (cli.CODEX_HOOKS_FILE, CODEX_INPUT)):
+        assert owned.backup_path(path).read_text(encoding="utf-8") == original

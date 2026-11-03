@@ -34,6 +34,7 @@ MAX_TOOL_LENGTH = 256
 MAX_ENV_ITEMS = 32
 MAX_ENV_VALUE_LENGTH = 1024
 MAX_FUTURE_SECONDS = 300
+OTHER_HARNESS = "other"
 
 
 @dataclass(frozen=True)
@@ -760,6 +761,31 @@ def _iter_record_paths():
         return []
 
 
+def _launch_ended(data: dict) -> bool:
+    """A pid-less ``other`` record whose launch record is gone or whose process exited.
+
+    ``notify`` writes such a record when the launch was claimed without a
+    process start token; joining on the launch drops it with its pane instead
+    of only after the age limit. The pid is checked without a start token, as
+    ``notify`` itself does.
+    """
+    if data.get("pid") or data.get("harness_id") != OTHER_HARNESS:
+        return False
+    launch_id = (data.get("launch") or {}).get("launch_id")
+    if not launch_id:
+        return False
+    # Function-level: launches imports discovery.
+    from tongs_agents import launches
+
+    record = launches.get(launch_id)
+    if record is None or record.state != "running" or record.pid is None:
+        return True
+    process = get_process_info(record.pid)
+    return process is None or bool(
+        record.process_start and process.start_token != record.process_start
+    )
+
+
 def _cleanup_stale_sessions():
     now = int(time.time())
     removed = 0
@@ -773,6 +799,7 @@ def _cleanup_stale_sessions():
             (status_value == "ended" and age > 300)
             or (data.get("pid") and resolve_session_process(data) is None)
             or (not data.get("pid") and age > 600)
+            or _launch_ended(data)
         )
         if should_remove:
             try:

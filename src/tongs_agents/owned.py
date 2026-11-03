@@ -12,6 +12,8 @@ Two kinds of file:
   hooks.json) edited as a document, text (AGENTS.md, CLAUDE.md, config.toml)
   edited as a string. An edit keeps the file's mode, and the first edit of an
   existing file keeps a ``<name>.tongs-agents.bak`` copy of it next to the file.
+  That copy is taken once: an existing backup is never refreshed, and nothing
+  here removes it.
 
 Every write is atomic (mkstemp, fsync, replace). Symlinks, non-regular files,
 files over a size cap and malformed JSON are refused with a one-line
@@ -64,7 +66,12 @@ _BINARY = getattr(os, "O_BINARY", 0)
 
 
 class OwnedFileError(OSError):
-    """A file tongs-agents refuses to read or change; the message is one line."""
+    """A file tongs-agents refuses to read or change; the message is one line.
+
+    It is an OSError so I/O failures and refusals share one handler, which
+    also means a broad ``except OSError`` swallows a refusal: catch this (or
+    ``cli.ConfigError``) first wherever a refusal must be reported as one.
+    """
 
 
 class SymlinkError(OwnedFileError):

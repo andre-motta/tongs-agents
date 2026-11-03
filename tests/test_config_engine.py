@@ -489,10 +489,7 @@ def test_orphaned_owned_file_is_removed_unless_edited(config, fakes, homes):
     alt = homes.alt / "tongs-agents" / "instructions.md"
     default = homes.home / ".claude" / "tongs-agents" / "instructions.md"
     alt.write_bytes(alt.read_bytes() + b"edit\n")
-    text = AGENTIC.replace('files = ["instructions/common.md"]', "files = []")
-    (config.root / "agentic.toml").write_text(text.replace("{alt}", str(homes.alt)))
-    (config.root / "instructions" / "codex.md").write_text("")
-    config = schema.load_canonical(config.root, local_profiles={})
+    config = drop_common_instructions(config, homes)
 
     result = engine.plan(config, registry=fakes.registry)
     assert by_name(result, "instructions.md", homes.alt).state == engine.ORPHANED
@@ -501,6 +498,73 @@ def test_orphaned_owned_file_is_removed_unless_edited(config, fakes, homes):
     assert not default.exists() and alt.exists()
     assert str(default) not in engine.load_ledger()["claude:default"]["entries"]
     assert default not in owned.managed_paths_for(ProfileTarget("claude", None))
+
+
+def drop_common_instructions(config, homes):
+    text = AGENTIC.replace('files = ["instructions/common.md"]', "files = []")
+    (config.root / "agentic.toml").write_text(text.replace("{alt}", str(homes.alt)))
+    (config.root / "instructions" / "codex.md").write_text("")
+    return schema.load_canonical(config.root, local_profiles={})
+
+
+def test_forced_apply_backs_up_and_removes_a_drifted_orphan(config, fakes, homes):
+    engine.apply(engine.plan(config, registry=fakes.registry))
+    alt = homes.alt / "tongs-agents" / "instructions.md"
+    edited = alt.read_bytes() + b"edit\n"
+    alt.write_bytes(edited)
+    config = drop_common_instructions(config, homes)
+
+    engine.apply(engine.plan(config, registry=fakes.registry))
+    stuck = engine.plan(config, registry=fakes.registry)
+    entry = by_name(stuck, "instructions.md", homes.alt)
+    assert entry.state == engine.ORPHANED and entry.change is None
+    assert "'config apply --force' backs it up and removes it" in entry.detail
+    assert not stuck.clean
+
+    forced = engine.plan(config, registry=fakes.registry, force=True)
+    assert by_name(forced, "instructions.md", homes.alt).detail.endswith("removed after a backup")
+    engine.apply(forced)
+    assert not alt.exists()
+    backup = alt.parent / ("instructions.md" + engine.DRIFT_BACKUP_SUFFIX)
+    assert backup.read_bytes() == edited
+    assert str(alt) not in engine.load_ledger()[f"claude:{homes.alt}"]["entries"]
+    assert alt not in owned.managed_paths_for(ProfileTarget("claude", homes.alt))
+    assert engine.plan(config, registry=fakes.registry).clean
+
+
+def test_shared_orphan_is_forgotten_only_when_forced(config, homes):
+    class NoSettings(FakeClaude):
+        planned = True
+
+        def plan(self, config, target):
+            changes = super().plan(config, target)
+            if self.planned:
+                return changes
+            return [change for change in changes if change.path.name != "settings.json"]
+
+    claude = NoSettings(homes.home / ".claude")
+    registry = engine.Registry({"claude": claude})
+    targets = [engine.ResolvedTarget(ProfileTarget("claude", homes.alt))]
+    engine.apply(engine.plan(config, targets=targets, registry=registry))
+    settings = homes.alt / "settings.json"
+    before = settings.read_bytes()
+    claude.planned = False
+
+    for _ in range(2):
+        result = engine.plan(config, targets=targets, registry=registry)
+        entry = by_name(result, "settings.json")
+        assert entry.state == engine.ORPHANED and entry.change is None
+        assert "'config apply --force' forgets it" in entry.detail
+        engine.apply(result)
+        assert str(settings) in engine.load_ledger()[f"claude:{homes.alt}"]["entries"]
+
+    forced = engine.plan(config, targets=targets, registry=registry, force=True)
+    assert by_name(forced, "settings.json").detail == engine._ORPHAN_FORGOTTEN
+    engine.apply(forced)
+    assert settings.read_bytes() == before
+    assert str(settings) not in engine.load_ledger()[f"claude:{homes.alt}"]["entries"]
+    after = engine.plan(config, targets=targets, registry=registry)
+    assert after.clean and [entry.path.name for entry in after.entries] == ["instructions.md"]
 
 
 def test_shared_entries_drift_by_parsed_value_not_bytes(config, fakes, homes):
@@ -577,6 +641,44 @@ def test_emitter_error_is_a_problem_and_blocks_apply(config, fakes, homes):
     with pytest.raises(engine.EngineError):
         engine.apply(result)
     assert not engine.ledger_path().exists()
+
+
+class Broken(Exception):
+    pass
+
+
+@pytest.mark.parametrize("hook", ["entry_values", "disabled"])
+def test_raising_emitter_hook_is_a_problem_naming_the_target(config, fakes, homes, hook):
+    def boom(target, path, data):
+        raise Broken("hook bug")
+
+    setattr(fakes.claude, hook, boom)
+    targets = [engine.ResolvedTarget(ProfileTarget("claude", homes.alt))]
+    engine.apply(engine.plan(config, targets=targets, registry=engine.Registry({
+        "claude": FakeClaude(homes.home / ".claude"),
+    })))
+    result = engine.plan(config, targets=targets, registry=fakes.registry)
+    message = f"claude ({homes.alt}): the claude emitter's {hook} failed"
+    assert any(problem.startswith(message) and "Broken: hook bug" in problem
+               for problem in result.problems), result.problems
+    with pytest.raises(engine.EngineError, match="hook bug"):
+        engine.apply(result)
+    assert str(homes.alt / "settings.json") in engine.load_ledger()[f"claude:{homes.alt}"]["entries"]
+
+
+def test_raising_entry_values_on_an_orphan_is_a_problem(config, fakes, homes):
+    engine.apply(engine.plan(config, registry=fakes.registry))
+    config = drop_common_instructions(config, homes)
+
+    def boom(target, path, data):
+        raise Broken("orphan hook bug")
+
+    fakes.claude.entry_values = boom
+    result = engine.plan(config, registry=fakes.registry)
+    assert any("entry_values failed" in problem and "orphan hook bug" in problem
+               for problem in result.problems)
+    with pytest.raises(engine.EngineError):
+        engine.apply(result)
 
 
 def test_invalid_change_is_a_problem(config, homes):

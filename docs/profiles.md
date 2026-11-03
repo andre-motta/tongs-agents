@@ -147,13 +147,19 @@ gone, or when the pane's profile uses a hooked harness (`claude`, `codex` or
 `pi`). When the record cannot be written it says so on stderr and still exits
 0, so a status report never fails the command that sent it.
 
+When the launch was claimed without a process start token, the row has no
+pid. Such a row is removed once its launch record is gone or the launched
+process has exited, and in any case after 10 minutes without a new report.
+
 Examples, with synthetic names:
 
 ```toml
 # Run the tests and report the outcome. The shell stays the launched process,
-# so the row lives as long as the pane's shell.
+# so the row lives as long as the pane's shell. Use if/else rather than
+# `make test && notify done || notify failed`: there a refused `notify done`
+# (for example when the launch record is gone) would also report failed.
 [profiles.tests]
-command = ["sh", "-c", "tongs-agents notify working 'running tests'; make test && tongs-agents notify done 'tests passed' || tongs-agents notify failed 'tests failed'; exec sh"]
+command = ["sh", "-c", "tongs-agents notify working 'running tests'; if make test; then tongs-agents notify done 'tests passed'; else tongs-agents notify failed 'tests failed'; fi; exec sh"]
 cwd = "~/src/example"
 
 # A long-running script that asks for attention itself.
