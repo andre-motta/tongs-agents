@@ -2,7 +2,7 @@
 
 This guide describes the adapter boundary implemented by Fleet. It is a
 contributor contract for the built-in Claude Code, Codex and Pi integrations;
-it is not an arbitrary plugin loader. The [support matrix](../README.md#harness-support)
+it is not an arbitrary plugin loader. The [support matrix](support-matrix.md#harness-support)
 is the public capability summary. The detailed rules are in the implemented
 [event, identity and focus contract](work/harness-contract.md).
 
