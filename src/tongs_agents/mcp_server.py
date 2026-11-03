@@ -1,15 +1,27 @@
-"""MCP server exposing Claude Code, Codex and Pi sessions for Tongs Agents."""
+"""MCP server exposing Claude Code, Codex and Pi sessions for Tongs Agents.
 
+The read-only ``fleet_*`` tools are always listed. The agent control tools
+(``agents_spawn``, ``agents_send``, ``agents_status``, ``agents_wait``) are
+registered only when ``[control].mcp_enabled`` is true when the server starts;
+their policy lives in ``mcp_control`` and every call is audited by
+``control``. See docs/mcp-control.md.
+"""
+
+import asyncio
 import json
+import sys
 
 from mcp.server.fastmcp import FastMCP
 
+from tongs_agents import control
+from tongs_agents import focus as focus_module
+from tongs_agents.app_config import AppConfigError, load_app_config
 from tongs_agents.discovery import cleanup_ended_sessions, read_sessions
+from tongs_agents.mcp_control import McpControl, error_payload
 
-mcp = FastMCP("tongs-agents")
+SERVER_NAME = "tongs-agents"
 
 
-@mcp.tool()
 def fleet_status() -> str:
     """Get all Claude Code, Codex and Pi session statuses."""
     sessions = read_sessions()
@@ -34,7 +46,6 @@ def fleet_status() -> str:
     )
 
 
-@mcp.tool()
 def fleet_session(session_id: str) -> str:
     """Get a session by canonical or native ID (full or prefix match)."""
     sessions = read_sessions()
@@ -66,7 +77,6 @@ def fleet_session(session_id: str) -> str:
     return json.dumps(matches[0], indent=2)
 
 
-@mcp.tool()
 def fleet_sessions_needing_attention() -> str:
     """Get sessions that are idle for over 2 minutes and likely need user input."""
     sessions = read_sessions()
@@ -82,39 +92,85 @@ def fleet_sessions_needing_attention() -> str:
     )
 
 
-@mcp.tool()
 def fleet_focus(query: str) -> str:
     """Focus the terminal running an agent session by repo, session ID, or PID."""
-    from tongs_agents.focus import focus
-    import io
-    import sys
-
-    old_stdout, old_stderr = sys.stdout, sys.stderr
-    sys.stdout = buf_out = io.StringIO()
-    sys.stderr = buf_err = io.StringIO()
-    try:
-        result = focus(query)
-    finally:
-        sys.stdout = old_stdout
-        sys.stderr = old_stderr
-
-    if result:
-        return json.dumps(
-            {"success": True, "message": buf_out.getvalue().strip()}
-        )
-    return json.dumps(
-        {"success": False, "error": buf_err.getvalue().strip()}
-    )
+    return json.dumps(focus_module.focus_session(query).to_dict())
 
 
-@mcp.tool()
 def fleet_cleanup() -> str:
     """Remove status files for ended sessions older than 5 minutes."""
     return json.dumps({"removed": cleanup_ended_sessions()})
 
 
+def _control_call(call) -> str:
+    try:
+        payload = call(McpControl())
+    except control.ControlError as error:
+        payload = error_payload(error)
+    return json.dumps(payload, indent=2)
+
+
+async def agents_spawn(profile: str) -> str:
+    """Start a named profile with mcp_control = true in a new pane of the running
+    workspace session. Returns its launch id. Takes no command, env or cwd."""
+    return await asyncio.to_thread(_control_call, lambda c: c.spawn(profile))
+
+
+async def agents_send(launch_id: str, text: str) -> str:
+    """Send a prompt (pasted, then Enter) to an agent pane this agent spawned.
+
+    At most 64 KiB; tabs and newlines are the only control characters allowed.
+    """
+    return await asyncio.to_thread(_control_call, lambda c: c.send(launch_id, text))
+
+
+async def agents_status(launch_id: str) -> str:
+    """The attention state (working, needs-you, done, failed, quiet, ended) of an
+    agent pane this agent spawned."""
+    return await asyncio.to_thread(_control_call, lambda c: c.status(launch_id))
+
+
+async def agents_wait(launch_id: str, until: str = "done",
+                      timeout_s: float = control.MAX_WAIT_SECONDS) -> str:
+    """Wait until an agent pane this agent spawned reaches ``until`` (done,
+    needs-you, ended or any), for at most timeout_s seconds (600 at most)."""
+    return await asyncio.to_thread(
+        _control_call, lambda c: c.wait(launch_id, until, timeout_s)
+    )
+
+
+FLEET_TOOLS = (
+    fleet_status,
+    fleet_session,
+    fleet_sessions_needing_attention,
+    fleet_focus,
+    fleet_cleanup,
+)
+CONTROL_TOOLS = (agents_spawn, agents_send, agents_status, agents_wait)
+
+
+def create_server(control_enabled: bool = False) -> FastMCP:
+    """A server with the fleet tools, plus the control tools when enabled."""
+    server = FastMCP(SERVER_NAME)
+    for tool in FLEET_TOOLS + (CONTROL_TOOLS if control_enabled else ()):
+        server.add_tool(tool)
+    return server
+
+
+def control_enabled() -> bool:
+    """``[control].mcp_enabled``; an unreadable config leaves control off."""
+    try:
+        return load_app_config().control.mcp_enabled
+    except AppConfigError as error:
+        print(f"tongs-agents: MCP control tools off: {error}", file=sys.stderr)
+        return False
+
+
+mcp = create_server()
+
+
 def main():
-    mcp.run()
+    create_server(control_enabled()).run()
 
 
 if __name__ == "__main__":

@@ -443,4 +443,6 @@ def test_cli_focus_prints_step_details(
 def test_mcp_focus_reports_step_details(monkeypatch, result, payload):
     monkeypatch.setattr(focus_module, "focus_session", lambda query: result)
 
-    assert json.loads(mcp_server.fleet_focus("repo")) == payload
+    data = json.loads(mcp_server.fleet_focus("repo"))
+    assert data == result.to_dict()
+    assert data["successful"] is payload["success"]

@@ -4,8 +4,10 @@ A spawner creates a pending record, and the launcher running inside the pane
 claims it exactly once with its own pid, process start token and pane
 identity before it execs the agent. A second claim of the same id (a
 resurrected pane, for example) gets a fresh record that names the old one in
-``replaces``. Records live in ``state_dir()/launches/<launch_id>.json``:
-written atomically at 0600, read without following symlinks, 64 KiB at most.
+``replaces``. A launch spawned through the MCP control tools names the
+caller's launch id in ``spawned_by``. Records live in
+``state_dir()/launches/<launch_id>.json``: written atomically at 0600, read
+without following symlinks, 64 KiB at most.
 """
 
 from __future__ import annotations
@@ -49,10 +51,13 @@ class LaunchRecord:
     process_start: str | None = None
     state: str = "pending"
     replaces: str | None = None
+    spawned_by: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def to_json(self) -> dict:
         data = asdict(self)
+        if data["spawned_by"] is None:
+            del data["spawned_by"]
         return {"schema_version": data.pop("schema_version"), **data}
 
 
@@ -88,6 +93,7 @@ def _parse(data) -> LaunchRecord | None:
         and _text(data.get("process_start"), optional=True)
         and data.get("state") in STATES
         and (data.get("replaces") is None or is_launch_id(data["replaces"]))
+        and (data.get("spawned_by") is None or is_launch_id(data["spawned_by"]))
         and type(created) is int
     ):
         return None
@@ -158,10 +164,16 @@ def _check_text(name: str, value: str | None, *, optional: bool = False) -> None
         raise LaunchError(f"invalid {name}: {value!r}")
 
 
-def create_pending(profile: Profile, session: str, multiplexer: str) -> LaunchRecord:
-    """Write a pending record for a pane about to run ``profile``."""
+def create_pending(profile: Profile, session: str, multiplexer: str, *,
+                   spawned_by: str | None = None) -> LaunchRecord:
+    """Write a pending record for a pane about to run ``profile``.
+
+    ``spawned_by`` is the launch id of the MCP caller that asked for it.
+    """
     _check_text("session", session)
     _check_text("multiplexer", multiplexer)
+    if spawned_by is not None and not is_launch_id(spawned_by):
+        raise LaunchError(f"invalid spawning launch id: {spawned_by!r}")
     record = LaunchRecord(
         launch_id=secrets.token_hex(16),
         profile=profile.name,
@@ -169,6 +181,7 @@ def create_pending(profile: Profile, session: str, multiplexer: str) -> LaunchRe
         multiplexer=multiplexer,
         session=session,
         created=int(time.time()),
+        spawned_by=spawned_by,
     )
     return _write(record)
 

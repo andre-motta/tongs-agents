@@ -1,24 +1,47 @@
-"""Run a synthetic MCP stdio smoke with the current Python environment."""
+"""Run a synthetic MCP stdio smoke with the current Python environment.
+
+The server runs twice, with [control].mcp_enabled false and then true, in a
+temporary state and config dir: the agent control tools must be absent, then
+listed, and a control call from outside a launched pane must be refused and
+audited. No agent, multiplexer or model is started.
+"""
 
 import argparse
 import json
 import os
 import selectors
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 from pathlib import Path
 
+FLEET_TOOLS = {
+    'fleet_status', 'fleet_session', 'fleet_sessions_needing_attention',
+    'fleet_focus', 'fleet_cleanup',
+}
+CONTROL_TOOLS = {'agents_spawn', 'agents_send', 'agents_status', 'agents_wait'}
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1] / 'src')
-    args = parser.parse_args()
+
+def run_server(source, control_enabled):
     with tempfile.TemporaryDirectory(prefix='fleet-mcp-validation-') as directory:
         sessions = Path(directory) / 'sessions'
         sessions.mkdir(mode=0o700)
-        env = dict(os.environ, TONGS_AGENTS_STATE_DIR=directory, PYTHONPATH=str(args.source.resolve()), PYTHONUNBUFFERED='1')
+        config = Path(directory) / 'config'
+        config.mkdir(mode=0o700)
+        (config / 'config.toml').write_text(
+            f'[control]\nmcp_enabled = {"true" if control_enabled else "false"}\n'
+        )
+        (config / 'config.toml').chmod(0o600)
+        env = dict(
+            os.environ, TONGS_AGENTS_STATE_DIR=directory, TONGS_AGENTS_CONFIG_DIR=str(config),
+            XDG_RUNTIME_DIR=str(Path(directory) / 'run'),
+            PYTHONPATH=str(source.resolve()), PYTHONUNBUFFERED='1',
+        )
+        for key in ('TONGS_AGENTS_LAUNCH_ID', 'ZELLIJ', 'ZELLIJ_SESSION_NAME', 'ZELLIJ_PANE_ID',
+                    'ZELLIJ_SOCKET_DIR', 'TMUX', 'TMUX_PANE'):
+            env.pop(key, None)
         fixture = {
             'session_id': 'validation-session', 'agent': 'claude',
             'repo': 'validation-fixture', 'cwd': directory, 'pid': '',
@@ -72,10 +95,9 @@ def main():
             send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
             send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}})
             listing = response(2)
-            assert {tool['name'] for tool in listing['tools']} == {
-                'fleet_status', 'fleet_session', 'fleet_sessions_needing_attention',
-                'fleet_focus', 'fleet_cleanup',
-            }
+            expected = FLEET_TOOLS | (CONTROL_TOOLS if control_enabled else set())
+            names = {tool['name'] for tool in listing['tools']}
+            assert names == expected, sorted(names)
             send({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call', 'params': {
                 'name': 'fleet_status', 'arguments': {},
             }})
@@ -83,7 +105,19 @@ def main():
             assert not result.get('isError')
             status = json.loads(result['content'][0]['text'])
             assert any(session['session_id'] == 'validation-session' and session['status'] == 'waiting' for session in status['sessions'])
-            print('PASS: subprocess stdio initialization, five tools and synthetic fleet status')
+            if control_enabled:
+                send({'jsonrpc': '2.0', 'id': 4, 'method': 'tools/call', 'params': {
+                    'name': 'agents_send', 'arguments': {'launch_id': 'a' * 32, 'text': 'hi'},
+                }})
+                refused = json.loads(response(4)['content'][0]['text'])
+                assert (refused['ok'], refused['outcome'], refused['exit_code']) == (False, 'refused', 5), refused
+                audit = Path(directory) / 'audit' / 'control.jsonl'
+                assert stat.S_IMODE(audit.stat().st_mode) == 0o600
+                entry = json.loads(audit.read_text().splitlines()[-1])
+                assert (entry['actor'], entry['action'], entry['outcome']) == ('mcp', 'send', 'refused')
+                print('PASS: control enabled: nine tools; an agents_send outside a launched pane is refused and audited (0600)')
+            else:
+                print('PASS: control disabled: subprocess stdio initialization, five fleet tools only and synthetic fleet status')
         finally:
             process.terminate()
             try:
@@ -94,6 +128,14 @@ def main():
             selector.close()
             for stream in (process.stdin, process.stdout, process.stderr):
                 stream.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1] / 'src')
+    args = parser.parse_args()
+    run_server(args.source, control_enabled=False)
+    run_server(args.source, control_enabled=True)
 
 
 if __name__ == '__main__':
