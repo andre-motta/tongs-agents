@@ -1,6 +1,5 @@
 """Installation support for the optional Pi extension."""
 
-import json
 import os
 import re
 import subprocess
@@ -8,7 +7,7 @@ import tempfile
 from importlib.resources import files
 from pathlib import Path
 
-from tongs_agents import legacy
+from tongs_agents import legacy, owned
 
 
 MINIMUM_PI_VERSION = (0, 84, 4)
@@ -53,20 +52,17 @@ def pi_extension_path() -> Path:
 
 
 def _read_owned_config(path: Path, owner: str = PI_CONFIG_OWNER):
-    if path.is_symlink():
-        raise ValueError(f"Refusing to replace unrecognized Pi config: {path}")
-    if not path.exists():
-        return None
     try:
-        if not path.is_file() or path.stat().st_size > _MAX_CONFIG_BYTES:
-            raise ValueError
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, ValueError, RecursionError) as error:
+        current = owned.read_owned_file(
+            path, owner=owner, fmt="json", max_bytes=_MAX_CONFIG_BYTES
+        )
+    except owned.OwnedFileError as error:
         raise ValueError(f"Refusing to replace unrecognized Pi config: {path}") from error
+    if current is None:
+        return None
+    value = current.content
     if (
-        not isinstance(value, dict)
-        or value.get("owner") != owner
-        or value.get("schema_version") != PI_CONFIG_SCHEMA
+        value.get("schema_version") != PI_CONFIG_SCHEMA
         or not _absolute_path(value.get("hook_path"))
         or not _absolute_path(value.get("extension_path"))
     ):
@@ -84,22 +80,15 @@ def _read_owned_config(path: Path, owner: str = PI_CONFIG_OWNER):
 
 def _save_owned_config(path: Path, value: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    data = {key: item for key, item in value.items() if key not in owned.MARKER_KEYS}
+    owned.write_owned_file(
+        path, data, owner=PI_CONFIG_OWNER, schema_version=PI_CONFIG_SCHEMA,
+        managed_paths=value["managed_paths"], fmt="json", max_bytes=_MAX_CONFIG_BYTES,
     )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+
+
+def _delete_owned_config(path: Path, owner: str = PI_CONFIG_OWNER):
+    owned.delete_owned_file(path, owner=owner, fmt="json", max_bytes=_MAX_CONFIG_BYTES)
 
 
 def _isolated_version_environment():
@@ -183,7 +172,7 @@ def _remove_legacy_pi(pi_command: str | None, keep: str = "", env=None) -> bool:
               f"{config_path} for retry")
         return False
     try:
-        config_path.unlink()
+        _delete_owned_config(config_path, legacy.LEGACY_PI_CONFIG_OWNER)
     except OSError as error:
         print(f"  Could not remove legacy Pi config: {error}")
         return False
@@ -245,7 +234,7 @@ def install_pi(pi_command: str, hook_command: str, env=None) -> bool:
     if result is None or result.returncode != 0:
         if previous is None:
             try:
-                config_path.unlink()
+                _delete_owned_config(config_path)
             except OSError:
                 pass
         else:
@@ -315,7 +304,7 @@ def uninstall_pi(pi_command: str | None, env=None) -> bool:
         print("  Could not remove every managed Pi extension reference")
         return False
     try:
-        config_path.unlink()
+        _delete_owned_config(config_path)
     except OSError as error:
         print(f"  Could not remove Pi extension config: {error}")
         return False

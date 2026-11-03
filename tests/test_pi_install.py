@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -498,3 +500,55 @@ def test_pi_config_dir_reads_the_given_env(tmp_path, monkeypatch):
     env = pi_install.pi_environment(tmp_path / "y")
     assert env["PI_CODING_AGENT_DIR"] == str(tmp_path / "y")
     assert pi_install.pi_config_dir() == tmp_path / "process"
+
+
+def _fresh_pi(tmp_path, monkeypatch, run):
+    from tongs_agents import pi_install
+
+    config_dir = tmp_path / "config"
+    extension = tmp_path / "extension"
+    extension.mkdir()
+    hook = tmp_path / "hook"
+    hook.write_text("")
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
+    monkeypatch.setattr(pi_install, "detect_pi_version", lambda command: (0, 85, 0))
+    monkeypatch.setattr(pi_install, "pi_extension_path", lambda: extension)
+    monkeypatch.setattr(pi_install, "_run_pi_package", run)
+    return config_dir / pi_install.PI_CONFIG_NAME, extension, hook
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX modes")
+def test_pi_config_keeps_its_format_and_private_mode(tmp_path, monkeypatch):
+    from tongs_agents import pi_install
+
+    config_path, extension, hook = _fresh_pi(
+        tmp_path, monkeypatch, lambda *args, **kwargs: completed()
+    )
+    assert pi_install.install_pi("/path/pi", str(hook))
+    expected = {
+        "extension_path": str(extension),
+        "hook_path": str(hook),
+        "managed_paths": [str(extension)],
+        "owner": pi_install.PI_CONFIG_OWNER,
+        "schema_version": pi_install.PI_CONFIG_SCHEMA,
+    }
+    assert config_path.read_text() == json.dumps(expected, indent=2, sort_keys=True) + "\n"
+    assert stat.S_IMODE(config_path.stat().st_mode) == 0o600
+    assert sorted(entry.name for entry in config_path.parent.iterdir()) == [
+        pi_install.PI_CONFIG_NAME,
+    ]
+
+
+def test_config_replaced_during_install_is_not_overwritten(tmp_path, monkeypatch, capsys):
+    from tongs_agents import pi_install
+
+    foreign = '{"owner": "someone-else"}\n'
+
+    def run(command, operation, path, env=None):
+        config_path.write_text(foreign)
+        return completed()
+
+    config_path, extension, hook = _fresh_pi(tmp_path, monkeypatch, run)
+    assert not pi_install.install_pi("/path/pi", str(hook))
+    assert config_path.read_text() == foreign
+    assert "could not be finalized" in capsys.readouterr().out

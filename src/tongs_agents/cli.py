@@ -10,12 +10,11 @@ import shutil
 import stat
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import commands, legacy, paths
+from tongs_agents import commands, legacy, owned, paths
 from tongs_agents.pi_install import (
     PI_CONFIG_NAME,
     install_pi,
@@ -63,8 +62,8 @@ CODEX_HOOK_EVENTS = [
 ]
 
 
-class ConfigError(Exception):
-    """A harness config file that the installer must not modify."""
+# A config file the installer must not modify; every owned.py refusal is one.
+ConfigError = owned.OwnedFileError
 
 
 def _is_windows():
@@ -184,54 +183,15 @@ def _validate_config(path, data):
 
 
 def load_json(path):
-    if path.is_symlink():
-        raise ConfigError(f"{path}: refusing to modify a symlinked file")
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ConfigError(
-            f"{path}: malformed JSON ({error.msg} at line {error.lineno} column {error.colno})"
-        ) from None
-    except (OSError, UnicodeError, RecursionError) as error:
-        raise ConfigError(f"{path}: cannot read ({type(error).__name__})") from None
-    _validate_config(path, data)
-    return data
+    return owned.read_json(path, missing={}, validate=_validate_config)
 
 
 def save_json(path, data, mode=None):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.is_symlink():
-        raise ConfigError(f"{path}: refusing to modify a symlinked file")
-    if mode is None:
-        try:
-            mode = stat.S_IMODE(path.stat().st_mode)
-        except FileNotFoundError:
-            mode = 0o600
-    descriptor, temporary = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(json.dumps(data, indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
-    finally:
-        try:
-            os.unlink(temporary)
-        except FileNotFoundError:
-            pass
+    """Write tongs-agents' own JSON state; harness files go through owned.ChangeSet."""
+    owned.atomic_write(path, (json.dumps(data, indent=2) + "\n").encode("utf-8"), mode=mode)
 
 
-def load_settings():
-    return load_json(SETTINGS_FILE)
-
-
-def save_settings(settings):
-    save_json(SETTINGS_FILE, settings)
+HOOK_OWNERSHIP = owned.EntryOwnership(validate=_validate_config)
 
 
 def _strip_owned_hooks(config):
@@ -800,6 +760,22 @@ def _record(installs, target, installed):
         entries.remove(value)
 
 
+def _install_edit(target, hook_cmd):
+    def edit(config):
+        _install_hooks(config, _hook_events(target.harness), hook_cmd, target.harness)
+        if target.harness == "claude":
+            _remove_settings_mcp(config)
+    return edit
+
+
+def _uninstall_edit(target):
+    def edit(config):
+        _remove_hooks(config)
+        if target.harness == "claude":
+            _remove_settings_mcp(config)
+    return edit
+
+
 def cmd_install(args):
     agent = getattr(args, "agent", None)
     targets, explicit = _plan(args)
@@ -808,22 +784,21 @@ def cmd_install(args):
     hook_targets = [target for target in targets if target.harness != "pi"]
     pi_targets = [target for target in targets if target.harness == "pi"]
 
+    changes = owned.ChangeSet()
     for target in hook_targets:
-        load_json(target.config_file)
+        changes.edit_json_entries(
+            target.config_file, _install_edit(target, hook_cmd), ownership=HOOK_OWNERSHIP
+        )
 
     if hook_targets:
         try:
             paths.sessions_dir(create=True)
         except OSError as error:
             raise ConfigError(f"cannot use the session directory: {error}") from None
+    changes.commit()
     commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
     skipped = set()
     for target in hook_targets:
-        config = load_json(target.config_file)
-        _install_hooks(config, _hook_events(target.harness), hook_cmd, target.harness)
-        if target.harness == "claude":
-            _remove_settings_mcp(config)
-        save_json(target.config_file, config)
         _record(installs, target, True)
         print(f"  Updated {target.config_file}{_describe_sources(target)}")
         command = commands_found[target.harness]
@@ -933,18 +908,20 @@ def cmd_uninstall(args):
     installs = load_installs()
     hook_targets = [target for target in targets if target.harness != "pi"]
     pi_targets = [target for target in targets if target.harness == "pi"]
-    for target in hook_targets:
-        if target.directory is None or os.path.lexists(target.config_file):
-            load_json(target.config_file)
+    edited = [
+        target for target in hook_targets
+        if target.directory is None or os.path.lexists(target.config_file)
+    ]
+    changes = owned.ChangeSet()
+    for target in edited:
+        changes.edit_json_entries(
+            target.config_file, _uninstall_edit(target), ownership=HOOK_OWNERSHIP
+        )
+    changes.commit()
 
     commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
     for target in hook_targets:
-        if target.directory is None or os.path.lexists(target.config_file):
-            config = load_json(target.config_file)
-            _remove_hooks(config)
-            if target.harness == "claude":
-                _remove_settings_mcp(config)
-            save_json(target.config_file, config)
+        if target in edited:
             print(f"  Updated {target.config_file}{_describe_sources(target)}")
         _record(installs, target, False)
         command = commands_found[target.harness]
@@ -1113,7 +1090,9 @@ def build_parser(modules=None):
             "Install agent monitoring. Without --agent or config dir options this covers "
             "Claude Code, Codex and the config home of every profile. A pi profile is "
             "skipped with a warning, not an error, when pi or tongs-agents-hook is not "
-            "installed; --agent pi or --pi-agent-dir still fail in that case."
+            "installed; --agent pi or --pi-agent-dir still fail in that case. Before it "
+            "first changes an existing settings.json or hooks.json, install keeps a copy "
+            f"of it next to the file as <name>{owned.BACKUP_SUFFIX}."
         ),
     )
     p_install.add_argument(
