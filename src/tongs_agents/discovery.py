@@ -236,6 +236,35 @@ def resolve_process_identity(
     return process
 
 
+SANDBOX_SOURCE = "sandbox"
+
+
+def _sandbox_launch_owns(session: dict, process: ProcessInfo) -> bool:
+    """True for a sandbox bridge record whose pid is its launch's claimed pane process.
+
+    A sandboxed agent runs inside the sandbox; the host process behind its
+    record is the pane's ``openshell`` CLI, which never matches the harness
+    by name. Only a record written by the bridge (source ``sandbox``) whose
+    launch record claims exactly this pid and start token qualifies.
+    """
+    if session.get("source") != SANDBOX_SOURCE or not process.start_token:
+        return False
+    launch_id = (session.get("launch") or {}).get("launch_id")
+    if not launch_id:
+        return False
+    # Function-level: launches imports discovery.
+    from tongs_agents import launches
+
+    record = launches.get(launch_id)
+    return (
+        record is not None
+        and record.state == "running"
+        and record.pid == process.pid
+        and record.process_start == process.start_token
+        and session.get("process_start") == process.start_token
+    )
+
+
 def resolve_session_process(session: dict) -> ProcessInfo | None:
     try:
         pid = int(session.get("pid", ""))
@@ -249,7 +278,10 @@ def resolve_session_process(session: dict) -> ProcessInfo | None:
     if harness is None:
         return None
     if harness.process_identity is ProcessIdentity.DISCOVERABLE:
-        if not process_matches_harness(process, harness_id):
+        if not (
+            process_matches_harness(process, harness_id)
+            or _sandbox_launch_owns(session, process)
+        ):
             return None
     expected_start = session.get("process_start", "")
     if expected_start and process.start_token != expected_start:
@@ -268,6 +300,42 @@ def _get_tty(pid):
         return ""
     match = re.search(r"pts/\d+", link)
     return match.group() if match else ""
+
+
+# PROC_PID_INIT_INO (include/linux/proc_ns.h): the init pid namespace's fixed inode.
+INIT_PID_NAMESPACE = "pid:[4026531836]"
+
+
+def _pid_namespace(pid: int | str) -> str | None:
+    try:
+        return os.readlink(f"/proc/{pid}/ns/pid")
+    except (OSError, ValueError):
+        return None
+
+
+def _init_pid_namespace() -> str:
+    return _pid_namespace(1) or INIT_PID_NAMESPACE
+
+
+def in_other_pid_namespace(pid: int) -> bool:
+    """True on Linux when ``pid`` runs neither in our pid namespace nor the init one.
+
+    A sandboxed agent on a Docker or Podman driver is a host process in the
+    container's namespace; the bridge reports it, so process discovery skips
+    it (docs/work/openshell-sandbox.md, row 10). A process in the init pid
+    namespace is never skipped, so a sidebar that itself runs in a namespace
+    of its own still discovers host agents. ``/proc/1/ns/pid`` is usually
+    unreadable without privileges; the init namespace then falls back to its
+    fixed kernel inode (``INIT_PID_NAMESPACE``). Unreadable namespaces of our
+    own or of ``pid`` count as ours, which keeps discovery as it was.
+    """
+    if sys.platform != "linux":
+        return False
+    own = _pid_namespace("self")
+    other = _pid_namespace(pid)
+    if own is None or other is None or own == other:
+        return False
+    return other != _init_pid_namespace()
 
 
 def _find_agent_processes():
@@ -726,6 +794,8 @@ def discover_processes():
     for harness_id, pid in _find_agent_processes():
         process = get_process_info(pid)
         if process is None or not process.cwd or not process_matches_harness(process, harness_id):
+            continue
+        if in_other_pid_namespace(pid):
             continue
         instance_id = (
             f"{pid}:{process.start_token}"

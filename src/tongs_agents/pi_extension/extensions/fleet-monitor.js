@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
-  closeSync, fstatSync, lstatSync, openSync, readSync, realpathSync,
+  closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, realpathSync,
+  renameSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
@@ -87,7 +88,35 @@ function loadConfig() {
   }
 }
 
-const config = loadConfig();
+// Inside an OpenShell sandbox there is no tongs-agents-hook: events are
+// spooled as files that the host bridge pulls (docs/sandbox.md).
+function spoolDir() {
+  const value = process.env.TONGS_AGENTS_SPOOL;
+  return validAbsolutePath(value) ? value : null;
+}
+
+const spool = spoolDir();
+const config = spool ? null : loadConfig();
+let spoolCounter = 0;
+
+function writeSpool(payload) {
+  let temporary;
+  try {
+    mkdirSync(spool, { recursive: true, mode: 0o700 });
+    spoolCounter = (spoolCounter + 1) % 1000000;
+    const stamp = (BigInt(Date.now()) * 1000000n + BigInt(spoolCounter))
+      .toString().padStart(19, "0");
+    temporary = join(spool, `.${stamp}-${process.pid}.tmp`);
+    writeFileSync(temporary, JSON.stringify(payload), { mode: 0o600, flag: "wx" });
+    renameSync(temporary, join(spool, `${stamp}-${process.pid}-fleet-event.json`));
+    return true;
+  } catch {
+    if (temporary) {
+      try { unlinkSync(temporary); } catch {}
+    }
+    return false;
+  }
+}
 
 function sessionId(ctx) {
   const value = ctx?.sessionManager?.getSessionId?.();
@@ -106,6 +135,7 @@ function nextSequence(id) {
 }
 
 function send(payload, final) {
+  if (spool) return Promise.resolve(writeSpool(payload));
   if (!config) return Promise.resolve(false);
   return new Promise((resolve) => {
     let settled = false;
@@ -344,7 +374,7 @@ function outcomeFromMessages(messages) {
 }
 
 export default function tongsAgents(pi) {
-  if (!config) return;
+  if (!config && !spool) return;
   pi.on("session_start", (event, ctx) => {
     const id = sessionId(ctx);
     if (!id) return;

@@ -108,6 +108,23 @@ def test_maintain_store_never_waits_for_another_maintainer(fleet_dir, no_process
     assert no_processes == [] and stored("old") is not None
 
 
+def test_a_timeout_during_the_run_is_not_reported_as_busy(fleet_dir, no_processes,
+                                                          monkeypatch):
+    def timed_out():
+        raise TimeoutError("fleet record lock timed out")
+
+    clock = Clock()
+    monkeypatch.setattr(discovery, "_cleanup_stale_sessions", timed_out)
+    assert maintain_store(force=True, clock=clock) == MaintenanceResult(
+        False, skipped="unavailable")
+    with discovery.store_maintenance_lock():
+        pass
+    stamp = (fleet_dir / session_store.STAMP_NAME).read_text()
+    monkeypatch.setattr(discovery, "_cleanup_stale_sessions", lambda: 0)
+    assert maintain_store(clock=clock) == MaintenanceResult(False, skipped="recent")
+    assert (fleet_dir / session_store.STAMP_NAME).read_text() == stamp
+
+
 def test_maintain_store_reports_an_unusable_store(monkeypatch, no_processes):
     def refuse(create=False):
         raise paths.UnsafePathError("symlinked")
@@ -341,3 +358,28 @@ def test_hook_import_path_does_not_load_the_maintainer():
         capture_output=True, text=True, timeout=30, check=True,
     )
     assert result.stdout.strip() == "False"
+
+
+def test_status_hints_at_cleanup_when_maintenance_is_overdue(fleet_dir, no_processes,
+                                                             capsys):
+    cli.cmd_status(None)
+    assert capsys.readouterr().err.strip() == cli.CLEANUP_HINT
+    assert maintain_store(force=True).ran
+    cli.cmd_status(None)
+    assert capsys.readouterr().err == ""
+    stamp = fleet_dir / session_store.STAMP_NAME
+    stamp.write_text(f"{time.time() - session_store.OVERDUE_SECONDS - 60:.3f}")
+    cli.cmd_status(None)
+    assert "tongs-agents cleanup" in capsys.readouterr().err
+    stamp.write_text(f"{time.time() + 600:.3f}")
+    cli.cmd_status(None)
+    assert "tongs-agents cleanup" in capsys.readouterr().err
+
+
+def test_status_gives_no_hint_without_a_store(capsys):
+    assert not paths.sessions_dir().exists()
+    cli.cmd_status(None)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert "No sessions found." in captured.out
+    assert not paths.sessions_dir().exists()

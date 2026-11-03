@@ -3,11 +3,17 @@
 Only the ``[profiles]`` section of ``config_dir()/config.toml`` is read here;
 other sections belong to their own loaders and are ignored. Nothing is ever
 shell-parsed: a profile's command is an argv list passed to ``os.execvpe``.
+
+A profile may carry a ``[profiles.<name>.sandbox]`` table (docs/sandbox.md):
+its agent then runs inside an OpenShell sandbox. Unknown sandbox keys are
+errors, like unknown profile keys.
 """
 
 from __future__ import annotations
 
+import json
 import os
+import posixpath
 import re
 import stat
 import tomllib
@@ -42,11 +48,58 @@ PROFILE_KEYS = frozenset({
     "config_dir",
     "cwd",
     "mcp_control",
+    "sandbox",
 })
+SANDBOX_KEYS = frozenset({
+    "name",
+    "image",
+    "providers",
+    "policy",
+    "upload",
+    "workdir",
+    "mode",
+    "gateway",
+    "cpu",
+    "memory",
+    "policy_advisor",
+    "driver_config",
+})
+SANDBOX_MODES: tuple[str, ...] = ("exec", "attach")
+DEFAULT_SANDBOX_WORKDIR = "/sandbox/workspace"
+SANDBOX_NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+SANDBOX_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+SANDBOX_IMAGE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:@+-]{0,255}\Z")
+CPU_RE = re.compile(r"^[0-9]{1,6}(?:\.[0-9]{1,3})?m?\Z")
+MEMORY_RE = re.compile(r"^[0-9]{1,9}(?:[KMGT]i?)?\Z")
+MAX_SANDBOX_PATH = 1024
+MAX_DRIVER_CONFIG_BYTES = 16 * 1024
 
 
 class ProfileError(ValueError):
     """The config file or one of its profiles is invalid."""
+
+
+@dataclass(frozen=True)
+class SandboxSpec:
+    """An OpenShell sandbox a profile runs in (docs/work/openshell-sandbox.md, row 3).
+
+    ``name`` None means the launcher derives one from the profile name.
+    ``workdir`` is a path inside the sandbox; ``policy`` a host file.
+    ``driver_config`` is passed unchanged as ``--driver-config-json``.
+    """
+
+    name: str | None = None
+    image: str | None = None
+    providers: tuple[str, ...] = ()
+    policy: Path | None = None
+    upload: bool = True
+    workdir: str = DEFAULT_SANDBOX_WORKDIR
+    mode: str = "exec"
+    gateway: str | None = None
+    cpu: str | None = None
+    memory: str | None = None
+    policy_advisor: bool = False
+    driver_config: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +113,7 @@ class Profile:
     config_dir: Path | None = None
     cwd: Path | None = None
     mcp_control: bool = False
+    sandbox: SandboxSpec | None = None
 
 
 def profiles_path() -> Path:
@@ -146,6 +200,95 @@ def _absolute_path(value, where: str) -> Path:
     return path
 
 
+def _matching(value, pattern: re.Pattern, where: str, what: str) -> str:
+    if not isinstance(value, str) or not pattern.match(value):
+        raise ProfileError(f"{where}: must be {what}")
+    return value
+
+
+def _flag(value, where: str) -> bool:
+    if not isinstance(value, bool):
+        raise ProfileError(f"{where}: must be true or false")
+    return value
+
+
+def _sandbox_workdir(value, where: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or len(value) > MAX_SANDBOX_PATH
+        or not value.isprintable()
+        or any(part in (".", "..") for part in value.split("/"))
+    ):
+        raise ProfileError(f"{where}: must be an absolute path inside the sandbox")
+    normal = posixpath.normpath(value)
+    if normal == "/":
+        raise ProfileError(f"{where}: must not be the sandbox root")
+    return normal
+
+
+def parse_sandbox(table, where: str) -> SandboxSpec:
+    """Validate one ``sandbox`` table of a profile."""
+    if not isinstance(table, dict):
+        raise ProfileError(f"{where}: must be a table")
+    unknown = sorted(set(table) - SANDBOX_KEYS)
+    if unknown:
+        raise ProfileError(f"{where}.{unknown[0]}: unknown key")
+    values: dict = {}
+    if "name" in table:
+        values["name"] = _matching(
+            table["name"], SANDBOX_NAME_RE, f"{where}.name",
+            "lowercase letters, digits and inner dashes (at most 63)",
+        )
+    if "image" in table:
+        values["image"] = _matching(
+            table["image"], SANDBOX_IMAGE_RE, f"{where}.image", "an image or template name",
+        )
+    if "providers" in table:
+        providers = _string_list(table["providers"], f"{where}.providers")
+        for index, item in enumerate(providers):
+            _matching(item, SANDBOX_TOKEN_RE, f"{where}.providers[{index}]", "a provider name")
+        values["providers"] = providers
+    if "policy" in table:
+        values["policy"] = _absolute_path(table["policy"], f"{where}.policy")
+    if "workdir" in table:
+        values["workdir"] = _sandbox_workdir(table["workdir"], f"{where}.workdir")
+    mode = table.get("mode", "exec")
+    if mode not in SANDBOX_MODES:
+        raise ProfileError(f"{where}.mode: must be one of {', '.join(SANDBOX_MODES)}")
+    values["mode"] = mode
+    upload = _flag(table.get("upload", mode == "exec"), f"{where}.upload")
+    if mode == "attach" and upload:
+        raise ProfileError(
+            f"{where}.upload: attach mode runs the agent as the sandbox's main process, "
+            "which OpenShell cannot combine with an upload; set upload = false and use "
+            "an image that holds the workspace"
+        )
+    values["upload"] = upload
+    if "gateway" in table:
+        values["gateway"] = _matching(
+            table["gateway"], SANDBOX_TOKEN_RE, f"{where}.gateway", "a gateway name",
+        )
+    if "cpu" in table:
+        values["cpu"] = _matching(table["cpu"], CPU_RE, f"{where}.cpu", 'a CPU quantity like "2"')
+    if "memory" in table:
+        values["memory"] = _matching(
+            table["memory"], MEMORY_RE, f"{where}.memory", 'a memory quantity like "4Gi"',
+        )
+    values["policy_advisor"] = _flag(
+        table.get("policy_advisor", False), f"{where}.policy_advisor"
+    )
+    if "driver_config" in table:
+        if not isinstance(table["driver_config"], dict):
+            raise ProfileError(f"{where}.driver_config: must be a table")
+        text = json.dumps(table["driver_config"], sort_keys=True, separators=(",", ":"),
+                          default=str)
+        if len(text.encode("utf-8")) > MAX_DRIVER_CONFIG_BYTES:
+            raise ProfileError(f"{where}.driver_config: larger than 16 KiB")
+        values["driver_config"] = text
+    return SandboxSpec(**values)
+
+
 def _infer_harness(argv: tuple[str, ...]) -> str:
     name = os.path.basename(argv[0])
     return name if name in CONFIG_DIR_ENV_BY_HARNESS else "other"
@@ -186,6 +329,11 @@ def parse_profile(name: str, table) -> Profile:
     mcp_control = table.get("mcp_control", False)
     if not isinstance(mcp_control, bool):
         raise ProfileError(f"{where}.mcp_control: must be true or false")
+    sandbox = None
+    if "sandbox" in table:
+        sandbox = parse_sandbox(table["sandbox"], f"{where}.sandbox")
+        _check_sandboxed(where, sandbox, env=env, config_dir=config_dir, cwd=cwd,
+                         mcp_control=mcp_control)
     return Profile(
         name=name,
         harness=harness,
@@ -196,7 +344,27 @@ def parse_profile(name: str, table) -> Profile:
         config_dir=config_dir,
         cwd=cwd,
         mcp_control=mcp_control,
+        sandbox=sandbox,
     )
+
+
+def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,
+                     mcp_control: bool) -> None:
+    """Profile keys that cannot apply inside a sandbox are errors, not ignored."""
+    if env:
+        raise ProfileError(
+            f"{where}.env: not passed into a sandbox (values there are visible to the "
+            "agent); use OpenShell providers for credentials"
+        )
+    if config_dir is not None:
+        raise ProfileError(
+            f"{where}.config_dir: a sandboxed profile uses the harness config "
+            "tongs-agents uploads into the sandbox"
+        )
+    if mcp_control:
+        raise ProfileError(f"{where}.mcp_control: not available inside a sandbox")
+    if sandbox.upload and cwd is None:
+        raise ProfileError(f"{where}.cwd: needed to upload the workspace into the sandbox")
 
 
 def load_profiles(path: Path | None = None) -> dict[str, Profile]:

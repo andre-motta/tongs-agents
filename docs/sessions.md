@@ -38,7 +38,8 @@ besides the writers. One run:
 2. skips as `recent` when the stamp (`.fleet-maintenance.stamp`) is less than
    `MIN_INTERVAL_SECONDS` (5 seconds) old, unless forced; a stamp in the
    future or unreadable does not count;
-3. writes the stamp, records agent processes that no hook reported as
+3. writes the stamp (a run that fails after this still counts toward the
+   interval), records agent processes that no hook reported as
    `discovered`, then removes:
    - `ended` records older than 5 minutes;
    - records whose pid no longer names the recorded live process
@@ -53,6 +54,13 @@ judged it, the new version is kept and judged again on the next run. Legacy
 schema 0 files have no writer and are re-read without a record lock.
 
 Store errors never raise: an unusable store is reported as `unavailable`.
+Only failing to take the maintenance lock is `busy`; any other error during a
+run, including a record lock that times out, is `unavailable`. A failed run
+keeps its stamp, so the next unforced run waits out the interval as usual.
+
+`tongs-agents status` only reads; when the store exists and its stamp is
+missing, more than an hour old or over a minute in the future, it prints a
+one-line hint on stderr to run `tongs-agents cleanup`.
 
 ### Who calls it
 
