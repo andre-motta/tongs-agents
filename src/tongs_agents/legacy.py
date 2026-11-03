@@ -18,6 +18,8 @@ LEGACY_MCP_NAME = "fleet"
 LEGACY_MCP_MODULES = ("claude_fleet_monitor.mcp_server",)
 LEGACY_PI_CONFIG_NAME = "claude-fleet-monitor.json"
 LEGACY_PI_CONFIG_OWNER = "claude-fleet-monitor"
+LEGACY_PACKAGE = "claude_fleet_monitor"
+LEGACY_TONGS_PLUGIN = "fleet-monitor"
 
 
 def legacy_sessions_dir() -> Path:

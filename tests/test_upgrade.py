@@ -248,6 +248,12 @@ def _run(monkeypatch, *argv):
     cli.main()
 
 
+def _doctor(monkeypatch, *argv):
+    with pytest.raises(SystemExit) as raised:
+        _run(monkeypatch, "doctor", *argv)
+    return raised.value.code
+
+
 def _commands(groups):
     return [hook["command"] for group in groups for hook in group.get("hooks", [])]
 
@@ -416,7 +422,7 @@ def test_doctor_reports_leftovers(upgrade, monkeypatch, capsys):
     old_cli = upgrade.settings.parent.parent.parent / "bin" / "claude-fleet"
     old_cli.write_text("#!/bin/sh\n")
     old_cli.chmod(0o755)
-    _run(monkeypatch, "doctor")
+    assert _doctor(monkeypatch) == 2
     output = capsys.readouterr().out
     assert str(paths.sessions_dir()) in output
     assert shlex.join(["rm", "-r", "--", str(upgrade.old_sessions)]) in output
@@ -424,6 +430,7 @@ def test_doctor_reports_leftovers(upgrade, monkeypatch, capsys):
     assert "hook command(s)" in output
     assert "unused MCP entries: fleet" in output
     assert str(upgrade.old_pi_config) in output
+    assert "pip uninstall claude-fleet-monitor" in output
     assert upgrade.old_sessions.is_dir()
 
 
@@ -431,9 +438,11 @@ def test_doctor_after_install_reports_only_manual_steps(upgrade, monkeypatch, ca
     _run(monkeypatch, "install", "--agent", "all")
     capsys.readouterr()
     before = upgrade.files()
-    _run(monkeypatch, "doctor")
+    assert _doctor(monkeypatch) == 1
     output = capsys.readouterr().out
-    assert "Leftover claude-fleet-monitor configuration" not in output
+    assert "hook command(s)" not in output
+    assert "unused MCP entries" not in output
+    assert "registers the old MCP server" not in output
     assert str(upgrade.old_sessions) in output
     assert upgrade.files() == before
 
@@ -444,8 +453,10 @@ def test_doctor_reports_clean_state(upgrade, monkeypatch, capsys):
         path.unlink()
     upgrade.old_sessions.rmdir()
     capsys.readouterr()
-    _run(monkeypatch, "doctor")
-    assert "No claude-fleet-monitor leftovers found." in capsys.readouterr().out
+    _doctor(monkeypatch)
+    output = capsys.readouterr().out
+    assert "No claude-fleet-monitor leftovers found." in output
+    assert "[ERROR]" not in output
 
 
 @pytest.mark.parametrize("command", ["install", "uninstall"])

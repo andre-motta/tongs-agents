@@ -41,17 +41,17 @@ def test_install_creates_codex_hooks(settings_file, monkeypatch):
 def test_install_registers_claude_mcp_through_claude_cli(settings_file, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
     registered = []
-    monkeypatch.setattr(cli, "_install_claude_mcp", registered.append)
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: registered.append(args))
     cli.cmd_install(None)
     settings = json.loads(settings_file.read_text())
     assert "mcpServers" not in settings
-    assert registered == ["/usr/bin/claude"]
+    assert registered == [("/usr/bin/claude", None)]
 
 
 def test_install_without_claude_cli_skips_mcp(settings_file, monkeypatch, capsys):
     monkeypatch.setattr("shutil.which", lambda x: None if x == "claude" else f"/usr/bin/{x}")
     registered = []
-    monkeypatch.setattr(cli, "_install_claude_mcp", registered.append)
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: registered.append(args))
     cli.cmd_install(None)
     assert registered == []
     assert "Claude Code CLI not found" in capsys.readouterr().out
@@ -134,7 +134,7 @@ def test_uninstall_claude_mcp_removes_only_owned(tmp_path, monkeypatch):
 
 
 def _codex_lookup(servers):
-    return lambda command, name: servers.get(name)
+    return lambda command, name, directory=None: servers.get(name)
 
 
 def test_install_codex_mcp_uses_codex_cli(monkeypatch):

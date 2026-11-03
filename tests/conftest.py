@@ -9,6 +9,7 @@ from tongs_agents.terminal_apis import _ancestry
 def _private_state_dir(tmp_path, monkeypatch):
     """Never let a test read or write the real tongs-agents state directory."""
     monkeypatch.setenv(paths.STATE_DIR_ENV, str(tmp_path / "state"))
+    monkeypatch.setenv(paths.CONFIG_DIR_ENV, str(tmp_path / "config"))
 
 
 @pytest.fixture(autouse=True)
@@ -38,10 +39,10 @@ def settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")
     monkeypatch.setattr(cli, "CODEX_HOOKS_FILE", tmp_path / "codex" / "hooks.json")
     monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", tmp_path / ".claude.json")
-    monkeypatch.setattr(cli, "_install_claude_mcp", lambda command: None)
-    monkeypatch.setattr(cli, "_uninstall_claude_mcp", lambda command: None)
-    monkeypatch.setattr(cli, "_install_codex_mcp", lambda command: None)
-    monkeypatch.setattr(cli, "_uninstall_codex_mcp", lambda command: None)
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_uninstall_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_install_codex_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_uninstall_codex_mcp", lambda *args: None)
     return f
 
 
