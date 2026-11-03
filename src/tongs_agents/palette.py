@@ -7,6 +7,8 @@ offers through ``AppShell.palette_commands()``:
   profile, a folder and optional extra arguments, spawned through
   ``workspace_spawn`` into the session the app runs in (only offered inside
   one);
+- ``Command line`` (the sidebar only) opens its ``:`` prompt for workspace
+  verbs (``widgets.command_line``);
 - ``New agent: <profile>`` spawns the profile with its own defaults the same
   way;
 - ``Open tongs tab`` starts ``tongs`` in a new pane of that session with
@@ -50,6 +52,7 @@ from tongs_agents.widgets.add_agent import AddAgentRequest, AddAgentScreen
 from tongs_agents.widgets.shell import apply_theme
 
 ADD_AGENT = "Add agent…"
+COMMAND_LINE = "Command line"
 NEW_AGENT_PREFIX = "New agent: "
 OPEN_TONGS = "Open tongs tab"
 NEXT_ATTENTION = "Next needing attention"

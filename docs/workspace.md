@@ -69,6 +69,11 @@ sandbox folder or unbalanced quotes keep the dialog open with the reason.
 Escape cancels. The palette's `New agent: <profile>` entries still start a
 profile with its own defaults in one step.
 
+`:` in the sidebar opens a command line that takes the same
+`run PROFILE [DIR] [-- ARGS ...]` as the CLI, for the sidebar's session, with
+history and Tab completion of profiles and folders; see
+[sidebar command line](app.md#sidebar-command-line).
+
 ## The workspace verb
 
 `tongs-agents workspace` opens a Zellij session with the tongs-agents sidebar
