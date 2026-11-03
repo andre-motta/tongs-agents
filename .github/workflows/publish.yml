@@ -28,6 +28,11 @@ jobs:
       contents: read
     uses: ./.github/workflows/pi.yml
 
+  zellij:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/zellij.yml
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -136,7 +141,7 @@ jobs:
           PY
 
   publish:
-    needs: [tests, shells, pi, build, verify]
+    needs: [tests, shells, pi, zellij, build, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:

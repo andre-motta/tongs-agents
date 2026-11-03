@@ -331,7 +331,13 @@ class ZellijMultiplexer:
         return [pane for pane in panes if pane is not None]
 
     def _clients(self, session: str, socket_dir: str | None) -> dict[str, str]:
-        result = self._action(session, socket_dir, "list-clients")
+        # zellij 0.44.2 now and then prints nothing for list-clients with
+        # clients attached; a blank answer is asked again before it fails.
+        for attempt in range(READBACK_ATTEMPTS):
+            result = self._action(session, socket_dir, "list-clients")
+            if (result.stdout or "").strip() or attempt + 1 == READBACK_ATTEMPTS:
+                break
+            time.sleep(READBACK_INTERVAL)
         try:
             return _client_panes(result.stdout or "")
         except RuntimeError as error:

@@ -113,8 +113,11 @@ alongside the other validation evidence.
 ## Shared safety rules for terminal validators
 
 The terminal probe and the zellij, Kitty and GNU screen validators below are
-local-only Linux helpers. Ordinary pytest and hosted CI never run them, and CI
-does not install these terminals. Each helper starts only disposable
+local-only Linux helpers, except that the hosted
+[Zellij validation workflow](../.github/workflows/zellij.yml) runs the zellij
+validator and the [workspace validator](#agent-workspace-on-linux) against each
+pinned Zellij release (checksum verified before extraction). Ordinary pytest
+never runs them, and CI installs no other terminal. Each helper starts only disposable
 instances: private PTYs, temporary socket, config, cache and data directories,
 and unique session names. It records the PID and kernel start time of every
 process it starts, signals only those, and reports survivors and stray marker
@@ -181,6 +184,66 @@ an honest selection failure. No version produced a false success. For 0.41.2
 to 0.43.1 a scratch wrapper substituted the fixture listing that needs
 `list-panes` (0.44.0+) so the adapter steps could run; that wrapper is not
 committed.
+
+## Agent workspace on Linux
+
+```console
+python validation/workspace.py --no-write
+```
+
+This checks the M1 exit gate against one Zellij binary on `PATH`. To check a
+pinned release, extract the tarball named in
+`src/tongs_agents/data/zellij_pins.json` into a new empty directory, verify its
+SHA-256, and run `PATH=<dir>:$PATH python validation/workspace.py --no-write`.
+
+Isolation follows the zellij validator. A fresh root under `/tmp` holds `HOME`,
+the XDG config, state, cache, data and runtime dirs, `TMPDIR`,
+`ZELLIJ_SOCKET_DIR`, `ZELLIJ_CONFIG_DIR` and the profile config dirs. Every
+process gets an allowlisted environment (locale, user name, `PYTHONPATH`)
+plus those dirs. Its `PATH` starts with a private `bin` that holds `zellij`, the
+`tongs-agents` entry points and a stub (`fixtures/fake_cli.py`) named
+`claude`, `codex` and `pi`, so no real agent CLI can be reached. The run refuses
+to start when any of these points at a default Zellij socket dir, the user's
+home, `.config`, `.local`, `.cache`, `.claude`, `.codex` or `.pi`, or when an
+agent config variable, a `TONGS_AGENTS_*` dir or an outer Zellij or tmux
+session would be inherited. Clients run in private PTYs, only processes the run
+started (PID plus kernel start time) are signalled, and the user's terminal
+and agent config files are compared before and after.
+
+The agents are fake harness fixtures (`fixtures/fake_agent.py`). They report
+the launcher env they inherited, send status through `tongs-agents-hook` and
+idle, recording lines typed into their pane. Profiles `f1` and `f2` send pi
+`fleet-event` payloads with their own pid. `f3` runs the Claude hooks installed
+in its own `CLAUDE_CONFIG_DIR`, and `f4` has a config dir without hooks as a
+control. The run checks, on the real Zellij server:
+
+- `tongs-agents install --claude-config-dir` writes hooks only into that dir,
+  and the stub records MCP registration for it;
+- `tongs-agents workspace --profile f1 --profile f2 --no-tongs` lists the
+  session within 5 s, with the sidebar plus one pane per profile;
+- the sidebar consumed its spawn request (a second consume returns nothing, the
+  layout is gone) and the launch records were claimed by the panes' processes;
+- hook rows in the sidebar data (`WorkspaceFeed`) appear within 4 s of the
+  panes, with `launch_id` and `profile_id` equal to the launch records;
+- an in-session rerun (`workspace --profile f3 --profile f4` in a new pane)
+  exits 0 and adds panes to the same session, with one sidebar and one server;
+- `f3` reports hook status while the uninstalled `f4` stays a `discovered`
+  launch row;
+- with a second client attached and most recently typing, Enter on a row of
+  the real `SidebarApp` selects that pane for the second client. This covers a
+  pi hook row, the Claude hook row and a launch row, each confirmed by
+  `list-clients` and by keystrokes reaching the fixture. Activation is
+  reported as skipped, and the recorded parent-terminal lookups stay empty.
+
+The sidebar for the row checks runs headless in the validator process with the
+sidebar pane's Zellij identity, so that step is instrumented rather than a
+keystroke into the sidebar pane. With Zellij's default `stacked_resize`, the
+first client follows when its pane shares the target's stack. This is recorded
+(`first_client_unchanged`), not asserted. Without `--no-write` the run replaces its
+Zellij version's entry in [the evidence](evidence/workspace-linux-x86_64.json),
+which keeps one run per pin with source hashes. The maintainer's live run with
+real profiles is separate; see the
+[runbook](../docs/work/workspace-live-run.md).
 
 ## Kitty remote-control selection and KWin activation on Linux
 
