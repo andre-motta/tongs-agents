@@ -129,7 +129,7 @@ class AgentsPanel(Widget):
         yield Static(id=ids["summary"], classes="agents-summary")
         yield SessionTable(id=ids["table"], compact=self.compact)
         yield DetailPanel(id=ids["detail"])
-        yield Input(placeholder="Filter by repo or detail...", id=ids["search"])
+        yield Input(placeholder="Filter agents...", id=ids["search"])
 
     @property
     def table(self) -> SessionTable:
@@ -160,7 +160,15 @@ class AgentsPanel(Widget):
         sessions = self.feed.snapshot()
         self.app.call_from_thread(self.update_sessions, sessions)
 
+    @property
+    def _live(self) -> bool:
+        # is_mounted stays True after removal; is_attached tracks the DOM link.
+        return self.is_mounted and self.is_attached
+
     def update_sessions(self, sessions: list[FleetSession]) -> None:
+        # A poll can land after the panel was removed and its children are gone.
+        if not self._live:
+            return
         self._all_sessions = list(sessions)
         self._notify_new(self._all_sessions)
         self._render_view()
@@ -174,12 +182,14 @@ class AgentsPanel(Widget):
         )
 
     def _render_view(self) -> None:
+        if not self._live:
+            return
         shown = self.shown_sessions()
         self._update_summary(shown)
         self.table.set_sessions(shown)
 
     def on_resize(self) -> None:
-        if self.is_mounted and self._all_sessions:
+        if self._live and self._all_sessions:
             self._update_summary(self.shown_sessions())
 
     def _is_narrow(self) -> bool:

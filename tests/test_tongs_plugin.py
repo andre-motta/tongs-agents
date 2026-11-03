@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import logging
 import sys
 from importlib.metadata import entry_points
 
@@ -89,6 +90,29 @@ def test_not_ready_without_app_does_not_raise(monkeypatch):
     tongs_plugin._notify_not_ready()
     monkeypatch.setattr(tongs_plugin, "active_app", None)
     tongs_plugin._notify_not_ready()
+
+
+class _BrokenVar:
+    def get(self, default=None):
+        raise TypeError("changed private API")
+
+
+class _BrokenApp:
+    def notify(self, message, severity="information"):
+        raise RuntimeError("app is shutting down")
+
+
+class _AppVar:
+    def get(self, default=None):
+        return _BrokenApp()
+
+
+@pytest.mark.parametrize("var", [_BrokenVar(), _AppVar()])
+def test_not_ready_never_raises_and_logs(monkeypatch, caplog, var):
+    monkeypatch.setattr(tongs_plugin, "active_app", var)
+    with caplog.at_level(logging.WARNING, logger=tongs_plugin.__name__):
+        tongs_plugin._notify_not_ready()
+    assert "Could not show the not-ready notice" in caplog.text
 
 
 class TestPluginWithoutTongs:
