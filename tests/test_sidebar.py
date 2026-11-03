@@ -7,6 +7,7 @@ from textual.geometry import Region
 
 from tests.test_workspace_spawn import FakeMux, profile, runtime_dir  # noqa: F401
 from tongs_agents import workspace_spawn
+from tongs_agents.app_config import AppConfig, UISettings
 from tongs_agents.commands import sidebar
 from tongs_agents.launches import LaunchRecord
 from tongs_agents.models import FocusResult, SessionStatus
@@ -14,6 +15,7 @@ from tongs_agents.multiplexers import MultiplexerError, PaneInfo, PaneRef
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets import agents_panel
 from tongs_agents.widgets.session_table import status_label
+from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 SESSION = "agents"
 NOW = 1_000_000
@@ -307,3 +309,79 @@ def test_the_sidebar_feed_uses_the_pane_socket_dir():
     app = sidebar.SidebarApp(FakeMux(), SESSION, socket_dir="/run/zj")
     assert app.feed.session == SESSION
     assert app.feed.socket_dir == "/run/zj"
+
+
+def _write_config(tmp_path, text):
+    directory = tmp_path / "config"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    path = directory / "config.toml"
+    path.write_text(text)
+    path.chmod(0o600)
+    return path
+
+
+class _Runs:
+    def __init__(self):
+        self.apps = []
+
+
+@pytest.fixture
+def sidebar_runs(monkeypatch):
+    runs = _Runs()
+    monkeypatch.setattr(sidebar.SidebarApp, "run", lambda app, *a, **kw: runs.apps.append(app))
+    mux = FakeMux(here=PaneRef("zellij", SESSION, "1", "/run/zj"))
+    monkeypatch.setattr(sidebar, "get_multiplexer", lambda name="zellij": mux)
+    return runs
+
+
+def test_sidebar_reads_the_ui_and_workspace_sections(tmp_path, sidebar_runs):
+    _write_config(tmp_path, """
+[workspace]
+session = "elsewhere"
+default_profiles = ["beta"]
+tongs_tab = false
+
+[ui]
+refresh_interval = 7
+notify_level = "waiting"
+theme = "nord"
+""")
+    assert sidebar.main(["--compact"]) == 0
+    app, = sidebar_runs.apps
+    assert app.session == SESSION
+    assert (app.refresh_interval, app.notify_level, app.compact) == (7.0, "waiting", True)
+    assert app.app_config.ui.theme == "nord"
+    assert app.app_config.workspace.default_profiles == ("beta",)
+    assert app.config_error is None
+
+
+def test_sidebar_ui_compact_applies_without_the_flag(tmp_path, sidebar_runs):
+    _write_config(tmp_path, "[ui]\ncompact = true\n")
+    assert sidebar.main([]) == 0
+    assert sidebar_runs.apps[0].compact is True
+
+
+def test_an_invalid_config_still_runs_the_sidebar_with_defaults(tmp_path, sidebar_runs):
+    path = _write_config(tmp_path, '[ui]\ntheme = 7\n')
+    token = "0123456789abcdef0123456789abcdef"
+    assert sidebar.main(["--compact", "--spawn-request", token]) == 0
+    app, = sidebar_runs.apps
+    assert app.token == token
+    assert app.refresh_interval == 2.0
+    assert app.config_error.startswith(f"{path}: ui.theme")
+
+
+@pytest.mark.asyncio
+async def test_sidebar_applies_the_theme_and_shows_the_shared_shell():
+    mux = FakeMux()
+    app = sidebar.SidebarApp(
+        mux, SESSION, feed=WorkspaceFeed(SESSION, mux, lambda: []), refresh_interval=60,
+        config=AppConfig(ui=UISettings(theme="gruvbox")), config_error="broken file",
+    )
+    async with app.run_test(size=(40, 20)) as pilot:
+        await _settle(app, pilot)
+        assert app.theme == "gruvbox"
+        assert len(app.query(AppHeader)) == 1 and len(app.query(AppFooter)) == 1
+        assert app.sub_title == SESSION
+        messages = [str(n.message) for n in app._notifications]
+        assert "broken file; using defaults" in messages

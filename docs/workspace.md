@@ -15,15 +15,19 @@ tongs-agents workspace --print-alias --profile claude-alt
 
 | Option | Meaning |
 | --- | --- |
-| `--profile NAME` | Start an agent pane for this profile. Repeatable. Unknown names are refused before anything starts. Without it only the sidebar opens. |
-| `--session NAME` | The Zellij session, `agents` by default. Names use letters, digits, `.`, `_` and `-` (at most 64 characters). |
-| `--no-tongs` | Do not add the `tongs` tab. Without it the tab opens when `tongs` is on `PATH`. |
+| `--profile NAME` | Start an agent pane for this profile. Repeatable. Unknown names are refused before anything starts. Without it a new session starts `[workspace].default_profiles` (none by default) and an existing one gets only the sidebar. |
+| `--session NAME` | The Zellij session: `[workspace].session` from the config file, else `agents`. Names use letters, digits, `.`, `_` and `-` (at most 64 characters). |
+| `--tongs` / `--no-tongs` | Add, or do not add, the `tongs` tab to a new session. Without either, `[workspace].tongs_tab` decides (on by default) and the tab opens only when `tongs` is on `PATH`. |
 | `--resurrect` | When the session is EXITED, attach to it instead of deleting it and starting it fresh. Starts no new panes; without an EXITED session it changes nothing. |
 | `--print-command` | Print the `zellij` command instead of running it. See [Printing the command](#printing-the-command). |
 | `--print-alias` | Print a shell alias for the same workspace command. Nothing else runs and no file is edited; add the line to your shell rc yourself. |
 
 When `zellij` is missing or older than 0.44.2 the command stops and points at
 `tongs-agents doctor`.
+
+The flags override the `[workspace]` section of the config file; an invalid
+section, or a default profile that does not exist, stops the command with the
+offending key before anything starts. See [app settings](app.md).
 
 ## What it does
 
@@ -101,7 +105,10 @@ created 0600 without following or replacing anything:
 `tongs-agents sidebar [--spawn-request TOKEN] [--compact]` (started by the
 layout as `python -m tongs_agents.commands.sidebar`) runs the compact agents
 panel inside a Zellij pane named `tongs-agents-sidebar`. It refuses to start
-outside Zellij.
+outside Zellij. It shares the monitor's header, footer, theme and command
+palette (`Ctrl+P`, with `New agent: <profile>` and `Open tongs tab` for its
+own session) and reads its refresh interval, notify level and theme from
+`[ui]`; see [app settings](app.md).
 
 The sidebar is per-session; `tongs-agents monitor` remains the fleet-wide
 view. It lists the hook sessions whose captured `ZELLIJ_SESSION_NAME` is its
