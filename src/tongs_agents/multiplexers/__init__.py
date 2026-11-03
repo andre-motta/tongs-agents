@@ -1,6 +1,8 @@
 """Terminal multiplexer pane lifecycle (beside terminal_apis)."""
 
 from tongs_agents.multiplexers.base import (
+    SESSION_EXITED,
+    SESSION_RUNNING,
     Multiplexer,
     MultiplexerError,
     PaneInfo,
@@ -10,6 +12,8 @@ from tongs_agents.multiplexers.base import (
 from tongs_agents.multiplexers.zellij import ZellijMultiplexer
 
 __all__ = [
+    "SESSION_EXITED",
+    "SESSION_RUNNING",
     "Multiplexer",
     "MultiplexerError",
     "PaneInfo",

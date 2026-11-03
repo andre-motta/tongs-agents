@@ -12,7 +12,8 @@ import pytest
 from tests.test_workspace_spawn import FakeMux, runtime_dir, write_profiles  # noqa: F401
 from tongs_agents import cli, launches, workspace_spawn
 from tongs_agents.commands import workspace
-from tongs_agents.multiplexers import PaneInfo, PaneRef
+from tongs_agents.launches import LaunchError
+from tongs_agents.multiplexers import SESSION_EXITED, PaneInfo, PaneRef
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME
 
 ZELLIJ = "/opt/zellij/bin/zellij"
@@ -105,29 +106,206 @@ def test_existing_session_spawns_then_attaches(env, runtime_dir):  # noqa: F811
     assert argv == [ZELLIJ, "attach", "work"]
     assert [call["name"] for call in mux.spawned] == ["alpha", SIDEBAR_PANE_NAME]
     assert all(call["session"] == "work" for call in mux.spawned)
-    assert ("session_exists", "work") in mux.calls
+    assert ("session_state", "work") in mux.calls
+    assert ("delete_session", "work") not in mux.calls
     assert not os.path.lexists(runtime_dir / "layouts")
 
 
-def test_print_command_prints_instead_of_exec(env, capsys):
+def _launch_files(tmp_path):
+    return sorted(path.name for path in tmp_path.rglob("launches/*"))
+
+
+def _runtime_files(directory):
+    if not directory.exists():
+        return []
+    return sorted(path.name for path in directory.rglob("*") if path.is_file())
+
+
+def test_print_command_for_a_running_session_spawns_nothing(
+    env, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
     mux, execs, _ = env
     mux.exists = True
     capsys.readouterr()
-    assert _run("--print-command") == 0
+    assert _run("--print-command", "--profile", "alpha") == 0
     assert execs.calls == []
-    assert capsys.readouterr().out.strip() == shlex.join([ZELLIJ, "attach", "agents"])
+    captured = capsys.readouterr()
+    assert captured.out.strip() == shlex.join([ZELLIJ, "attach", "agents"])
+    assert "does not start alpha" in captured.err
+    assert mux.spawned == []
+    assert ("list_panes", "agents") not in mux.calls
+    assert launches.list_records() == []
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
 
 
-def test_print_command_for_a_new_session(env, capsys, runtime_dir):  # noqa: F811
+def test_print_command_for_a_new_session(env, capsys, tmp_path, runtime_dir):  # noqa: F811
     _, execs, _ = env
     capsys.readouterr()
     assert _run("--print-command", "--profile", "alpha", "--no-tongs") == 0
     assert execs.calls == []
     layout, = (runtime_dir / "layouts").iterdir()
-    assert shlex.split(capsys.readouterr().out) == [
+    captured = capsys.readouterr()
+    assert shlex.split(captured.out) == [
         ZELLIJ, "--session", "agents", "--new-session-with-layout", str(layout)
     ]
+    assert "prepared a one-shot spawn request" in captured.err
     assert 'tab name="tongs"' not in layout.read_text()
+    assert [record.state for record in launches.list_records("agents")] == ["pending"]
+    assert len(_launch_files(tmp_path)) == 1
+
+
+def test_exited_session_is_deleted_then_created(env, capsys, runtime_dir):  # noqa: F811
+    mux, execs, _ = env
+    mux.state = SESSION_EXITED
+    capsys.readouterr()
+    assert _run("--profile", "alpha") == "exec"
+    (_, argv, _), = execs.calls
+    assert argv[:4] == [ZELLIJ, "--session", "agents", "--new-session-with-layout"]
+    state = mux.calls.index(("session_state", "agents"))
+    assert mux.calls[state + 1] == ("delete_session", "agents")
+    assert [call for call in mux.calls if call[0] == "delete_session"] == [
+        ("delete_session", "agents")
+    ]
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1
+    assert "is EXITED; deleting it" in err and "--resurrect" in err
+    assert mux.spawned == []
+    assert [record.profile for record in launches.list_records("agents")] == ["alpha"]
+
+
+def test_exited_session_delete_failure_writes_nothing(
+    env, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
+    mux, execs, _ = env
+    mux.state = SESSION_EXITED
+    mux.fail_delete = True
+    assert _run("--profile", "alpha") == 1
+    assert execs.calls == []
+    assert "cannot delete agents" in capsys.readouterr().err
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
+
+
+def test_resurrect_attaches_to_an_exited_session(
+    env, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
+    mux, execs, _ = env
+    mux.state = SESSION_EXITED
+    capsys.readouterr()
+    assert _run("--resurrect", "--profile", "alpha") == "exec"
+    (_, argv, _), = execs.calls
+    assert argv == [ZELLIJ, "attach", "agents"]
+    assert ("delete_session", "agents") not in mux.calls
+    assert mux.spawned == []
+    assert "not starting alpha" in capsys.readouterr().err
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
+
+
+def test_resurrect_print_command_has_no_side_effects(
+    env, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
+    mux, execs, _ = env
+    mux.state = SESSION_EXITED
+    capsys.readouterr()
+    assert _run("--resurrect", "--print-command") == 0
+    assert capsys.readouterr().out.strip() == shlex.join([ZELLIJ, "attach", "agents"])
+    assert execs.calls == [] and mux.spawned == []
+    assert ("delete_session", "agents") not in mux.calls
+    assert _runtime_files(runtime_dir) == []
+
+
+def test_print_command_refuses_to_delete_an_exited_session(
+    env, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
+    mux, execs, _ = env
+    mux.state = SESSION_EXITED
+    assert _run("--print-command", "--profile", "alpha") == 1
+    err = capsys.readouterr().err
+    assert "zellij delete-session agents" in err and "--resurrect" in err
+    assert ("delete_session", "agents") not in mux.calls
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
+
+
+@pytest.mark.parametrize("exists", [True, False])
+def test_resurrect_without_an_exited_session_changes_nothing(env, exists):
+    mux, execs, _ = env
+    mux.exists = exists
+    assert _run("--resurrect", "--profile", "alpha") == "exec"
+    (_, argv, _), = execs.calls
+    if exists:
+        assert argv == [ZELLIJ, "attach", "agents"]
+        assert [call["name"] for call in mux.spawned] == ["alpha", SIDEBAR_PANE_NAME]
+    else:
+        assert argv[1:4] == ["--session", "agents", "--new-session-with-layout"]
+    assert ("delete_session", "agents") not in mux.calls
+
+
+def test_inside_zellij_refuses_resurrect(env, monkeypatch):
+    mux, _, _ = env
+    _inside(monkeypatch, mux)
+    assert _run("--resurrect") == 2
+    assert mux.spawned == []
+
+
+def _fail(*args, **kwargs):
+    raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize("step", ["write_spawn_request", "render_layout", "write_layout"])
+def test_failures_before_exec_discard_the_launch_records(env, monkeypatch, capsys, tmp_path,
+                                                         runtime_dir, step):  # noqa: F811
+    _, execs, _ = env
+    if step == "render_layout":
+        monkeypatch.setattr(workspace, "render_layout", _fail)
+    else:
+        monkeypatch.setattr(workspace_spawn, step, _fail)
+    assert _run("--profile", "alpha", "--profile", "beta") == 1
+    assert execs.calls == []
+    assert "No space left" in capsys.readouterr().err
+    assert launches.list_records() == []
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
+
+
+def test_a_partial_create_discards_the_records_already_written(env, monkeypatch, tmp_path):
+    real = launches.create_pending
+    calls = []
+
+    def second_fails(profile, session, multiplexer):
+        calls.append(profile.name)
+        if len(calls) == 2:
+            raise LaunchError("disk full")
+        return real(profile, session, multiplexer)
+
+    monkeypatch.setattr(launches, "create_pending", second_fails)
+    assert _run("--profile", "alpha", "--profile", "beta") == 1
+    assert calls == ["alpha", "beta"]
+    assert _launch_files(tmp_path) == []
+
+
+def test_exec_failure_discards_a_new_session(
+    env, monkeypatch, capsys, tmp_path, runtime_dir,
+):  # noqa: F811
+    def missing(file, argv, env):
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(workspace.os, "execvpe", missing)
+    assert _run("--profile", "alpha") == 1
+    assert "cannot run" in capsys.readouterr().err
+    assert _launch_files(tmp_path) == []
+    assert _runtime_files(runtime_dir) == []
+
+
+def test_a_failed_spawn_into_a_running_session_discards_its_record(env):
+    mux, execs, _ = env
+    mux.exists = True
+    mux.fail_spawn = {"beta"}
+    assert _run("--profile", "alpha", "--profile", "beta") == 1
+    assert execs.calls == []
+    assert [record.profile for record in launches.list_records()] == ["alpha"]
 
 
 def test_print_alias_only_prints(env, capsys, runtime_dir, tmp_path):  # noqa: F811

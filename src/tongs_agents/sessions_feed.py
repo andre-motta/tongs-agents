@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from collections.abc import Callable, Iterable
@@ -107,12 +108,20 @@ def _alive(record: LaunchRecord) -> bool:
     return record.process_start is None or info.start_token == record.process_start
 
 
-class WorkspaceFeed(SessionFeed):
-    """Hook sessions plus one row per launched pane in ``session`` without one.
+def _same_dir(left: str, right: str | None) -> bool:
+    return right is not None and os.path.normpath(left) == os.path.normpath(right)
 
-    A launch record joins its hook session through the launch id. Records
-    with no hook session show their pane state from the multiplexer:
-    running, starting (launcher not claimed yet) or exited with its status.
+
+class WorkspaceFeed(SessionFeed):
+    """The sessions of one Zellij session: its hook sessions and launched panes.
+
+    The sidebar is per-session; ``tongs-agents monitor`` stays fleet-wide.
+    A hook session is kept only when its captured ``ZELLIJ_SESSION_NAME`` is
+    ``session`` and, when it captured a socket dir, that dir is
+    ``socket_dir``. A launch record joins its hook session through the
+    launch id. Records with no hook session show their pane state from the
+    multiplexer: running, starting (launcher not claimed yet) or exited with
+    its status.
     A claimed record whose process is gone while its pane id runs something
     else belongs to an earlier session of the same name and is skipped, as
     are records replaced by a later claim.
@@ -127,10 +136,12 @@ class WorkspaceFeed(SessionFeed):
         launch_reader: LaunchReader | None = None,
         alive: Callable[[LaunchRecord], bool] = _alive,
         clock: Callable[[], float] = time.time,
+        socket_dir: str | None = None,
     ) -> None:
         super().__init__(reader)
         self.session = session
         self.multiplexer = multiplexer
+        self.socket_dir = socket_dir
         self._launch_reader = launch_reader
         self._alive = alive
         self._clock = clock
@@ -143,8 +154,20 @@ class WorkspaceFeed(SessionFeed):
             self._spawned[launch_id] = ref
 
     def snapshot(self) -> list[FleetSession]:
-        sessions = super().snapshot()
+        sessions = [
+            session for session in super().snapshot() if self.in_session(session)
+        ]
         return sessions + self.launch_rows(sessions)
+
+    def in_session(self, session: FleetSession) -> bool:
+        """True when a hook session's captured Zellij identity is this session."""
+        env = session.terminal_env if isinstance(session.terminal_env, dict) else {}
+        if env.get("ZELLIJ_SESSION_NAME") != self.session:
+            return False
+        captured = env.get("ZELLIJ_SOCKET_DIR")
+        if not captured or not self.socket_dir:
+            return True
+        return _same_dir(captured, self.socket_dir)
 
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":

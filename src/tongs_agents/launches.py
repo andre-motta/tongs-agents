@@ -173,6 +173,20 @@ def create_pending(profile: Profile, session: str, multiplexer: str) -> LaunchRe
     return _write(record)
 
 
+def discard(launch_id: str) -> None:
+    """Remove a pending record whose pane was never started; claimed ones stay."""
+    path = _record_path(launch_id)
+    record = _read(path)
+    if record is not None and record.state != "pending":
+        return
+    for entry in (path, path.with_name(f".{launch_id}.claim")):
+        try:
+            if stat.S_ISREG(entry.lstat().st_mode):
+                entry.unlink()
+        except OSError:
+            pass
+
+
 def get(launch_id: str) -> LaunchRecord | None:
     """The stored record for ``launch_id``, or None when absent or invalid."""
     if not is_launch_id(launch_id):

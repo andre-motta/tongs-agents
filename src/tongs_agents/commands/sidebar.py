@@ -91,13 +91,16 @@ class SidebarApp(FocusOnSelect, App):
         compact: bool = True,
         feed: WorkspaceFeed | None = None,
         refresh_interval: float = 2,
+        socket_dir: str | None = None,
     ) -> None:
         super().__init__()
         self.multiplexer = multiplexer
         self.session = session
         self.token = token
         self.compact = compact
-        self.feed = feed if feed is not None else WorkspaceFeed(session, multiplexer)
+        self.feed = feed if feed is not None else WorkspaceFeed(
+            session, multiplexer, socket_dir=socket_dir
+        )
         self.refresh_interval = refresh_interval
         self.spawn_failures: list[str] = []
 
@@ -157,7 +160,9 @@ def run(args) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
-    SidebarApp(mux, here.session, token=token, compact=args.compact).run()
+    SidebarApp(
+        mux, here.session, token=token, compact=args.compact, socket_dir=here.socket_dir
+    ).run()
     return 0
 
 

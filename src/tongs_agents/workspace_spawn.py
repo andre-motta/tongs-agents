@@ -75,8 +75,18 @@ def sidebar_argv(token: str | None = None) -> list[str]:
 def create_launches(
     multiplexer: str, session: str, profiles: Iterable[Profile]
 ) -> list[LaunchRecord]:
-    """Pending launch records, one per profile, for panes not spawned yet."""
-    return [launches.create_pending(profile, session, multiplexer) for profile in profiles]
+    """Pending launch records, one per profile, for panes not spawned yet.
+
+    When one cannot be written, those already written are discarded.
+    """
+    records = []
+    try:
+        for profile in profiles:
+            records.append(launches.create_pending(profile, session, multiplexer))
+    except BaseException:
+        discard_launches(records)
+        raise
+    return records
 
 
 def spawn_launch(mux: Multiplexer, record: LaunchRecord) -> PaneRef:
@@ -95,14 +105,27 @@ def spawn_profiles(
     """Create a pending record and spawn one launcher pane per profile, in order.
 
     Raises the first MultiplexerError or LaunchError; panes spawned before it
-    stay up.
+    stay up, and the record of the pane that failed to start is discarded.
     """
     records = []
     for profile in profiles:
         record = launches.create_pending(profile, session, mux.name)
-        spawn_launch(mux, record)
+        try:
+            spawn_launch(mux, record)
+        except BaseException:
+            discard_launches([record])
+            raise
         records.append(record)
     return records
+
+
+def discard_launches(records: Iterable[LaunchRecord]) -> None:
+    """Remove pending records no pane will claim; never raises for a missing one."""
+    for record in records:
+        try:
+            launches.discard(record.launch_id)
+        except LaunchError:
+            pass
 
 
 def has_sidebar(mux: Multiplexer, session: str) -> bool:

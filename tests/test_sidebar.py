@@ -44,20 +44,61 @@ def pane(pane_id, *, exited=False, exit_status=None, title="agent", socket_dir=N
     )
 
 
-def hook_record(launch_id, repo="hooked-repo"):
-    return {
+def hook_record(launch_id=None, repo="hooked-repo", *, session=SESSION, socket_dir=None):
+    terminal_env = {"ZELLIJ": "0", "ZELLIJ_SESSION_NAME": session, "ZELLIJ_PANE_ID": "1"}
+    if session is None:
+        terminal_env = {}
+    if socket_dir is not None:
+        terminal_env["ZELLIJ_SOCKET_DIR"] = socket_dir
+    record = {
         "session_id": f"sid-{repo}", "agent": "claude", "repo": repo, "cwd": f"/w/{repo}",
         "status": "running", "detail": "processing prompt", "ts": NOW, "age_seconds": 3,
-        "launch": {"launch_id": launch_id, "profile_id": "hooked"},
+        "terminal": "zellij", "terminal_env": terminal_env,
     }
+    if launch_id is not None:
+        record["launch"] = {"launch_id": launch_id, "profile_id": "hooked"}
+    return record
 
 
-def feed(records, panes, hooks=(), alive=lambda record: True):
+def feed(records, panes, hooks=(), alive=lambda record: True, socket_dir=None):
     mux = FakeMux(panes=panes)
     return WorkspaceFeed(
         SESSION, mux, lambda: [dict(hook) for hook in hooks],
         launch_reader=lambda session: list(records), alive=alive, clock=lambda: NOW,
+        socket_dir=socket_dir,
     ), mux
+
+
+def test_hook_rows_are_limited_to_this_session():
+    hooks = [
+        hook_record(repo="here"),
+        hook_record(repo="here-same-socket", socket_dir="/run/zj/"),
+        hook_record(repo="other-session", session="scratch"),
+        hook_record(repo="other-socket", socket_dir="/run/elsewhere"),
+        hook_record(repo="plain-terminal", session=None),
+    ]
+    workspace_feed, _ = feed([], [], hooks=hooks, socket_dir="/run/zj")
+    assert [row.repo for row in workspace_feed.snapshot()] == ["here", "here-same-socket"]
+
+
+def test_socket_dirs_are_compared_only_when_both_are_known():
+    hooks = [hook_record(repo="default"), hook_record(repo="custom", socket_dir="/run/zj")]
+    unknown, _ = feed([], [], hooks=hooks)
+    assert [row.repo for row in unknown.snapshot()] == ["default", "custom"]
+    other, _ = feed([], [], hooks=hooks, socket_dir="/run/other")
+    assert [row.repo for row in other.snapshot()] == ["default"]
+    same, _ = feed([], [], hooks=hooks, socket_dir="/run/zj")
+    assert [row.repo for row in same.snapshot()] == ["default", "custom"]
+
+
+def test_a_hook_row_from_another_session_does_not_hide_its_launch_row():
+    launched = record("a", "launched", pane_id="1")
+    workspace_feed, _ = feed(
+        [launched], [pane("1")],
+        hooks=[hook_record(launched.launch_id, session="scratch")],
+    )
+    rows = workspace_feed.snapshot()
+    assert [(row.source, row.profile_id) for row in rows] == [(LAUNCH_SOURCE, "launched")]
 
 
 def test_every_launched_pane_is_listed():
@@ -260,3 +301,9 @@ async def test_compact_rows_show_the_pane_state():
         region = Region(0, 0, table.size.width, table.size.height)
         text = "\n".join(strip.text for strip in table.render_lines(region))
         assert "alpha" in text and "STARTING" in text
+
+
+def test_the_sidebar_feed_uses_the_pane_socket_dir():
+    app = sidebar.SidebarApp(FakeMux(), SESSION, socket_dir="/run/zj")
+    assert app.feed.session == SESSION
+    assert app.feed.socket_dir == "/run/zj"
