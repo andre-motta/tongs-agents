@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import cli, legacy, paths
+from tongs_agents import cli, legacy, owned, paths
 
 
 LEGACY_HOOK = legacy.LEGACY_HOOK_COMMANDS[0]
@@ -629,6 +629,68 @@ def test_symlinked_config_is_refused(tmp_path):
         cli.load_json(link)
     assert target.read_text() == "{}"
     assert link.is_symlink()
+
+
+@posix_only
+def test_install_backs_up_existing_settings_once(settings_file, monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    settings_file.write_text('{"env": {"A": "1"}}')
+    settings_file.chmod(0o644)
+    original = settings_file.read_bytes()
+    cli.cmd_install(None)
+    backup = owned.backup_path(settings_file)
+    assert backup.read_bytes() == original
+    assert stat.S_IMODE(settings_file.stat().st_mode) == 0o644
+    assert stat.S_IMODE(cli.CODEX_HOOKS_FILE.stat().st_mode) == 0o600
+    assert not owned.backup_path(cli.CODEX_HOOKS_FILE).exists()
+    cli.cmd_uninstall(SimpleNamespace(keep_data=True))
+    assert backup.read_bytes() == original
+    assert json.loads(settings_file.read_text()) == {"env": {"A": "1"}}
+
+
+def test_install_failure_rolls_back_every_harness_file(settings_file, monkeypatch, capsys):
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    cli.CODEX_HOOKS_FILE.parent.mkdir()
+    cli.CODEX_HOOKS_FILE.write_text('{"hooks": {}}')
+    before = {path: path.read_bytes() for path in (settings_file, cli.CODEX_HOOKS_FILE)}
+    real = owned._replace
+    failed = []
+
+    def replace(source, destination):
+        if destination == cli.CODEX_HOOKS_FILE and not failed:
+            failed.append(destination)
+            raise OSError("injected failure")
+        real(source, destination)
+
+    monkeypatch.setattr(owned, "_replace", replace)
+    monkeypatch.setattr(cli.sys, "argv", ["tongs-agents", "install"])
+    with pytest.raises(SystemExit) as raised:
+        cli.main()
+    assert raised.value.code == 1
+    output = capsys.readouterr()
+    assert output.err == (
+        f"tongs-agents: {cli.CODEX_HOOKS_FILE}: could not write (injected failure); "
+        "every change was rolled back\n"
+    )
+    assert "Updated" not in output.out
+    assert {path: path.read_bytes() for path in before} == before
+    assert not owned.backup_path(settings_file).exists()
+    assert not owned.backup_path(cli.CODEX_HOOKS_FILE).exists()
+
+
+@posix_only
+def test_symlinked_codex_hooks_stop_install_before_any_write(settings_file, monkeypatch,
+                                                              tmp_path):
+    monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
+    real = tmp_path / "real-hooks.json"
+    real.write_text("{}")
+    cli.CODEX_HOOKS_FILE.parent.mkdir()
+    cli.CODEX_HOOKS_FILE.symlink_to(real)
+    with pytest.raises(cli.ConfigError, match="symlink"):
+        cli.cmd_install(None)
+    assert settings_file.read_text() == "{}"
+    assert real.read_text() == "{}"
+    assert cli.CODEX_HOOKS_FILE.is_symlink()
 
 
 @pytest.mark.parametrize("text", [
