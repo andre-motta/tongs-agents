@@ -722,7 +722,9 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
                 expect(row is not None, f"profile {name} has no row")
                 identity = row.identity
             before = target.clients()
-            app = ProbeSidebar(ZellijMultiplexer(), session, compact=True, refresh_interval=0.5)
+            # The shipped refresh interval: faster polls stack up on zellij 0.44.2
+            # and starve its server past its 1 s action timeout (#72).
+            app = ProbeSidebar(ZellijMultiplexer(), session, compact=True)
             result = asyncio.run(select_row(app, identity))
             after = target.clients()
             routed = typed_target(second, io_dir, f"rowfocus{index}")

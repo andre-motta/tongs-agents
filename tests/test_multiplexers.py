@@ -387,6 +387,49 @@ def test_list_panes_maps_no_active_session_to_an_error(fake):
         _mux().list_panes("agents")
 
 
+def test_list_panes_asks_again_after_a_blank_answer(fake):
+    # zellij 0.44.2 now and then exits 0 with no output for a running session.
+    fake.responses["list-panes"] = _sequence(
+        (0, "", ""), (0, "\n", ""), (0, json.dumps(LIST_PANES["0.44.2"]), "")
+    )
+    panes = _mux().list_panes("agents")
+    assert [pane.ref.pane_id for pane in panes] == ["3", "4"]
+    assert len(fake.calls) == 3
+
+
+def test_list_panes_asks_again_after_a_transient_no_active_session(fake):
+    # zellij 0.44.2's socket probe can briefly deny a running session.
+    fake.responses["list-panes"] = _sequence(
+        (1, "", "There is no active session!\n"),
+        (0, json.dumps(LIST_PANES["0.44.2"]), ""),
+    )
+    assert [pane.ref.pane_id for pane in _mux().list_panes("agents")] == ["3", "4"]
+    assert len(fake.calls) == 2
+
+
+def test_list_panes_gives_up_on_no_active_session_after_bounded_attempts(fake):
+    fake.responses["list-panes"] = (1, "", "There is no active session!")
+    with pytest.raises(MultiplexerError, match="no active session"):
+        _mux().list_panes("agents")
+    assert len(fake.calls) == mux_zellij.READBACK_ATTEMPTS
+
+
+def test_list_panes_gives_up_on_blank_answers_after_bounded_attempts(fake):
+    fake.responses["list-panes"] = (0, "", "")
+    with pytest.raises(MultiplexerError, match="unrecognized"):
+        _mux().list_panes("agents")
+    assert len(fake.calls) == mux_zellij.READBACK_ATTEMPTS
+
+
+def test_list_panes_does_not_retry_an_unknown_session(fake):
+    fake.responses["list-panes"] = (
+        0, "agents [Created 2m ago]\n", "Session 'other' not found."
+    )
+    with pytest.raises(MultiplexerError, match="unrecognized"):
+        _mux().list_panes("other")
+    assert len(fake.calls) == 1
+
+
 def test_session_exists_ignores_exited_sessions(fake):
     fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
     mux = _mux()

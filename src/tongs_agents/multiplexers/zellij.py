@@ -64,6 +64,10 @@ _PANE_KEYS = {
 }
 
 
+class _NoActiveSession(MultiplexerError):
+    """zellij answered "There is no active session!" for the session."""
+
+
 def _has_control(value: str) -> bool:
     return any(ord(char) < 32 or ord(char) == 127 for char in value)
 
@@ -216,7 +220,7 @@ class ZellijMultiplexer:
         try:
             result = _run(argv, _cli_env(self._effective_socket_dir(socket_dir)))
         except RuntimeError as error:
-            raise MultiplexerError(str(error)) from error
+            raise _NoActiveSession(str(error)) from error
         if result is None:
             raise MultiplexerError(
                 f"zellij action {args[0]} failed: CLI missing, timed out, "
@@ -347,7 +351,7 @@ class ZellijMultiplexer:
 
     def list_panes(self, session: str) -> list[PaneInfo]:
         session = _session(session)
-        result = self._action(session, None, "list-panes", "--json")
+        result = self._answered(session, None, "list-panes", "--json")
         try:
             entries = json.loads(result.stdout or "")
         except ValueError as error:
@@ -361,14 +365,29 @@ class ZellijMultiplexer:
         panes = [_pane_info(entry, session, socket_dir) for entry in entries]
         return [pane for pane in panes if pane is not None]
 
-    def _clients(self, session: str, socket_dir: str | None) -> dict[str, str]:
-        # zellij 0.44.2 now and then prints nothing for list-clients with
-        # clients attached; a blank answer is asked again before it fails.
-        for attempt in range(READBACK_ATTEMPTS):
-            result = self._action(session, socket_dir, "list-clients")
-            if (result.stdout or "").strip() or attempt + 1 == READBACK_ATTEMPTS:
-                break
+    def _answered(self, session: str, socket_dir: str | None, *args: str):
+        """Run a read-only query, asking again after a transient zellij miss.
+
+        zellij 0.44.2 now and then exits 0 with no output for list-panes or
+        list-clients on a running session (its 1 s action timeout ends the
+        CLI before the answer) and its socket probe can briefly report no
+        active session (#72). Both are asked again a bounded number of
+        times; an unknown or EXITED session prints the session list instead,
+        which is not retried.
+        """
+        for _ in range(READBACK_ATTEMPTS - 1):
+            try:
+                result = self._action(session, socket_dir, *args)
+            except _NoActiveSession:
+                pass
+            else:
+                if (result.stdout or "").strip():
+                    return result
             time.sleep(READBACK_INTERVAL)
+        return self._action(session, socket_dir, *args)
+
+    def _clients(self, session: str, socket_dir: str | None) -> dict[str, str]:
+        result = self._answered(session, socket_dir, "list-clients")
         try:
             return _client_panes(result.stdout or "")
         except RuntimeError as error:
