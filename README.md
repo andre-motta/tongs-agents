@@ -5,14 +5,14 @@
 [![License](https://img.shields.io/pypi/l/tongs-agents)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
 [![Python](https://img.shields.io/pypi/pyversions/tongs-agents)](https://pypi.org/project/tongs-agents/)
 
-Fleet monitoring for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://learn.chatgpt.com/codex) sessions, with optional [Pi](https://github.com/earendil-works/pi) lifecycle integration. See all your running agent sessions at a glance, get notified when one needs input, and jump to the right terminal tab instantly.
+A standalone agent workspace companion app for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://learn.chatgpt.com/codex) sessions, with optional [Pi](https://github.com/earendil-works/pi) lifecycle integration. See all your running agent sessions at a glance, get notified when one needs input, and jump to the right terminal tab instantly. It runs on its own; the [tongs](https://github.com/andre-motta/tongs) plugin is an optional extra.
 
-> **Formerly `claude-fleet-monitor`.** tongs-agents continues that project under a new name as the agent workspace plugin for [tongs](https://github.com/andre-motta/tongs). The session directory (`~/.claude/fleet/`), the MCP server name (`fleet`) and the Pi configuration file are unchanged in this release. If `claude-fleet-monitor` is installed, run `claude-fleet uninstall --keep-data` and `pip uninstall claude-fleet-monitor` before `tongs-agents install`, so the two hook commands do not both run. Issue and PR numbers before the rename refer to the [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
+> **Formerly `claude-fleet-monitor`.** tongs-agents continues that project under a new name as a standalone companion app. The session directory (`~/.claude/fleet/`), the MCP server name (`fleet`) and the Pi configuration file are unchanged in this release. See [Upgrading from claude-fleet-monitor](#upgrading-from-claude-fleet-monitor). Issue and PR numbers before the rename refer to the [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
 
 ## Features
 
 - **TUI Dashboard** -- Textual-based interactive UI with search/filter, status-colored rows, and click-to-focus
-- **tongs Plugin** -- embeds as a screen in [tongs](https://github.com/andre-motta/tongs) via the TongsPlugin ABC
+- **Optional tongs Plugin** -- also embeds as a screen in [tongs](https://github.com/andre-motta/tongs) via the TongsPlugin ABC
 - **Process Discovery** -- finds running Claude Code and Codex sessions cross-platform even before hooks fire
 - **MCP Server** -- Claude Code and Codex sessions can query fleet status programmatically
 - **Terminal Focus** -- switch to a session's tab and raise the window, across supported terminal backends
@@ -267,7 +267,8 @@ behavior. `--agent all` installs Claude Code, Codex and Pi together.
 
 ### tongs Integration
 
-To use the fleet monitor as a plugin inside [tongs](https://github.com/andre-motta/tongs):
+Tongs Agents works without tongs. To also use it as an optional plugin inside
+[tongs](https://github.com/andre-motta/tongs):
 
 ```bash
 pip install tongs-agents[tongs]
@@ -286,10 +287,17 @@ upgrades take effect immediately. If Fleet moves to another virtual environment,
 run `tongs-agents install --agent pi` again to update Pi's exact extension and
 hook paths.
 
+### Upgrading from claude-fleet-monitor
+
+Follow the [migration guide](docs/migration.md). In short, run
+`claude-fleet uninstall --keep-data` and `pip uninstall claude-fleet-monitor`
+before `tongs-agents install`, so the two hook commands do not both run. Session
+data in `~/.claude/fleet/` is kept.
+
 ### Dependencies
 
 - `python3` >= 3.10
-- `textual` >= 1.0
+- `textual` >= 4, < 9
 
 Optional (for terminal focus):
 - `qdbus`, `qdbus6` or `qdbus-qt6` -- Konsole tab switching and KWin activation for Konsole and Kitty (KDE)

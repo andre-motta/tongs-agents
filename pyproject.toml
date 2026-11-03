@@ -1,12 +1,12 @@
 [project]
 name = "tongs-agents"
 dynamic = ["version"]
-description = "Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions"
+description = "Standalone agent workspace companion app: monitor, launch and focus Claude Code, Codex and Pi sessions"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-    "textual>=1.0",
+    "textual>=4,<9",
     "mcp[cli]>=1.0.0,<2",
 ]
 authors = [
@@ -44,6 +44,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 source = "vcs"
+raw-options = { dist_name = "tongs-agents" }
 
 [tool.hatch.build.hooks.vcs]
 version-file = "src/tongs_agents/_version.py"

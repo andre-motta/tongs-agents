@@ -12,7 +12,7 @@ Fleet currently combines several independent capabilities behind a Boolean
 `focus()` result. A truthful compatibility claim must instead state which of
 these capabilities passed:
 
-1. **Emitter**: the harness can run `claude-fleet-hook` and write a valid event.
+1. **Emitter**: the harness can run `tongs-agents-hook` and write a valid event.
 2. **Detection**: Fleet identifies the terminal or multiplexer at hook time.
 3. **Process context**: Fleet records or resolves the agent PID, tty and cwd.
 4. **Lifecycle**: start, running, waiting, idle, error and ended states reflect
@@ -29,7 +29,7 @@ does not establish live support.
 ## Current architecture findings
 
 The configured Claude Code and Codex hooks use a plain command consisting of
-the installed `claude-fleet-hook` path plus fixed arguments. Fleet does not
+the installed `tongs-agents-hook` path plus fixed arguments. Fleet does not
 source an interactive shell configuration or generate shell-specific syntax.
 The user's command shell therefore has little effect on lifecycle emission.
 It can affect process ancestry, executable naming, tty discovery and the

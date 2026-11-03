@@ -4,6 +4,16 @@ These checks are separate from ordinary pytest. Use an environment with the
 project and its dependencies installed. They use synthetic temporary fleet data;
 they do not prove live harness activity or desktop focus.
 
+## Evidence provenance after the rename
+
+Evidence committed under `validation/evidence/` and `validation/shells/evidence/`
+was recorded before the project was renamed from `claude-fleet-monitor` on
+2026-11-02. Until each validator is rerun, those records keep the pre-rename
+package module paths and hook command name, and their source tree hashes and
+commits identify the pre-rename checkout. They are
+historical records and are not rewritten; a rerun replaces them with
+post-rename evidence.
+
 ## MCP stdio on Linux/macOS
 
 ```console

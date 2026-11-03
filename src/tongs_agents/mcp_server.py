@@ -1,4 +1,4 @@
-"""MCP server for Tongs Agents."""
+"""MCP server exposing Claude Code, Codex and Pi sessions for Tongs Agents."""
 
 import json
 
@@ -11,7 +11,7 @@ mcp = FastMCP("tongs-agents")
 
 @mcp.tool()
 def fleet_status() -> str:
-    """Get all Claude Code and Codex session statuses."""
+    """Get all Claude Code, Codex and Pi session statuses."""
     sessions = read_sessions()
     if not sessions:
         return json.dumps({"sessions": [], "summary": "No active sessions"})
