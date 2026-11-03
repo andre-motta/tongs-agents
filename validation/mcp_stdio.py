@@ -16,13 +16,15 @@ def main():
     parser.add_argument('--source', type=Path, default=Path(__file__).resolve().parents[1] / 'src')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='fleet-mcp-validation-') as directory:
-        env = dict(os.environ, FLEET_DIR=directory, PYTHONPATH=str(args.source.resolve()), PYTHONUNBUFFERED='1')
+        sessions = Path(directory) / 'sessions'
+        sessions.mkdir(mode=0o700)
+        env = dict(os.environ, TONGS_AGENTS_STATE_DIR=directory, PYTHONPATH=str(args.source.resolve()), PYTHONUNBUFFERED='1')
         fixture = {
             'session_id': 'validation-session', 'agent': 'claude',
             'repo': 'validation-fixture', 'cwd': directory, 'pid': '',
             'status': 'waiting', 'ts': int(time.time()),
         }
-        (Path(directory) / 'fixture.json').write_text(json.dumps(fixture))
+        (sessions / 'fixture.json').write_text(json.dumps(fixture))
         process = subprocess.Popen(
             [sys.executable, '-u', '-m', 'tongs_agents.mcp_server'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,

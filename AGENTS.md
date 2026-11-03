@@ -49,7 +49,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-- Mock the filesystem, not the functions. Use `tmp_path` and `monkeypatch` to set `FLEET_DIR`.
+- Mock the filesystem, not the functions. Use `tmp_path` and `monkeypatch` to set `TONGS_AGENTS_STATE_DIR` (the test suite does this for every test).
 - Don't require running Claude Code or Codex sessions, terminal emulators, or display servers.
 - Test cross-platform logic by mocking `sys.platform` and platform-specific calls.
 - Terminal detection tests: mock env vars, verify right terminal detected (see `tests/test_terminal_apis.py`).
@@ -65,5 +65,5 @@ pytest
 - Don't add bash scripts. We removed them for a reason.
 - Don't add runtime dependencies without discussion. The core should stay lightweight.
 - Don't modify `settings.json` format without updating `cli.py` install/uninstall.
-- Don't write to any directory outside `FLEET_DIR` from hook or discovery code.
+- Don't write to any directory outside the sessions directory (`paths.sessions_dir()`) from hook or discovery code.
 - Don't put terminal-specific logic in `focus.py`. It belongs in `terminal_apis/`.

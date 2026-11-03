@@ -20,7 +20,8 @@ MARKER = "FLEET_SHELL_VALIDATION_JSON="
 DEFAULT_IMAGE = "localhost/fleet-shell-validation:20260907"
 SOURCE_MOUNT = Path("/workspace/src")
 WORK_DIR = Path("/tmp/fleet-work")
-FLEET_DIR = WORK_DIR / "fleet"
+STATE_DIR = WORK_DIR / "state"
+SESSIONS_DIR = STATE_DIR / "sessions"
 FIXTURE_CWD = WORK_DIR / "cwd with spaces" / "Δ repo's fixture"
 
 SHELLS = (
@@ -228,7 +229,7 @@ def _clean_env() -> dict[str, str]:
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "HOME": str(WORK_DIR / "home"),
         "TMPDIR": str(WORK_DIR / "tmp"),
-        "FLEET_DIR": str(FLEET_DIR),
+        "TONGS_AGENTS_STATE_DIR": str(STATE_DIR),
         "PYTHONPATH": str(SOURCE_MOUNT),
         "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONUNBUFFERED": "1",
@@ -402,7 +403,7 @@ def _lifecycle_case(
         payload = _expected_payload(event, session_id, agent)
         command = f"exec {command_prefix} {event} --agent {agent}"
         process = _run_shell(spec, command, payload, env, FIXTURE_CWD)
-        records = _matching_records(FLEET_DIR, session_id)
+        records = _matching_records(SESSIONS_DIR, session_id)
         process_ok = process["returncode"] == 0
         record_ok, mismatches, record = _check_record(
             event, payload, agent, records
@@ -555,7 +556,7 @@ def _generated_command_probe(
     session_id = f"generated-{token}-{spec['id']}-{agent}"
     payload = _expected_payload(event, session_id, agent)
     process = _run_shell(spec, command, payload, env, FIXTURE_CWD)
-    records = _matching_records(FLEET_DIR, session_id)
+    records = _matching_records(SESSIONS_DIR, session_id)
     process_ok = process["returncode"] == 0
     if process_ok:
         record_ok, mismatches, record = _check_record(
@@ -626,7 +627,7 @@ def _path_probe(
         env,
         FIXTURE_CWD,
     )
-    quoted_records = _matching_records(FLEET_DIR, quoted_session)
+    quoted_records = _matching_records(SESSIONS_DIR, quoted_session)
     quoted_ok, quoted_mismatches, quoted_record = _check_record(
         "session-start",
         _expected_payload("session-start", quoted_session, "claude")
@@ -716,7 +717,7 @@ def _run_inside(args: argparse.Namespace) -> int:
     (WORK_DIR / "config").mkdir(exist_ok=True)
     (WORK_DIR / "cache").mkdir(exist_ok=True)
     (WORK_DIR / "data").mkdir(exist_ok=True)
-    FLEET_DIR.mkdir(parents=True, exist_ok=True)
+    SESSIONS_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     FIXTURE_CWD.mkdir(parents=True, exist_ok=True)
     env = _clean_env()
     token = uuid.uuid4().hex[:10]
@@ -1053,7 +1054,7 @@ def _run_host(args: argparse.Namespace) -> int:
         "--env",
         "TMPDIR=/tmp/fleet-work/tmp",
         "--env",
-        "FLEET_DIR=/tmp/fleet-work/fleet",
+        "TONGS_AGENTS_STATE_DIR=/tmp/fleet-work/state",
         "--env",
         "PYTHONPATH=/workspace/src",
         "--env",

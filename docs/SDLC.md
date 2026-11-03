@@ -72,7 +72,7 @@ live evidence explicitly.
   OS integration. Existing violations do not justify duplicating them.
 - Hooks stay fast, with no network or heavy imports. Ordinary imports remain
   module-level except optional/circular cases. No shell scripts; hook/discovery
-  writes stay within FLEET_DIR.
+  writes stay within the sessions directory (`paths.sessions_dir()`).
 - Hook-time terminal capture reads the environment only, with one exception
   Andre approved on 2026-10-10 (#52): on Linux, a bounded (64 steps),
   cycle-safe, never-raising walk of the hook's ancestors that reads only

@@ -58,9 +58,10 @@ def test_plugin_settings_validation(config, expected):
     assert (refresh, notify, len(problems)) == expected
 
 
-def test_entry_point_name_is_unchanged():
+def test_entry_point_is_registered_as_agents():
     names = {ep.name: ep.value for ep in entry_points(group="tongs.plugins")}
-    assert names.get("fleet-monitor") == "tongs_agents.tongs_plugin:FleetMonitorPlugin"
+    assert names.get("agents") == "tongs_agents.tongs_plugin:FleetMonitorPlugin"
+    assert "fleet-monitor" not in names
 
 
 def test_not_ready_notifies_running_app(monkeypatch):
