@@ -103,8 +103,12 @@ layout as `python -m tongs_agents.commands.sidebar`) runs the compact agents
 panel inside a Zellij pane named `tongs-agents-sidebar`. It refuses to start
 outside Zellij.
 
-It lists every hook session plus every pane the launcher started in its
-session, joined by launch id:
+The sidebar is per-session; `tongs-agents monitor` remains the fleet-wide
+view. It lists the hook sessions whose captured `ZELLIJ_SESSION_NAME` is its
+session (and, when the hook captured `ZELLIJ_SOCKET_DIR`, whose socket dir
+matches its own) plus every pane the launcher started in its session, joined
+by launch id. Agents in other Zellij sessions or other terminals appear only
+in `tongs-agents monitor`.
 
 | Row | Status column |
 | --- | --- |
