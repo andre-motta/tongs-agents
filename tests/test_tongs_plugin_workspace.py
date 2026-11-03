@@ -207,7 +207,9 @@ async def _settle(app, pilot):
 
 
 def _text(screen, selector):
-    return str(screen.query_one(selector, Static).content)
+    widget = screen.query_one(selector, Static)
+    # Textual 4.0 exposes the text as renderable; later releases as content.
+    return str(getattr(widget, "content", None) or widget.renderable)
 
 
 def _fail(*args):
