@@ -62,7 +62,9 @@ config_dir = "~/.claude-alt"
 [profiles.codex-review]
 command = ["codex"]
 
-# Pi with a local model through Ollama (no API cost).
+# Pi with a local model through Ollama (no API cost). Replace cwd with a
+# project directory you have, or drop the line to start in the workspace's
+# directory.
 [profiles.pi-local]
 command = ["pi", "--provider", "ollama", "--model", "qwen3-coder"]
 cwd = "~/src/example"
@@ -118,9 +120,14 @@ tongs-agents doctor
 fix. Typical findings at this point:
 
 - a profile's config home is missing hooks: run `tongs-agents install` again;
+- the Pi extension is not installed because Pi is missing or older than
+  0.84.4 (a warning): install Pi and run `tongs-agents install` again, or
+  remove the `pi-local` profile;
+- a profile's `cwd` is not a directory (a warning): create it or change `cwd`
+  in step 3;
 - `zellij` is missing or too old: see step 2;
-- a profile with harness `other` runs unmonitored: expected, see
-  [any command as a pane](any-command.md).
+- a profile with harness `other` has no hooks (a note): expected, it reports
+  with `tongs-agents notify`, see [any command as a pane](any-command.md).
 
 Run it until it reports no errors. It exits 0 when only notes remain, 1 with
 warnings and 2 with errors.

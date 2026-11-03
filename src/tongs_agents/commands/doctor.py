@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import cli, commands, legacy, paths
+from tongs_agents import cli, commands, legacy, paths, pi_install
 from tongs_agents.profiles import ProfileError, load_profiles
 
 NAME = "doctor"
@@ -35,6 +35,7 @@ PLUGIN_GROUP = "tongs.plugins"
 PLUGIN_MODULE = "tongs_agents.tongs_plugin"
 ENV_HOMES = (("claude", "CLAUDE_CONFIG_DIR"), ("codex", "CODEX_HOME"))
 _MAX_TOML_BYTES = 1024 * 1024
+_PI_MINIMUM = ".".join(str(part) for part in pi_install.MINIMUM_PI_VERSION)
 
 
 @dataclass(frozen=True)
@@ -328,11 +329,21 @@ def _pi_checks(target, expected: bool) -> list[Check]:
             "hooks", "ok", f"pi extension installed in {target.pi_dir}{_profile_sources(target)}",
         ))
     elif expected:
+        ready = shutil.which("pi") is not None and shutil.which(cli.HOOK_COMMAND) is not None
+        if ready:
+            level, remediation = "error", f"{fix} (needs Pi {_PI_MINIMUM} or newer)"
+        else:
+            # install skips a profile-only Pi home with a warning when Pi is missing
+            level = "warn" if cli._profile_only(target) else "error"
+            remediation = (
+                f"Install Pi {_PI_MINIMUM} or newer and {cli.HOOK_COMMAND}, then run "
+                f"{fix} (or remove the Pi profile)"
+            )
         checks.append(Check(
-            "hooks", "error",
+            "hooks", level,
             f"The Pi extension is not installed in {target.pi_dir}{_profile_sources(target)}; "
             "those sessions run unmonitored",
-            fix,
+            remediation,
         ))
     return checks
 

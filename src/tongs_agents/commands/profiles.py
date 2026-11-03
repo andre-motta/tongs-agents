@@ -107,7 +107,7 @@ def run(args) -> int:
 
 
 def doctor_checks():
-    """Profiles that would run unmonitored or cannot be checked."""
+    """Profiles that would run unmonitored, fail to start or cannot be checked."""
     try:
         profiles = load_profiles()
     except ProfileError as error:
@@ -116,13 +116,22 @@ def doctor_checks():
         )]
     checks = []
     for profile in profiles.values():
+        if profile.cwd is not None and not profile.cwd.is_dir():
+            checks.append(Check(
+                "profiles", "warn",
+                f"Profile {profile.name} has cwd {profile.cwd}, which is not a directory; "
+                "its pane fails to start",
+                f"Create that directory or change cwd in [profiles.{profile.name}]",
+            ))
         harness, directory, problem = cli.profile_home(profile)
         if harness is None:
             checks.append(Check(
-                "profiles", "warn",
-                f"Profile {profile.name} (harness other) runs unmonitored: "
-                "tongs-agents installs hooks only for claude, codex and pi",
-                f"Set harness in [profiles.{profile.name}] if it runs one of them",
+                "profiles", "info",
+                f"Profile {profile.name} (harness other) has no hooks: tongs-agents installs "
+                "them only for claude, codex and pi, so its status comes only from "
+                "tongs-agents notify",
+                "Report status with tongs-agents notify, or set harness in "
+                f"[profiles.{profile.name}] for a wrapper of claude, codex or pi",
             ))
             continue
         if problem is not None:

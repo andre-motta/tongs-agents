@@ -1,5 +1,6 @@
 """``tongs-agents workspace``: exec argv, in-session spawning, layout and doctor."""
 
+import argparse
 import json
 import os
 import re
@@ -119,6 +120,14 @@ def _runtime_files(directory):
     if not directory.exists():
         return []
     return sorted(path.name for path in directory.rglob("*") if path.is_file())
+
+
+def test_print_command_help_says_it_is_not_a_dry_run():
+    parser = argparse.ArgumentParser()
+    workspace.add_arguments(parser)
+    text = " ".join(parser.format_help().split())
+    assert "Not a dry run" in text
+    assert "tmux creates a missing session detached and starts its agents" in text
 
 
 def test_print_command_for_a_running_session_spawns_nothing(
