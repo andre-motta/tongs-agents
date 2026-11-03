@@ -152,6 +152,29 @@ def test_publish_actions_are_pinned_by_full_sha():
     } <= names
 
 
+@pytest.mark.parametrize("name", sorted(GATES.values()))
+def test_gate_actions_are_pinned_by_full_sha(name):
+    remote = [u for u in _uses(_read(name)) if not u.startswith("./")]
+    assert remote
+    for ref in remote:
+        assert FULL_SHA_PIN.match(ref), ref
+
+
+@pytest.mark.parametrize("name", [*sorted(GATES.values()), "publish.yml"])
+def test_checkouts_do_not_persist_credentials(name):
+    lines = _read(name).splitlines()
+    starts = [i for i, line in enumerate(lines) if re.match(r"^\s+- uses: actions/checkout@", line)]
+    assert starts
+    for start in starts:
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        step = [lines[start]]
+        for line in lines[start + 1:]:
+            if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                break
+            step.append(line)
+        assert "persist-credentials: false" in {line.strip() for line in step}, lines[start]
+
+
 def test_publish_checkouts_keep_full_history():
     jobs = _jobs("publish.yml")
     for job in ("build", "verify"):
