@@ -31,6 +31,9 @@ tongs-agents agent-status LAUNCH_ID --json
   one prompt. With `-` the text is read from standard input (CRLF becomes LF
   and one trailing newline is dropped). Text is at most 64 KiB and may hold
   tabs and newlines but no other control characters (no escape sequences).
+  Zellij takes pasted text only as a command argument, so on Zellij the text
+  is briefly visible to other local users in the process list; do not send
+  secrets on a shared host (see [limits](workspace.md#limits)).
 - `read` prints the last 1 to 200 lines (default 200) of the pane's screen and
   scrollback.
 - `wait` polls until the agent reaches `--until`: `done` (default),

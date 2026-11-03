@@ -121,8 +121,11 @@ The sidebar is per-session; `tongs-agents monitor` remains the fleet-wide
 view. It lists the hook sessions whose captured `ZELLIJ_SESSION_NAME` is its
 session (and, when both the hook and the sidebar know a `ZELLIJ_SOCKET_DIR`, whose
 socket dir matches) plus every pane the launcher started in its session, joined
-by launch id. Agents in other Zellij sessions or other terminals appear only
-in `tongs-agents monitor`.
+by launch id. A hook session that captured no Zellij session, such as one in
+a tmux pane, is listed when its launch id names a claimed launch of this
+session, multiplexer and socket and its process is that launch's process or
+runs under it. Agents in other sessions or other terminals appear only in
+`tongs-agents monitor`.
 
 | Row | Status column |
 | --- | --- |
@@ -186,8 +189,9 @@ raises a client or an emulator window. `subscribe` is unsupported on tmux.
 
 The sidebar runs on whichever multiplexer encloses it (tmux when `TMUX` is
 set and `ZELLIJ` is not). On tmux it lists the panes the launcher started in
-its session; hook rows are matched by Zellij session, so they appear only in
-`tongs-agents monitor`.
+its session and joins each one's hook or `tongs-agents notify` status
+through the launch id, so working, done and needs-you reach the tmux sidebar,
+its `n` key and its notifications as they do on Zellij.
 
 `validation/tmux_workspace.py` checks all of this against real tmux servers
 on private sockets (a `-L tongs-<token>` socket and the default socket under
@@ -216,6 +220,13 @@ hides the harness are reported by the core doctor checks and by
   when that sidebar spawned it.
 - Zellij restores layouts, not agent processes; resurrecting an EXITED
   session does not restart agents.
+- Zellij 0.44.2 to 0.45.1 take pasted text only as a command argument
+  (`zellij action paste --pane-id N -- <text>`), so text from
+  `tongs-agents send`, MCP `agents_send` and chat wakes is readable in the
+  process list (`/proc/<pid>/cmdline`) by other local users while that call
+  runs, unless `/proc` is mounted with `hidepid`. Do not send secrets to
+  Zellij panes on a shared host. The tmux adapter loads text from stdin and
+  does not expose it this way.
 - tmux closes a pane when its program exits (unless `remain-on-exit` is on),
   so a finished agent's launch is refused by `send`, `read` and `wait`
   (exit 5, pane not listed) instead of being reported as exited.

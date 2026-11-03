@@ -75,9 +75,9 @@ reply) unless:
    `$XDG_RUNTIME_DIR/tongs-agents/mcp-rate/` (or the state dir's
    `run/mcp-rate/`), so restarting the server does not reset it. A refused
    call does not count.
-6. For `agents_spawn`, the session is running: the server's
-   `ZELLIJ_SESSION_NAME` (with its `ZELLIJ_SOCKET_DIR`) when it runs inside
-   Zellij, else `[workspace].session`. A spawn never creates a session.
+6. For `agents_spawn`, the session is running: the multiplexer, session and
+   socket of the caller's own launch, whatever `[workspace]` says. A spawn
+   never creates a session.
 
 The target pane then goes through the full verification of
 [driving agent panes](control.md#what-is-verified). `agents_spawn` waits up to
