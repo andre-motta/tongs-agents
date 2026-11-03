@@ -1,0 +1,1257 @@
+{
+  "cleanup": {
+    "marker_strays": 0,
+    "survivors": 0,
+    "tracked": 40
+  },
+  "generated": "2026-11-03T05:14:12Z",
+  "platform": {
+    "python": "3.14.8",
+    "system": "linux"
+  },
+  "probe": "validation/harness_facts.py",
+  "probe_sha256": "29d2ea62f2c723c657bdfd31ac87599c59534743d3c4354292b4c7121c17fdc3",
+  "provider_paths": [
+    "/v1/chat/completions",
+    "/v1/messages",
+    "/v1/responses"
+  ],
+  "results": {
+    "claude": {
+      "cli_subcommand_events": {
+        "answer": [
+          "SessionEnd"
+        ],
+        "label": "live",
+        "question": "Do `claude mcp` subcommands fire settings.json hooks?"
+      },
+      "hook_env": {
+        "answer": true,
+        "events": [
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "SessionStart",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          },
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "UserPromptSubmit",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          },
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "PreToolUse",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          },
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "PermissionRequest",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          },
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "Stop",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          },
+          {
+            "ancestor_comms": [
+              "claude",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": true,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "SessionEnd",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "claude"
+          }
+        ],
+        "label": "live",
+        "question": "Do Claude hook subprocesses see the agent's launch env?"
+      },
+      "hooks_default": {
+        "answer": [
+          "SessionEnd",
+          "SessionStart",
+          "Stop",
+          "UserPromptSubmit"
+        ],
+        "label": "live",
+        "question": "Without CLAUDE_CONFIG_DIR, do HOME/.claude/settings.json hooks fire?"
+      },
+      "hooks_relocated": {
+        "answer": {
+          "config_dir_hooks_fired": [
+            "PermissionRequest",
+            "PreToolUse",
+            "SessionEnd",
+            "SessionStart",
+            "Stop",
+            "UserPromptSubmit"
+          ],
+          "home_hooks_fired": []
+        },
+        "label": "live",
+        "question": "Does CLAUDE_CONFIG_DIR relocate settings.json hooks?"
+      },
+      "installed": true,
+      "mcp_add_config_dir": {
+        "answer": {
+          "config_dir_new_files": [
+            ".claude.json"
+          ],
+          "home_new_files": []
+        },
+        "exit_code": 0,
+        "label": "live",
+        "question": "Where does `claude mcp add --scope user` write with CLAUDE_CONFIG_DIR?"
+      },
+      "mcp_add_default": {
+        "answer": [
+          ".claude.json"
+        ],
+        "exit_code": 0,
+        "label": "live",
+        "question": "Where does `claude mcp add --scope user` write without CLAUDE_CONFIG_DIR?"
+      },
+      "mcp_cli_view": {
+        "answer": {
+          "probe-cli (.claude.json)": true,
+          "probe-home-settings (HOME/.claude/settings.json)": false,
+          "probe-settings (settings.json mcpServers)": false
+        },
+        "label": "live",
+        "mcp_get_exit": {
+          "probe-cli": 0,
+          "probe-settings": 1
+        },
+        "question": "Which user MCP servers does the Claude CLI see?"
+      },
+      "mcp_cli_view_default": {
+        "answer": {
+          "probe-cli (HOME/.claude.json)": true,
+          "probe-default-settings (HOME/.claude/settings.json mcpServers)": false
+        },
+        "label": "live",
+        "mcp_get_exit": {
+          "probe-cli": 0,
+          "probe-default-settings": 1
+        },
+        "question": "Without CLAUDE_CONFIG_DIR, which user MCP servers does the Claude CLI see?"
+      },
+      "mcp_session_view": {
+        "answer": {
+          "probe-cli (.claude.json)": "connected",
+          "probe-home-settings (HOME/.claude/settings.json)": null,
+          "probe-settings (settings.json mcpServers)": null
+        },
+        "exit_code": 0,
+        "init_seen": true,
+        "label": "live",
+        "question": "Which user MCP servers does a Claude session load?",
+        "stderr_tail": ""
+      },
+      "mcp_session_view_default": {
+        "answer": {
+          "probe-cli (HOME/.claude.json)": "connected",
+          "probe-default-settings (HOME/.claude/settings.json mcpServers)": null
+        },
+        "exit_code": 0,
+        "init_seen": true,
+        "label": "live",
+        "question": "Without CLAUDE_CONFIG_DIR, which user MCP servers does a Claude session load?",
+        "stderr_tail": ""
+      },
+      "version": "2.1.317 (Claude Code)"
+    },
+    "codex": {
+      "changed_command_trust": {
+        "answer": {
+          "hash_changed": true,
+          "keys_unchanged": true,
+          "trust_after_change": [
+            "modified"
+          ],
+          "trust_after_restore": [
+            "trusted"
+          ],
+          "trust_before": [
+            "trusted"
+          ]
+        },
+        "change": "every hook command gets a different first argument",
+        "label": "live",
+        "question": "Does a trusted hook whose command changes (a moved hook path) need a new review?"
+      },
+      "exec_events": {
+        "answer": [
+          "PreToolUse",
+          "SessionEnd",
+          "SessionStart",
+          "Stop",
+          "UserPromptSubmit"
+        ],
+        "exit_code": 0,
+        "label": "live",
+        "question": "Which hooks fire in a trusted `codex exec` turn with an escalation request?",
+        "stderr_mentions_approval": true,
+        "trust_after_review": [
+          "trusted"
+        ]
+      },
+      "exec_hook_env": {
+        "answer": true,
+        "events": [
+          {
+            "ancestor_comms": [
+              "codex",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": true,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "SessionStart",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "codex"
+          },
+          {
+            "ancestor_comms": [
+              "codex",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": true,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "UserPromptSubmit",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "codex"
+          },
+          {
+            "ancestor_comms": [
+              "codex",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": true,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "PreToolUse",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "codex"
+          },
+          {
+            "ancestor_comms": [
+              "codex",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": true,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "Stop",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "codex"
+          },
+          {
+            "ancestor_comms": [
+              "codex",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": true,
+              "PI_CODING_AGENT_DIR": false,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "SessionEnd",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "codex"
+          }
+        ],
+        "label": "live",
+        "question": "Do `codex exec` hook subprocesses see the agent's launch env?"
+      },
+      "hooks_json_loaded": {
+        "answer": {
+          "events": [
+            "permissionRequest",
+            "preToolUse",
+            "sessionEnd",
+            "sessionStart",
+            "stop",
+            "userPromptSubmit"
+          ],
+          "source_in_codex_home": true,
+          "sources": [
+            "user"
+          ],
+          "trust": [
+            "untrusted"
+          ]
+        },
+        "label": "live",
+        "question": "Is $CODEX_HOME/hooks.json honoured, and what trust state do new hooks get?"
+      },
+      "installed": true,
+      "mcp_add_codex_home": {
+        "answer": {
+          "config_toml_changed": true,
+          "entry_in_codex_home_config": true,
+          "home_dot_codex_created": false,
+          "mcp_get_exit": 0
+        },
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does `codex mcp add` respect CODEX_HOME?"
+      },
+      "profile_shares_hooks": {
+        "answer": [
+          "SessionEnd",
+          "SessionStart",
+          "Stop",
+          "UserPromptSubmit"
+        ],
+        "exit_code": 0,
+        "label": "live",
+        "profile_file": "$CODEX_HOME/probe.config.toml",
+        "question": "Does `codex --profile X` run the base CODEX_HOME hooks?"
+      },
+      "tui_hook_env": {
+        "answer": {
+          "cleanup": {
+            "daemon_stop_exit": 0,
+            "hooks_after_stop": [],
+            "leftover_processes": 0,
+            "remaining": 0,
+            "session_end_records": [
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -92.3,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -92.1,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -91.8,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -91.6,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -91.4,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -91.1,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -90.6,
+                "tag": "codex"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -90.5,
+                "tag": "codex"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-3",
+                "seconds_after_tui_exit": -2.0,
+                "seconds_from_daemon_stop": -70.6,
+                "tag": "tui-3"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-1",
+                "seconds_after_tui_exit": 58.0,
+                "seconds_from_daemon_stop": -28.0,
+                "tag": "tui-1"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-1",
+                "seconds_after_tui_exit": 58.0,
+                "seconds_from_daemon_stop": -19.3,
+                "tag": "tui-2"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-4",
+                "seconds_after_tui_exit": -2.0,
+                "seconds_from_daemon_stop": -5.7,
+                "tag": "tui-4"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-5",
+                "seconds_after_tui_exit": -2.0,
+                "seconds_from_daemon_stop": -2.0,
+                "tag": "tui-5"
+              }
+            ],
+            "settle_seconds": 10
+          },
+          "stop-daemon": {
+            "daemon_stop_exit": 0,
+            "hooks_after_stop": [],
+            "leftover_processes": 1,
+            "remaining": 0,
+            "session_end_records": [
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -74.8,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -74.7,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -74.4,
+                "tag": "claude-default"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -74.1,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": null,
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -74.0,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -73.6,
+                "tag": "claude-config"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -73.2,
+                "tag": "codex"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "other",
+                "seconds_after_tui_exit": null,
+                "seconds_from_daemon_stop": -73.0,
+                "tag": "codex"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-3",
+                "seconds_after_tui_exit": -2.0,
+                "seconds_from_daemon_stop": -53.2,
+                "tag": "tui-3"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-1",
+                "seconds_after_tui_exit": 58.0,
+                "seconds_from_daemon_stop": -10.6,
+                "tag": "tui-1"
+              },
+              {
+                "after_daemon_stop": false,
+                "launch": "tui-1",
+                "seconds_after_tui_exit": 58.0,
+                "seconds_from_daemon_stop": -1.9,
+                "tag": "tui-2"
+              }
+            ],
+            "settle_seconds": 10
+          },
+          "tui-1": {
+            "args": [],
+            "daemon_processes": [
+              "{\"argv\": [\"codex\", \"app-server\", \"--listen\"], \"managed_copy_in_codex_home\": true}",
+              "{\"argv\": [\"codex\", \"app-server\", \"daemon\"], \"managed_copy_in_codex_home\": true}"
+            ],
+            "events": [
+              "SessionStart",
+              "Stop",
+              "UserPromptSubmit"
+            ],
+            "hook_ancestor_comms": [
+              "codex < codex < python"
+            ],
+            "launch_ids_seen": [
+              "tui-1"
+            ],
+            "nearest_codex_ancestor_is_tui": [
+              false
+            ],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": true,
+            "reached": {
+              "Stop": true
+            },
+            "screen_tail_if_not_reached": "",
+            "setup": "default launch, no daemon running yet"
+          },
+          "tui-2": {
+            "args": [],
+            "daemon_processes": [
+              "{\"argv\": [\"codex\", \"app-server\", \"--listen\"], \"managed_copy_in_codex_home\": true}",
+              "{\"argv\": [\"codex\", \"app-server\", \"daemon\"], \"managed_copy_in_codex_home\": true}"
+            ],
+            "events": [
+              "SessionStart",
+              "Stop",
+              "UserPromptSubmit"
+            ],
+            "hook_ancestor_comms": [
+              "codex < systemd"
+            ],
+            "launch_ids_seen": [
+              "tui-1"
+            ],
+            "nearest_codex_ancestor_is_tui": [
+              false
+            ],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": false,
+            "reached": {
+              "Stop": true
+            },
+            "screen_tail_if_not_reached": "",
+            "setup": "default launch while the daemon from tui-1 runs"
+          },
+          "tui-3": {
+            "args": [
+              "--no-daemon"
+            ],
+            "daemon_processes": [
+              "{\"argv\": [\"codex\", \"app-server\", \"--listen\"], \"managed_copy_in_codex_home\": true}",
+              "{\"argv\": [\"codex\", \"app-server\", \"daemon\"], \"managed_copy_in_codex_home\": true}"
+            ],
+            "events": [
+              "SessionEnd",
+              "SessionStart",
+              "Stop",
+              "UserPromptSubmit"
+            ],
+            "hook_ancestor_comms": [
+              "codex < python < timeout"
+            ],
+            "launch_ids_seen": [
+              "tui-3"
+            ],
+            "nearest_codex_ancestor_is_tui": [
+              true
+            ],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": true,
+            "reached": {
+              "Stop": true
+            },
+            "screen_tail_if_not_reached": "",
+            "setup": "--no-daemon while the daemon runs"
+          },
+          "tui-3b": {
+            "args": [
+              "--disable",
+              "daemon_auto_start"
+            ],
+            "daemon_processes": [
+              "{\"argv\": [\"codex\", \"app-server\", \"--listen\"], \"managed_copy_in_codex_home\": true}",
+              "{\"argv\": [\"codex\", \"app-server\", \"daemon\"], \"managed_copy_in_codex_home\": true}"
+            ],
+            "events": [],
+            "hook_ancestor_comms": [],
+            "launch_ids_seen": [],
+            "nearest_codex_ancestor_is_tui": [],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": false,
+            "reached": {
+              "Stop": false
+            },
+            "screen_tail_if_not_reached": "\u28ff\u28f7\u28e6\u28c0\u2808\u2819\u283b\u28ff\u28ff\u28ff\u28f6\u28f6\u28ff\u28ff\u28ff\u28ff\u28ff \u28ff\u28ff\u2847 \u28e0\u28ff\u28ff\u28ff \u28b8\u28ff\u28ff\u287f\u28bf\u28ff\u28ff\u28ff\u28e6\u28e0\u28f4\u28ff\u28ff\u28ff\u287f\u281f\u280b\u28b8\u28ff\u28ff \u28ff\u28ff\u28f7\u28f4\u28ff\u28ff\u28ff\u2803 \u2818\u28ff\u28ff\u28f7 \u2808\u281b\u28bf\u28ff\u28ff\u28ff\u283f\u280b\u2809 \u28e0\u28f4\u28ff\u28ff\u28ff \u28ff\u28ff\u28ff\u28ff\u28ff\u281f\u2801 \u283b\u28ff\u28ff\u28ff\u28e4\u28c0 \u2808\u2809 \u2880\u28e4\u28f6\u28ff\u28ff\u28ff\u283f\u281f\u2801 \u28f0\u28ff\u28ff\u285f\u280b\u2801 \u2808\u283f\u28ff\u28ff\u28ff\u28ff\u28f6\u28fe\u28ff\u28ff\u28ff\u28ff\u281f\u280b\u2801 \u28e0\u28fc\u28ff\u28ff\u285f \u2819\u281b\u281b\u281b\u283b\u281b\u28bf\u28ff\u28ff\u28ff\u28ff\u28f7\u28fe\u28ff\u28ff\u28ff\u287f\u280f \u2808\u2819\u281b\u283f\u283f\u283f\u283f\u281b\u2809 \u203a Ask Codex to do anything ? for shortcuts <path> Background server has incompatible feature settings This session requires daemon_auto_start to be disabled These settings persist and can disable functionality for other clients. Restart may interrupt active or queued work. Restart will use these shared feature settings: daemon_auto_start = false 1. Run without daemon this time 2. Restart with these settings (recommended) \u203a 3. Cancel",
+            "setup": "daemon_auto_start disabled while the daemon runs"
+          },
+          "tui-4": {
+            "args": [
+              "--disable",
+              "daemon_auto_start"
+            ],
+            "daemon_processes": [],
+            "events": [
+              "SessionEnd",
+              "SessionStart",
+              "Stop",
+              "UserPromptSubmit"
+            ],
+            "hook_ancestor_comms": [
+              "codex < python < timeout"
+            ],
+            "launch_ids_seen": [
+              "tui-4"
+            ],
+            "nearest_codex_ancestor_is_tui": [
+              true
+            ],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": true,
+            "reached": {
+              "Stop": true
+            },
+            "screen_tail_if_not_reached": "",
+            "setup": "daemon_auto_start disabled, no daemon running"
+          },
+          "tui-5": {
+            "args": [
+              "--no-daemon"
+            ],
+            "daemon_processes": [],
+            "events": [
+              "PermissionRequest",
+              "PreToolUse",
+              "SessionEnd",
+              "SessionStart",
+              "UserPromptSubmit"
+            ],
+            "hook_ancestor_comms": [
+              "codex < python < timeout"
+            ],
+            "launch_ids_seen": [
+              "tui-5"
+            ],
+            "nearest_codex_ancestor_is_tui": [
+              true
+            ],
+            "other_codex_home_comms": [],
+            "own_launch_id_seen": true,
+            "reached": {
+              "PermissionRequest": true
+            },
+            "screen_tail_if_not_reached": "",
+            "setup": "--no-daemon, escalated command needing approval"
+          }
+        },
+        "label": "live",
+        "question": "Does an interactive Codex TUI pass its own env to hook subprocesses?"
+      },
+      "untrusted_hooks_run": {
+        "answer": [],
+        "exit_code": 0,
+        "label": "live",
+        "question": "Do untrusted hooks run?"
+      },
+      "version": "codex-cli 0.166.0"
+    },
+    "hook_env_summary": {
+      "claude": true,
+      "codex_exec": true,
+      "codex_tui": {
+        "tui-1": true,
+        "tui-2": false,
+        "tui-3": true,
+        "tui-3b": false,
+        "tui-4": true,
+        "tui-5": true
+      },
+      "pi": true
+    },
+    "identity": {
+      "answer": {
+        "claude": {
+          "binary_target_basename": "2.1.317",
+          "cases": {
+            "env_only_profile": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "claude",
+                "comm": "claude",
+                "exe": "2.1.317"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "argv0"
+              ]
+            },
+            "exec_wrapper": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "claude",
+                "comm": "claude",
+                "exe": "2.1.317"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "argv0"
+              ]
+            },
+            "non_exec_wrapper": {
+              "harness_pid_is_launched_pid": false,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": false,
+              "launched": {
+                "argv0": "sh",
+                "comm": "claude-plain",
+                "exe": "bash"
+              },
+              "launched_matches": false,
+              "matched_on": [
+                "comm",
+                "argv0"
+              ]
+            },
+            "path_command": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "claude",
+                "comm": "claude",
+                "exe": "2.1.317"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "argv0"
+              ]
+            },
+            "renamed_symlink": {
+              "harness_pid_is_launched_pid": false,
+              "harness_process_found": false,
+              "hook_walk_finds": false,
+              "hook_walk_pid_is_launched_pid": false,
+              "launched": {
+                "argv0": "claude-alt",
+                "comm": "claude-alt",
+                "exe": "2.1.317"
+              },
+              "launched_matches": false,
+              "matched_on": null
+            },
+            "resolved_binary": {
+              "harness_pid_is_launched_pid": false,
+              "harness_process_found": false,
+              "hook_walk_finds": false,
+              "hook_walk_pid_is_launched_pid": false,
+              "launched": {
+                "argv0": "2.1.317",
+                "comm": "2.1.317",
+                "exe": "2.1.317"
+              },
+              "launched_matches": false,
+              "matched_on": null
+            },
+            "shell_alias": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "claude",
+                "comm": "claude",
+                "exe": "2.1.317"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "argv0"
+              ]
+            }
+          }
+        },
+        "codex": {
+          "binary_target_basename": "codex",
+          "cases": {
+            "env_only_profile": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex",
+                "comm": "codex",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            },
+            "exec_wrapper": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex",
+                "comm": "codex",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            },
+            "non_exec_wrapper": {
+              "harness_pid_is_launched_pid": false,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": false,
+              "launched": {
+                "argv0": "sh",
+                "comm": "codex-plain",
+                "exe": "bash"
+              },
+              "launched_matches": false,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            },
+            "path_command": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex",
+                "comm": "codex",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            },
+            "renamed_symlink": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex-alt",
+                "comm": "codex-alt",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "exe"
+              ]
+            },
+            "resolved_binary": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex",
+                "comm": "codex",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            },
+            "shell_alias": {
+              "harness_pid_is_launched_pid": true,
+              "harness_process_found": true,
+              "hook_walk_finds": true,
+              "hook_walk_pid_is_launched_pid": true,
+              "launched": {
+                "argv0": "codex",
+                "comm": "codex",
+                "exe": "codex"
+              },
+              "launched_matches": true,
+              "matched_on": [
+                "comm",
+                "exe",
+                "argv0"
+              ]
+            }
+          }
+        }
+      },
+      "label": "live",
+      "method": "real binaries kept alive on stdin; tongs_agents.discovery functions",
+      "question": "What does discovery.process_matches_harness see for wrapper styles?"
+    },
+    "pi": {
+      "event_names_documented": {
+        "answer": {
+          "agent_end": true,
+          "agent_settled": true,
+          "before_agent_start": true,
+          "session_shutdown": true,
+          "session_start": true,
+          "tool_execution_start": true,
+          "ui_prompt_end": true,
+          "ui_prompt_start": true
+        },
+        "label": "unvalidated",
+        "question": "Are the extension's event names in the installed Pi's extension docs?"
+      },
+      "extension_events": {
+        "answer": [
+          "pi.agent-settled",
+          "pi.before-agent-start",
+          "pi.session-shutdown",
+          "pi.session-start",
+          "pi.tool-execution-start"
+        ],
+        "exit_code": 0,
+        "label": "live",
+        "question": "Which extension events reach the hook on the installed Pi?"
+      },
+      "extension_install": {
+        "exit_code": 0
+      },
+      "hook_env": {
+        "answer": true,
+        "events": [
+          {
+            "ancestor_comms": [
+              "pi",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": true,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "pi.session-start",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "pi"
+          },
+          {
+            "ancestor_comms": [
+              "pi",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": true,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "pi.before-agent-start",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "pi"
+          },
+          {
+            "ancestor_comms": [
+              "pi",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": true,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "pi.tool-execution-start",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "pi"
+          },
+          {
+            "ancestor_comms": [
+              "pi",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": true,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "pi.agent-settled",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "pi"
+          },
+          {
+            "ancestor_comms": [
+              "pi",
+              "python",
+              "timeout",
+              "bash",
+              "claude",
+              "bash"
+            ],
+            "env_visible": {
+              "CLAUDE_CONFIG_DIR": false,
+              "CODEX_HOME": false,
+              "PI_CODING_AGENT_DIR": true,
+              "TONGS_AGENTS_LAUNCH_ID": true,
+              "TONGS_AGENTS_PROFILE": true
+            },
+            "event": "pi.session-shutdown",
+            "harness_pid_is_ancestor": true,
+            "parent_comm": "pi"
+          }
+        ],
+        "label": "live",
+        "question": "Does the Pi extension's hook spawn see Pi's launch env?"
+      },
+      "installed": true,
+      "mcp_add_agent_dir": {
+        "answer": {
+          "agent_dir_mcp_json": true,
+          "home_dot_pi_created": false
+        },
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does `pi mcp add` write under PI_CODING_AGENT_DIR?"
+      },
+      "native_mcp_floor": {
+        "answer": {
+          "ci_pin": "0.85.0",
+          "first_native_mcp_release": "0.99.0"
+        },
+        "label": "unvalidated",
+        "question": "Which Pi version first ships native MCP, versus the CI pin?",
+        "source": "installed package CHANGELOG.md"
+      },
+      "version": "1.5.0"
+    }
+  },
+  "user_config": {
+    "~/.claude.json": {
+      "exists": true,
+      "unchanged": false,
+      "volatile": true
+    },
+    "~/.claude/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.local.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/config.toml": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/hooks.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/claude-fleet-monitor.json": {
+      "exists": false,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/mcp.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    }
+  }
+}

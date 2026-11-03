@@ -185,6 +185,34 @@ to 0.43.1 a scratch wrapper substituted the fixture listing that needs
 `list-panes` (0.44.0+) so the adapter steps could run; that wrapper is not
 committed.
 
+### Zellij pin table
+
+[`src/tongs_agents/data/zellij_pins.json`](../src/tongs_agents/data/zellij_pins.json)
+is the one list of Zellij releases that hosted CI downloads, and the table a
+later managed download reads. It is packaged in the wheel.
+
+| Key | Meaning |
+| --- | --- |
+| `floor` | Lowest supported release (`X.Y.Z`) |
+| `validated_ceiling` | Highest validated release; equals `ZellijAPI`'s `VALIDATED_VERSION` |
+| `pins.<X.Y.Z>.<platform>` | One entry per release and platform; only `linux-x86_64` today |
+
+Each entry has these keys:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `flavor` | yes | `no-web` or `full` upstream build |
+| `asset` | yes | Release asset name, for example `zellij-no-web-x86_64-unknown-linux-musl.tar.gz` |
+| `url` | yes | `https://github.com/zellij-org/zellij/releases/download/v<X.Y.Z>/<asset>` |
+| `sha256` | yes | SHA-256 of the tarball, checked before extraction |
+| `size` | yes | Tarball size in bytes |
+| `binary_sha256` | optional | SHA-256 of the extracted `zellij` binary (upstream's `.sha256sum` covers the binary, not the tarball) |
+
+`binary_sha256` is optional in the schema, so a consumer must accept it and
+must not reject an entry without it. The hosted workflow reads it for every
+`linux-x86_64` `no-web` pin it downloads, so those pins must carry it;
+`tests/test_zellij_pins.py` checks both rules. No other key is allowed.
+
 ## Agent workspace on Linux
 
 ```console
@@ -244,6 +272,31 @@ Zellij version's entry in [the evidence](evidence/workspace-linux-x86_64.json),
 which keeps one run per pin with source hashes. The maintainer's live run with
 real profiles is separate; see the
 [runbook](../docs/work/workspace-live-run.md).
+
+## Investigation probes
+
+Two local-only Linux probes back investigation records rather than a product
+gate. Neither runs in CI.
+
+```console
+python validation/harness_facts.py --output <scratch>/harness-facts.json
+python validation/workspace_spike.py --zellij-dir <dir with extracted zellij> --out <scratch>/spike.json
+```
+
+`harness_facts.py` runs the installed Claude Code, Codex and Pi binaries with
+a private `HOME`, XDG dirs and agent config dir each, against a synthetic
+model provider on 127.0.0.1; no account or API key is used. It hashes the
+user's agent config files before and after and fails if any changed.
+`workspace_spike.py` drives one extracted upstream Zellij binary in private
+dirs, sockets and PTYs, with a private tmux socket for its tmux step. Both
+redact their JSON and refuse to emit home paths, user names or host names.
+The records are
+[`harness-facts-fedora44.json`](evidence/harness-facts-fedora44.json) for
+[harness facts](../docs/work/harness-facts.md) and
+`workspace-spike-fedora44-zellij-<version>.json` for the
+[workspace spike](../docs/work/workspace-spike.md);
+`tests/test_harness_facts_probe.py` and `tests/test_workspace_spike_probe.py`
+cover their pure helpers and the committed records.
 
 ## Kitty remote-control selection and KWin activation on Linux
 

@@ -46,7 +46,21 @@ python validation/workspace_spike.py --zellij-dir <dir> --out <scratch>/spike.js
 
 The script prints a redacted JSON record (`workspace-spike/1`); it refuses to
 emit a record containing a home path, user name or host name. Like the other
-terminal validators it is local-only and is never run in CI.
+terminal validators it is local-only and is never run in CI. `--only <step>`
+always adds `create`, and `--only focus` also adds `spawn`, whose pane it
+focuses.
+
+Committed records (cleanup #44, 2026-11-03): after the step fixes below, the
+spike ran once more per version against the same verified upstream binaries,
+in a private user and network namespace with only loopback up, and the
+redacted records are
+[`workspace-spike-fedora44-zellij-0.44.2.json`](../../validation/evidence/workspace-spike-fedora44-zellij-0.44.2.json)
+and
+[`workspace-spike-fedora44-zellij-0.45.1.json`](../../validation/evidence/workspace-spike-fedora44-zellij-0.45.1.json),
+checked by `tests/test_workspace_spike_probe.py`. Both reported zero
+survivors, unchanged user configuration and no step errors, and every finding
+below matched the original runs; the tmux-caller row is the only one whose
+setup changed.
 
 ## Mechanics findings
 
@@ -143,8 +157,15 @@ them**, including panes spawned later with `action new-pane`.
 | Record source | `capture_terminal_info()` label | Env-only detection |
 | --- | --- | --- |
 | Pane of a session created inside tmux | `zellij` (Linux ancestry reaches the zellij server); captured keys `ZELLIJ`, `ZELLIJ_PANE_ID`, `ZELLIJ_SESSION_NAME`, `ZELLIJ_SOCKET_DIR` | `tmux` (wrong: tmux wins the env order) |
-| Pane spawned by `new-pane` from a tmux caller | same as above | `tmux` |
+| Pane spawned by `new-pane` from a tmux caller into a session created outside tmux | `zellij`; same captured keys | `zellij`; no `TMUX*` marker in the pane |
 | Session created with `env -u TMUX -u TMUX_PANE` inside tmux | `zellij` | `zellij`; no `TMUX*` marker in the pane |
+
+The original runs sent the tmux-caller `new-pane` into the session created
+inside tmux, so its `TMUX` markers could have come from the server creator and
+the row showed nothing on its own. The committed records target a session
+created outside tmux: a caller's `TMUX` and `TMUX_PANE` never reach the pane,
+consistent with the pane environment finding above. Only the creator's
+environment leaks.
 
 On Linux the hook record is already correct; elsewhere, or when the ancestry
 walk fails, a leaked `TMUX` would label the agent `tmux`, and agents running
@@ -250,7 +271,7 @@ command = ["claude"]
 
 [profiles.claude-work]  # a second Claude with its own config dir
 command = ["claude"]
-env = { CLAUDE_CONFIG_DIR = "~/.claude-work" }
+env = { CLAUDE_CONFIG_DIR = "/home/example/.claude-work" }
 
 [profiles.claude-wrapped]  # or a wrapper that sets up its own environment
 command = ["claude-sandbox", "--project", "example"]
@@ -265,6 +286,12 @@ command = ["codex", "--profile", "review"]
 command = ["pi", "--provider", "ollama", "--model", "qwen3-coder"]
 cwd = "~/src/example"
 ```
+
+Nothing on the pane argv expands `~`: profile env travels as an
+`env NAME=value <argv>` prefix with no shell. The shipped loader
+([profiles](../profiles.md)) therefore expands a leading `~` only in `cwd`
+and `config_dir` before building the argv, and passes `env` values verbatim,
+which is why the `env` example above uses an absolute path.
 
 ### Recommendations for CTO confirmation
 
@@ -314,5 +341,6 @@ No new runtime dependency is proposed.
 - The spec's ownership list named `docs/work/workspace-decisions.md`,
   `validation/workspace_probe.py`, committed evidence JSON and a unit test;
   this item was assigned `docs/work/workspace-spike.md` and
-  `validation/workspace_spike.py` only, so the JSON records stay in scratch and
-  the results are summarised here.
+  `validation/workspace_spike.py` only. Cleanup #44 later committed one
+  redacted record per version and `tests/test_workspace_spike_probe.py` (see
+  the method above); the original runs' JSON records stayed in scratch.

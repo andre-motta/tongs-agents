@@ -152,6 +152,8 @@ class Spike:
         self.io = root / "io"
         self.tracker = Tracker([str(root), token])
         self.sessions = []
+        self.main = None
+        self.out_pane = None
         self.redact = Redactor.for_host({
             str(root): "<spike_tmp>", token: "<token>", str(zellij_dir): "<zellij_dir>",
             sys.executable: "<python>", str(REPO_ROOT): "<repo>",
@@ -554,6 +556,8 @@ def mouse_click(client, column, row):
 
 def step_focus(spike):
     """Sidebar click by an interactive client with a watch client attached."""
+    if spike.out_pane is None:
+        return {"skipped": "the spawn step did not record an agent pane to focus"}
     session = spike.main
     first = spike.main_client
     result = {}
@@ -695,9 +699,9 @@ def step_tmux(spike):
             (spike.io / "capture-in-zellij").read_text())
     outside = spike.py("capture.py", "outside-new-pane")
     tmux_env = spike.env_with(TMUX=f"{sock},1,0", TMUX_PANE="%0")
-    code, out, err = spike.action(name, "new-pane", "--", *outside, env=tmux_env)
+    code, out, err = spike.action(spike.main, "new-pane", "--", *outside, env=tmux_env)
     if wait_until(lambda: (spike.io / "capture-outside-new-pane").exists(), 10):
-        result["new_pane_from_tmux_caller"] = json.loads(
+        result["new_pane_from_tmux_caller_into_session_created_outside_tmux"] = json.loads(
             (spike.io / "capture-outside-new-pane").read_text())
 
     stripped = spike.session_name("tmux-clean")
@@ -728,6 +732,17 @@ def step_tmux(spike):
 STEPS = (("create", step_create), ("spawn", step_spawn), ("listings", step_listings),
          ("exit", step_exit), ("focus", step_focus), ("resurrection", step_resurrection),
          ("tmux", step_tmux))
+REQUIRES = {"focus": ("spawn",)}
+
+
+def selected_steps(only):
+    """Step names to run for --only, with create and step dependencies added."""
+    if not only:
+        return [name for name, _ in STEPS]
+    wanted = {"create", *only}
+    for name in only:
+        wanted.update(REQUIRES.get(name, ()))
+    return [name for name, _ in STEPS if name in wanted]
 
 
 def main(argv=None):
@@ -753,9 +768,10 @@ def main(argv=None):
         spike = Spike(Path(temporary), token, zellij_dir)
         record["zellij_version"] = spike.zj("--version")[1]
         steps = {}
+        wanted = selected_steps(arguments.only)
         try:
             for name, step in STEPS:
-                if arguments.only and name != "create" and name not in arguments.only:
+                if name not in wanted:
                     continue
                 print(f"step {name}", file=sys.stderr)
                 try:

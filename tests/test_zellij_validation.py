@@ -100,6 +100,69 @@ def test_public_text_flags_private_paths(private):
     assert leaks
 
 
+@linux_only
+@pytest.mark.parametrize("reported, expected", [
+    ("zellij 0.44.2", "0.44.2"),
+    ("zellij 0.45.1\n", "0.45.1"),
+    ("zellij 0.45", None),
+    (None, None),
+])
+def test_observed_version_parses_zellij_version(reported, expected):
+    assert validator.observed_version(reported) == expected
+
+
+@linux_only
+@pytest.mark.parametrize("reported, expected", [
+    ("zellij 0.44.2", ["0.44.2"]),
+    ("zellij 0.45.1", ["0.45.1"]),
+    ("unexpected", []),
+])
+def test_validated_versions_name_the_binary_exercised(monkeypatch, tmp_path, reported,
+                                                      expected):
+    root = tmp_path / "root"
+    root.mkdir()
+
+    def exercise(root, session, decoy, tracker, observations):
+        observations["zellij_version"] = reported
+
+    monkeypatch.setattr(validator.shutil, "which", lambda name: "/usr/bin/zellij")
+    monkeypatch.setattr(validator.tempfile, "mkdtemp", lambda prefix: str(root))
+    monkeypatch.setattr(validator, "exercise", exercise)
+    monkeypatch.setattr(validator, "cleanup", lambda root, sessions, tracker: {
+        "tracked": 0, "survivors": 0, "marker_strays": 0, "temp_dir_removed": True})
+    monkeypatch.setattr(validator, "config_snapshot", lambda: {})
+    monkeypatch.setattr(validator, "zellij_cache_mentions", lambda token: 0)
+
+    evidence = validator.validate(write=False)
+
+    assert evidence["validated_versions"] == expected
+    assert evidence["adapter_validated_ceiling"] == zellij.VALIDATED_VERSION
+    assert evidence["version_floor"].startswith("not established")
+
+
+@linux_only
+def test_failed_run_validates_no_version(monkeypatch, tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+
+    def exercise(root, session, decoy, tracker, observations):
+        observations["zellij_version"] = "zellij 0.44.2"
+        raise validator.Check("selection failed")
+
+    monkeypatch.setattr(validator.shutil, "which", lambda name: "/usr/bin/zellij")
+    monkeypatch.setattr(validator.tempfile, "mkdtemp", lambda prefix: str(root))
+    monkeypatch.setattr(validator, "exercise", exercise)
+    monkeypatch.setattr(validator, "cleanup", lambda root, sessions, tracker: {
+        "tracked": 0, "survivors": 0, "marker_strays": 0, "temp_dir_removed": True})
+    monkeypatch.setattr(validator, "config_snapshot", lambda: {})
+    monkeypatch.setattr(validator, "zellij_cache_mentions", lambda token: 0)
+
+    evidence = validator.validate(write=False)
+
+    assert evidence["result"] == "fail"
+    assert evidence["validated_versions"] == []
+
+
 EVIDENCE = ROOT / "validation" / "evidence" / "zellij-fedora44.json"
 
 

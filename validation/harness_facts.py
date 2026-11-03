@@ -82,6 +82,7 @@ TOOL_PROMPT = "probe-tool: run the fixture command"
 TEXT_PROMPT = "probe-text: reply briefly"
 RUN_TIMEOUT = 90
 TRUST_MARKER = "# harness-facts: hooks trusted as by /hooks review"
+LATE_HOOK_SETTLE = 10
 
 RECORDER = """\
 #!{python} -I
@@ -359,6 +360,7 @@ class Lab:
         self.work.mkdir()
         (self.work / "fixture.txt").write_text("Public synthetic fixture.\n")
         self.log = self.root / "hooks.jsonl"
+        self.tui_exits = {}
         self.recorder = self.bin / "fact-recorder"
         self.recorder.write_text(RECORDER.format(
             python=sys.executable, log=str(self.log), names=RECORDED_ENV))
@@ -762,6 +764,23 @@ def trust_codex_hooks(codex_home, hooks, base):
     path.write_text("\n".join(lines) + "\n")
 
 
+def trust_after_change(trusted, changed, restored):
+    """Compare hooks/list before, after and undoing a command change."""
+    def by_key(hooks):
+        return {hook["key"]: hook for hook in hooks}
+
+    before, after = by_key(trusted), by_key(changed)
+    return {
+        "trust_before": sorted({hook["trustStatus"] for hook in trusted}),
+        "trust_after_change": sorted({hook["trustStatus"] for hook in changed}),
+        "trust_after_restore": sorted({hook["trustStatus"] for hook in restored}),
+        "keys_unchanged": bool(before) and set(before) == set(after),
+        "hash_changed": bool(after) and all(
+            key in before and before[key]["currentHash"] != hook["currentHash"]
+            for key, hook in after.items()),
+    }
+
+
 def run_codex_exec(lab, env, prompt, args=()):
     argv = ["codex", "exec", "--skip-git-repo-check", *args, prompt]
     try:
@@ -856,6 +875,7 @@ def run_codex_tui(lab, env, label, args=(), prompt=TEXT_PROMPT, until="Stop",
             break
         time.sleep(1.0)
     wait_until(lambda: process_identity(client.pid) is None, 10, 0.2)
+    lab.tui_exits[label] = time.time()
     wait_until(lambda: any(record["event"] == "SessionEnd"
                            for record in lab.records_for(label)[start:]), 5, 0.2)
     return {
@@ -882,7 +902,40 @@ def daemon_shape(summary):
             "managed_copy_in_codex_home": "/packages/app-server-daemon/" in argv[0]}
 
 
-def stop_codex_daemon(lab, env):
+def launch_label(record, identities):
+    value = record["env"].get("TONGS_AGENTS_LAUNCH_ID")
+    return None if value is None else identities.get(value, "other")
+
+
+def session_end_report(records, identities, stopped_at, exits=None):
+    """Every SessionEnd so far, across hooks.json tags, relative to a daemon stop.
+
+    Records are in arrival order. `exits` maps a TUI run's tag to the time its
+    TUI process was gone, so a late SessionEnd can be dated from that exit.
+    """
+    exits = exits or {}
+    report = []
+    for record in records:
+        if record.get("event") != "SessionEnd":
+            continue
+        tag = (record.get("argv") or [None])[0]
+        stamp = record.get("ts", 0)
+        report.append({
+            "tag": tag,
+            "launch": launch_label(record, identities),
+            "after_daemon_stop": stamp >= stopped_at,
+            "seconds_from_daemon_stop": round(stamp - stopped_at, 1),
+            "seconds_after_tui_exit": (
+                round(stamp - exits[tag], 1) if tag in exits else None),
+        })
+    return report
+
+
+def stop_codex_daemon(lab, env, identities=None, settle=LATE_HOOK_SETTLE):
+    """Stop the shared daemon, then report hooks it ran while or after stopping."""
+    identities = identities or {}
+    mark = len(lab.records())
+    stopped_at = time.time()
     code, _, _ = run(["codex", "app-server", "daemon", "stop"], env=env, timeout=30)
     leftovers = codex_owned_pids(env["CODEX_HOME"])
     for pid in leftovers:
@@ -892,8 +945,19 @@ def stop_codex_daemon(lab, env):
         except OSError:
             pass
     wait_until(lambda: not codex_owned_pids(env["CODEX_HOME"]), 5, 0.1)
-    return {"daemon_stop_exit": code, "leftover_processes": len(leftovers),
-            "remaining": len(codex_owned_pids(env["CODEX_HOME"]))}
+    time.sleep(settle)
+    records = lab.records()
+    return {
+        "daemon_stop_exit": code, "leftover_processes": len(leftovers),
+        "remaining": len(codex_owned_pids(env["CODEX_HOME"])),
+        "settle_seconds": settle,
+        "hooks_after_stop": [
+            {"tag": (record.get("argv") or [None])[0], "event": record.get("event"),
+             "launch": launch_label(record, identities)}
+            for record in records[mark:]],
+        "session_end_records": session_end_report(
+            records, identities, stopped_at, lab.tui_exits),
+    }
 
 
 def probe_codex(lab, results, with_tui):
@@ -966,6 +1030,18 @@ def probe_codex(lab, results, with_tui):
         profile_file="$CODEX_HOME/probe.config.toml",
     )
 
+    (codex_home / "hooks.json").write_text(
+        json.dumps(codex_hooks(lab, "codex-moved"), indent=2))
+    changed = codex_hook_list(lab, env)
+    (codex_home / "hooks.json").write_text(json.dumps(codex_hooks(lab, "codex"), indent=2))
+    restored = codex_hook_list(lab, env)
+    section["changed_command_trust"] = fact(
+        "Does a trusted hook whose command changes (a moved hook path) need a new review?",
+        "live",
+        trust_after_change(relisted, changed, restored),
+        change="every hook command gets a different first argument",
+    )
+
     before = sha256(codex_home / "config.toml")
     code, _, _ = run(["codex", "mcp", "add", "probe-cli", "--", str(lab.fake_mcp)],
                        env=env, timeout=30)
@@ -1005,7 +1081,7 @@ def probe_codex(lab, results, with_tui):
         tui = {}
         for label, args, prompt, until, note in runs:
             if args is None:
-                tui[label] = stop_codex_daemon(lab, env)
+                tui[label] = stop_codex_daemon(lab, env, identities)
                 continue
             identity = launch_id()
             identities[identity] = label
@@ -1038,7 +1114,7 @@ def probe_codex(lab, results, with_tui):
                     item["comm"] for item in outcome["processes"]
                     if item and item["comm"] != "codex"}),
             }
-        tui["cleanup"] = stop_codex_daemon(lab, env)
+        tui["cleanup"] = stop_codex_daemon(lab, env, identities)
         section["tui_hook_env"] = fact(
             "Does an interactive Codex TUI pass its own env to hook subprocesses?",
             "live", tui)
