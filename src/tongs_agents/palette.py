@@ -20,6 +20,7 @@ threads, reporting the outcome as notifications.
 from __future__ import annotations
 
 import shutil
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -93,6 +94,8 @@ class AppShell:
         self.palette_multiplexer = multiplexer
         self.palette_session = session
         self._palette_profiles: dict[str, Profile] | None = None
+        # Spawn workers and the UI thread both fill the cache.
+        self._palette_profiles_lock = threading.Lock()
         self.palette_profile_error: str | None = None
         self.theme_warning: str | None = None
 
@@ -104,14 +107,15 @@ class AppShell:
     # -- Profiles --
 
     def palette_profiles(self) -> dict[str, Profile]:
-        if self._palette_profiles is None:
-            try:
-                self._palette_profiles = load_profiles()
-                self.palette_profile_error = None
-            except ProfileError as error:
-                self._palette_profiles = {}
-                self.palette_profile_error = str(error)
-        return self._palette_profiles
+        with self._palette_profiles_lock:
+            if self._palette_profiles is None:
+                try:
+                    self._palette_profiles = load_profiles()
+                    self.palette_profile_error = None
+                except ProfileError as error:
+                    self._palette_profiles = {}
+                    self.palette_profile_error = str(error)
+            return self._palette_profiles
 
     def ordered_profile_names(self) -> list[str]:
         """Profile names, ``[workspace].default_profiles`` first in their order."""
@@ -123,7 +127,8 @@ class AppShell:
         return [*dict.fromkeys(defaults), *rest]
 
     def palette_reload_profiles(self) -> None:
-        self._palette_profiles = None
+        with self._palette_profiles_lock:
+            self._palette_profiles = None
         profiles = self.palette_profiles()
         if self.palette_profile_error is not None:
             self.notify(self.palette_profile_error, title="Profiles", severity="error",

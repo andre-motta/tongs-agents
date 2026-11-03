@@ -266,3 +266,66 @@ def test_spawn_requested_reports_a_bad_request():
     mux = FakeMux()
     assert workspace_spawn.spawn_requested(mux, "agents", token) == ["unrecognized spawn request"]
     assert mux.spawned == []
+
+
+def _age(path, seconds):
+    then = path.stat().st_mtime - seconds
+    os.utime(path, (then, then))
+
+
+def test_expired_requests_go_with_their_layouts_and_pending_launches():
+    old_records = workspace_spawn.create_launches(
+        "zellij", "agents", [profile("alpha"), profile("beta")]
+    )
+    launches.claim(old_records[1].launch_id, os.getpid(), None, None)
+    old = workspace_spawn.write_spawn_request("agents", [r.launch_id for r in old_records])
+    workspace_spawn.write_layout(old, "layout {}\n")
+    stray = workspace_spawn.new_token()
+    workspace_spawn.write_layout(stray, "layout {}\n")
+    age = workspace_spawn.REQUEST_MAX_AGE + 60
+    for path in (workspace_spawn.request_path(old), workspace_spawn.layout_path(old),
+                 workspace_spawn.layout_path(stray)):
+        _age(path, age)
+
+    fresh_records = workspace_spawn.create_launches("zellij", "agents", [profile("gamma")])
+    fresh = workspace_spawn.write_spawn_request("agents", [fresh_records[0].launch_id])
+    workspace_spawn.write_layout(fresh, "layout {}\n")
+
+    assert not workspace_spawn.request_path(old).exists()
+    assert not workspace_spawn.layout_path(old).exists()
+    assert not workspace_spawn.layout_path(stray).exists()
+    assert launches.get(old_records[0].launch_id) is None
+    assert launches.get(old_records[1].launch_id).state == "running"
+    assert workspace_spawn.request_path(fresh).exists()
+    assert workspace_spawn.layout_path(fresh).exists()
+    assert launches.get(fresh_records[0].launch_id).state == "pending"
+
+
+def test_prune_keeps_fresh_requests_and_ignores_foreign_names(runtime_dir):
+    token = workspace_spawn.write_spawn_request("agents", [])
+    other = workspace_spawn.request_path(token).parent / "notes.json"
+    other.write_text("{}")
+    _age(other, workspace_spawn.REQUEST_MAX_AGE + 60)
+    assert workspace_spawn.prune_spawn_requests() == 0
+    assert workspace_spawn.request_path(token).exists()
+    assert other.exists()
+    _age(workspace_spawn.request_path(token), workspace_spawn.REQUEST_MAX_AGE + 60)
+    assert workspace_spawn.prune_spawn_requests() == 1
+    assert not workspace_spawn.request_path(token).exists()
+
+
+def test_prune_without_runtime_dirs_does_nothing():
+    assert workspace_spawn.prune_spawn_requests() == 0
+
+
+@POSIX_MODES
+def test_prune_skips_a_shared_requests_dir(runtime_dir):
+    token = workspace_spawn.write_spawn_request("agents", [])
+    path = workspace_spawn.request_path(token)
+    _age(path, workspace_spawn.REQUEST_MAX_AGE + 60)
+    path.parent.chmod(0o755)
+    try:
+        assert workspace_spawn.prune_spawn_requests() == 0
+        assert path.exists()
+    finally:
+        path.parent.chmod(0o700)

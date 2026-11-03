@@ -33,6 +33,11 @@ jobs:
       contents: read
     uses: ./.github/workflows/zellij.yml
 
+  tmux:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/tmux-mux.yml
+
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -141,7 +146,7 @@ jobs:
           PY
 
   publish:
-    needs: [tests, shells, pi, zellij, build, verify]
+    needs: [tests, shells, pi, zellij, tmux, build, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment:

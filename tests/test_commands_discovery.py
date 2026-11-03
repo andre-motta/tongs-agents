@@ -54,6 +54,20 @@ def test_discover_imports_public_modules_in_order(package):
     assert [commands.command_name(module) for module in modules] == ["alpha-beta", "zeta"]
 
 
+def test_discover_sorts_by_command_name_not_module_name(package):
+    entry = "type('C', (), {{'NAME': {name!r}, 'add_arguments': staticmethod(lambda p: None), "
+    entry += "'run': staticmethod(lambda a: 0)}})"
+    pkg = package({
+        "a_first.py": "NAME = 'zeta'\n" + CONTRACT,
+        "b_second.py": "NAME = 'alpha'\n" + CONTRACT,
+        "c_many.py": "COMMANDS = [{}, {}]\n".format(
+            entry.format(name="omega"), entry.format(name="beta")
+        ),
+    })
+    names = [commands.command_name(module) for module in commands.discover(pkg)]
+    assert names == ["alpha", "beta", "omega", "zeta"]
+
+
 def test_module_without_run_is_rejected(package):
     pkg = package({"broken.py": "def add_arguments(parser):\n    pass\n"})
     with pytest.raises(commands.CommandModuleError, match="missing run"):

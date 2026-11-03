@@ -12,6 +12,11 @@ not exist yet. It is written 0600 with ``O_EXCL`` and consumed once: the
 sidebar renames it away before reading, so a second sidebar with the same
 token spawns nothing. The rendered layout for that session lives beside it in
 ``runtime_dir()/layouts/<token>.kdl``.
+
+A request nobody consumes (a printed command that was never run, or the
+tongs plugin's modal opened and closed) expires after
+``REQUEST_MAX_AGE`` seconds: writing a new request first removes expired
+requests, their layouts and the pending launches they name.
 """
 
 from __future__ import annotations
@@ -22,6 +27,7 @@ import re
 import secrets
 import stat
 import sys
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +47,7 @@ MAX_REQUEST_BYTES = 64 * 1024
 MAX_REQUEST_LAUNCHES = 64
 MAX_SESSION_LENGTH = 1024
 TOKEN_RE = re.compile(r"^[0-9a-f]{32}\Z")
+REQUEST_MAX_AGE = 24 * 3600
 
 
 class SpawnRequestError(Exception):
@@ -187,6 +194,7 @@ def write_spawn_request(session: str, launch_ids: Iterable[str]) -> str:
     if len(ids) > MAX_REQUEST_LAUNCHES:
         raise SpawnRequestError(f"more than {MAX_REQUEST_LAUNCHES} launches in one request")
     _runtime_subdir(REQUESTS_DIR, create=True)
+    prune_spawn_requests()
     token = new_token()
     payload = json.dumps(
         {"schema_version": REQUEST_SCHEMA, "session": session, "launches": ids},
@@ -213,6 +221,75 @@ def discard_runtime_files(token: str) -> None:
     """Remove the request and layout of ``token``, ignoring missing files."""
     _discard(request_path(token))
     _discard(layout_path(token))
+
+
+def _expired_tokens(directory: Path | None, suffix: str, cutoff: float) -> list[str]:
+    """Tokens of the regular ``<token><suffix>`` files last modified before ``cutoff``."""
+    tokens = []
+    if directory is None:
+        return tokens
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return tokens
+    for entry in entries:
+        token = entry.name[:-len(suffix)] if entry.name.endswith(suffix) else ""
+        if not is_token(token):
+            continue
+        try:
+            info = entry.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+            tokens.append(token)
+    return tokens
+
+
+def _discard_pending(request: SpawnRequest) -> None:
+    for launch_id in request.launches:
+        try:
+            record = launches.get(launch_id)
+            if (
+                record is not None
+                and record.state == "pending"
+                and record.session == request.session
+            ):
+                launches.discard(launch_id)
+        except LaunchError:
+            pass
+
+
+def prune_spawn_requests(max_age: float = REQUEST_MAX_AGE) -> int:
+    """Remove spawn requests and layouts older than ``max_age`` seconds.
+
+    The pending launches an expired request names go with it; a launch a pane
+    already claimed is kept. Returns the number of requests removed and never
+    raises.
+    """
+    cutoff = time.time() - max_age
+    removed = 0
+    try:
+        requests = _runtime_subdir(REQUESTS_DIR, create=False)
+        layouts = _runtime_subdir(LAYOUTS_DIR, create=False)
+    except OSError:
+        return removed
+    if not paths.is_private_dir(requests):
+        requests = None
+    if not paths.is_private_dir(layouts):
+        layouts = None
+    for token in _expired_tokens(requests, ".json", cutoff):
+        try:
+            request = consume_spawn_request(token)
+        except (SpawnRequestError, OSError):
+            request = None
+        if request is not None:
+            _discard_pending(request)
+            removed += 1
+        if layouts is not None:
+            _discard(layout_path(token))
+    for token in _expired_tokens(layouts, ".kdl", cutoff):
+        _discard(layout_path(token))
+    return removed
 
 
 def _parse_request(data) -> SpawnRequest:

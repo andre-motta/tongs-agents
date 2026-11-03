@@ -5,10 +5,13 @@ Two palette commands, and no tongs core changes:
 - "Agents" pushes the agents panel screen.
 - "Open agent workspace" pushes a small modal that does its work in a thread
   worker. Inside Zellij (``ZELLIJ`` is set) it focuses this session's sidebar
-  pane, or adds one through ``workspace_spawn`` when none is listed, then
-  closes. Outside Zellij it shows the exact command printed by
-  ``tongs-agents workspace --print-command`` with a copy action; it never
-  opens a terminal window, execs or exits.
+  pane, or adds one when none is listed, then closes. The result is always
+  reported, also when the modal was closed before the work finished. Outside
+  Zellij it shows the exact command printed by
+  ``tongs-agents workspace --print-command`` with a copy action; that command
+  is already prepared (its one-shot spawn request and layout are written) and
+  is only shown, never run: the plugin never opens a terminal window, execs or
+  exits.
 
 The module imports without tongs; the plugin class is defined only when it is
 installed.
@@ -23,8 +26,9 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 
-from textual.app import ComposeResult
+from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
@@ -67,6 +71,7 @@ NOT_READY_MESSAGE = "Agents is not ready yet; try again in a moment."
 WORKSPACE_LABEL = "Open agent workspace"
 WORKSPACE_HELP = "Focus or add the agent sidebar in Zellij, or show the workspace command"
 PRINT_COMMAND_TIMEOUT = 60
+PREPARED_MESSAGE = "Prepared; run this command in a terminal:"
 
 
 def plugin_settings(config: object) -> tuple[float, str, list[str]]:
@@ -147,7 +152,7 @@ def workspace_print_command() -> WorkspaceOutcome:
     if result.returncode != 0 or not command:
         detail = _last_line(result.stderr) or f"it exited with status {result.returncode}"
         return WorkspaceOutcome(False, f"tongs-agents workspace failed: {detail}")
-    return WorkspaceOutcome(True, "Run this command in a terminal:", command)
+    return WorkspaceOutcome(True, PREPARED_MESSAGE, command)
 
 
 def open_workspace_in_zellij(mux: Multiplexer | None = None) -> WorkspaceOutcome:
@@ -174,14 +179,23 @@ def open_workspace_in_zellij(mux: Multiplexer | None = None) -> WorkspaceOutcome
             if result.successful:
                 return WorkspaceOutcome(True, "Focused the agent sidebar")
             return WorkspaceOutcome(False, f"Could not focus the agent sidebar: {result.reason}")
-        workspace_spawn.ensure_sidebar(mux, here.session)
+        # The scan above already found no sidebar; ensure_sidebar would list
+        # the panes a second time.
+        mux.spawn(
+            here.session, workspace_spawn.sidebar_argv(), name=SIDEBAR_PANE_NAME, focus=False
+        )
     except (MultiplexerError, LaunchError, OSError) as error:
         return WorkspaceOutcome(False, getattr(error, "detail", None) or str(error))
     return WorkspaceOutcome(True, f"Added the agent sidebar to Zellij session {here.session}")
 
 
 class WorkspaceScreen(ModalScreen[None]):
-    """Opens the agent workspace in a worker; outside Zellij, shows its command."""
+    """Opens the agent workspace in a worker; outside Zellij, shows its command.
+
+    A thread worker cannot be cancelled, so inside Zellij the worker body
+    reports its own outcome: in the modal while it is open, and as a
+    notification once the user has closed it.
+    """
 
     DEFAULT_CSS = """
     WorkspaceScreen {
@@ -229,6 +243,7 @@ class WorkspaceScreen(ModalScreen[None]):
         self.inside = inside
         self._workspace_action = opener if inside else printer
         self.command: str | None = None
+        self.closed = False
 
     def compose(self) -> ComposeResult:
         status = (
@@ -244,20 +259,41 @@ class WorkspaceScreen(ModalScreen[None]):
                 yield Button("Close", id="workspace-close")
 
     def on_mount(self) -> None:
-        self.run_worker(self._workspace_action, thread=True, exit_on_error=False)
+        self.run_worker(
+            partial(self._run_action, self.app), thread=True, exit_on_error=False
+        )
+
+    def _run_action(self, app: App) -> WorkspaceOutcome:
+        """The worker body; inside Zellij it hands its outcome to the app itself."""
+        try:
+            outcome = self._workspace_action()
+        except Exception as error:
+            log.warning("Agent workspace action failed", exc_info=True)
+            outcome = WorkspaceOutcome(False, f"Unexpected error: {error}")
+        if self.inside:
+            try:
+                app.call_from_thread(self.report_outcome, outcome)
+            except Exception:
+                log.warning("Could not report the agent workspace outcome: %s",
+                            outcome.message, exc_info=True)
+        return outcome
 
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
-        if event.state == WorkerState.SUCCESS:
+        if event.state == WorkerState.SUCCESS and not self.inside:
             self.show_outcome(event.worker.result)
-        elif event.state == WorkerState.ERROR:
-            log.warning("Agent workspace action failed", exc_info=event.worker.error)
-            self.show_outcome(WorkspaceOutcome(False, f"Unexpected error: {event.worker.error}"))
+
+    def report_outcome(self, outcome: WorkspaceOutcome) -> None:
+        """Show ``outcome`` in the modal, or notify it once the modal is closed."""
+        if self.closed:
+            self.app.notify(outcome.message, severity="information" if outcome.ok else "error")
+            return
+        self.show_outcome(outcome)
 
     def show_outcome(self, outcome: WorkspaceOutcome) -> None:
         status = self.query_one("#workspace-status", Static)
         if self.inside and outcome.ok:
             self.app.notify(outcome.message)
-            self.dismiss()
+            self.action_close()
             return
         status.update(outcome.message)
         status.set_class(not outcome.ok, "error")
@@ -281,6 +317,9 @@ class WorkspaceScreen(ModalScreen[None]):
         self.app.notify("Copied the workspace command")
 
     def action_close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
         self.dismiss()
 
 

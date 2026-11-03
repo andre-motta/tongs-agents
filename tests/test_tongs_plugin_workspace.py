@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 
 import pytest
 from textual.app import App
@@ -15,6 +16,7 @@ from tongs_agents import paths, tongs_plugin, workspace_spawn
 from tongs_agents.models import FocusResult
 from tongs_agents.multiplexers import MultiplexerError, PaneInfo, PaneRef
 from tongs_agents.tongs_plugin import (
+    PREPARED_MESSAGE,
     WORKSPACE_LABEL,
     WorkspaceOutcome,
     WorkspaceScreen,
@@ -77,6 +79,7 @@ class TestInsideZellij:
             "focus": False,
             "cwd": None,
         }]
+        assert mux.calls.count(("list_panes", HERE.session)) == 1
 
     def test_exited_sidebar_does_not_count(self):
         mux = FakeMux(here=HERE, panes=[_sidebar(exited=True)])
@@ -147,7 +150,8 @@ class TestPrintCommand:
 
         monkeypatch.setattr(tongs_plugin.subprocess, "run", run)
         outcome = workspace_print_command()
-        assert outcome == WorkspaceOutcome(True, outcome.message, "zellij attach agents")
+        assert outcome == WorkspaceOutcome(True, PREPARED_MESSAGE, "zellij attach agents")
+        assert PREPARED_MESSAGE == "Prepared; run this command in a terminal:"
         (argv, kwargs), = calls
         assert argv == print_command_argv()
         assert kwargs["stdin"] is subprocess.DEVNULL and kwargs["timeout"] > 0
@@ -294,6 +298,54 @@ async def test_unexpected_worker_error_is_shown():
         await _settle(app, pilot)
         assert app.screen is screen
         assert "kaboom" in _text(screen, "#workspace-status")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome, severity",
+    [
+        (WorkspaceOutcome(True, "Added the agent sidebar to Zellij session work"),
+         "information"),
+        (WorkspaceOutcome(False, "cannot spawn tongs-agents-sidebar"), "error"),
+    ],
+)
+async def test_inside_outcome_is_notified_after_an_early_close(outcome, severity):
+    release = threading.Event()
+
+    def slow():
+        assert release.wait(10)
+        return outcome
+
+    screen = WorkspaceScreen(True, printer=_fail, opener=slow)
+    app = ScreenApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.screen is not screen and screen.closed
+        assert app.notes == []
+        release.set()
+        await _settle(app, pilot)
+        assert app.notes == [(outcome.message, severity)]
+
+
+@pytest.mark.asyncio
+async def test_unexpected_error_after_an_early_close_is_notified():
+    release = threading.Event()
+
+    def broken():
+        assert release.wait(10)
+        raise RuntimeError("kaboom")
+
+    screen = WorkspaceScreen(True, printer=_fail, opener=broken)
+    app = ScreenApp(screen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        release.set()
+        await _settle(app, pilot)
+        assert app.notes == [("Unexpected error: kaboom", "error")]
 
 
 @pytest.fixture

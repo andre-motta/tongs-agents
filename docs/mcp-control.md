@@ -23,6 +23,7 @@ Control needs both the server switch and a per-profile opt-in:
 [control]
 mcp_enabled = true          # register the agents_* tools (default false)
 mcp_any_target = false      # also act on opted-in panes another caller spawned (default false)
+mcp_nested_spawn = false    # let an agent started through MCP start more agents (default false)
 mcp_rate_per_minute = 6     # sends, and separately spawns, per caller per minute (1 to 60)
 
 [profiles.lead]

@@ -302,6 +302,13 @@ class McpControl:
             config = self._config()
             loaded = self._profiles()
             caller = self._caller(loaded)
+            if caller.spawned_by is not None and not config.control.mcp_nested_spawn:
+                # An agent started through MCP may not start more agents by
+                # default, so one instructed lead cannot grow a tree of panes.
+                raise control.Refused(
+                    "this agent was itself started through MCP; nested spawns need "
+                    "[control].mcp_nested_spawn = true"
+                )
             profile = self._opted(loaded, profile_name, "spawn")
             session, socket_dir = self._session(config)
             try:
