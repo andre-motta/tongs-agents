@@ -1,0 +1,26 @@
+{
+  "floor": "0.44.2",
+  "validated_ceiling": "0.45.1",
+  "pins": {
+    "0.44.2": {
+      "linux-x86_64": {
+        "flavor": "no-web",
+        "asset": "zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/zellij-org/zellij/releases/download/v0.44.2/zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "4af3ceefd4f8e9792144175234bdd8ffa96653209e9722613627f84f3d09ef83",
+        "size": 14563734,
+        "binary_sha256": "79dd83f21d80204a5a3af4055e6ffd4b076347d4493f403859590190384a86e3"
+      }
+    },
+    "0.45.1": {
+      "linux-x86_64": {
+        "flavor": "no-web",
+        "asset": "zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+        "url": "https://github.com/zellij-org/zellij/releases/download/v0.45.1/zellij-no-web-x86_64-unknown-linux-musl.tar.gz",
+        "sha256": "d7bda1e18c30a688833ae7627f1d6a253bbba5349a4bc48e4f0ec008aaf75ed1",
+        "size": 14961925,
+        "binary_sha256": "0ec6ef07b63c6355c02ce18343d40ef5ef5af19e25313ea9009c8fceda29e94f"
+      }
+    }
+  }
+}
