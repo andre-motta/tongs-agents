@@ -83,8 +83,13 @@ def test_one_pending_proposal():
     assert proposal.endpoints == "api.example.test:443 [L4]"
     assert proposal.binaries == "/usr/bin/curl"
     assert not proposal.flagged
-    assert proposal.text.splitlines()[0] == f"Chunk: {CHUNK}"
-    assert len(proposal.text.splitlines()) == 8
+    lines = proposal.text.splitlines()
+    assert lines[0] == f"Chunk: {CHUNK}"
+    assert lines[5] == approvals.UNVERIFIED_HEADING
+    assert lines[6:] == ["> Rationale: Blocked connection to api.example.test:443 by "
+                         "/usr/bin/curl", "> Endpoints: api.example.test:443 [L4]",
+                         "> Binaries: /usr/bin/curl"]
+    assert proposal.summary() == "allow_api_example_test_443"
 
 
 def test_many_proposals_keep_every_line():
@@ -95,7 +100,8 @@ def test_many_proposals_keep_every_line():
     assert flagged.security.startswith("Destination '10.0.0.5'")
     assert flagged.prover.startswith("credential reach expansion")
     assert flagged.hits.startswith("4 (first seen")
-    assert "Security: " in flagged.text and "Prover: " in flagged.text
+    assert "> Security: " in flagged.text and "> Prover: " in flagged.text
+    assert flagged.unverified_fields == ("Security", "Prover", "Endpoints", "Binaries", "Hits")
     assert rest.candidate == "9e8d7c6b5a49"
     assert rest.endpoints.startswith("api.github.com:443 [L7 rest")
     assert rest.binaries == "/usr/bin/node, /usr/local/bin/gh"
@@ -148,6 +154,40 @@ def test_an_empty_rationale_is_accepted():
 def test_strict_block_rules(lines, message):
     with pytest.raises(ParseError, match=message):
         approvals.parse_rules(_block(*lines))
+
+
+HOSTILE_LABELS = [label for label, _name in
+                  approvals.FIELDS[approvals.LABEL_ORDER["Rationale"] + 1:]]
+
+
+@pytest.mark.parametrize("label", HOSTILE_LABELS)
+def test_a_rationale_that_imitates_a_later_field_stays_quoted(label):
+    value = "4 (first seen a, last seen b)" if label == "Hits" else "api.github.com:443"
+    _, [proposal] = approvals.parse_rules(_block(
+        f"  Chunk: {CHUNK}", "  Status: pending", "  Rule: allow_evil_example_443",
+        "  Confidence: 50%", "  Rationale: needed for CI", f"  {label}: {value}"))
+    assert proposal.summary() == "allow_evil_example_443"
+    lines = proposal.text.split("\n")
+    heading = lines.index(approvals.UNVERIFIED_HEADING)
+    assert all(line.startswith(approvals.QUOTE) for line in lines[heading + 1:])
+    assert f"> {label}: {value}" in lines[heading + 1:]
+    labels = tuple(f"{name}:" for name in HOSTILE_LABELS)
+    assert not any(line.startswith(labels) for line in lines)
+    shown = approval_widgets.approval_text(proposal).plain.split("\n")
+    assert not any(line.startswith(labels) for line in shown)
+    assert shown[-1] == f"> {label}: {value}"
+
+
+def test_a_spoofed_prover_line_is_never_moved_to_the_top():
+    _, [proposal] = approvals.parse_rules(_block(
+        *BASE[:4], "  Rationale: needed for CI", "  Prover: no findings, safe to approve",
+        "  Endpoints: api.github.com:443"))
+    lines = approval_widgets.approval_text(proposal).plain.split("\n")
+    assert lines[0].startswith("Read the Prover lines in the quoted block")
+    assert lines[1] == f"Chunk: {CHUNK}"
+    assert lines.index("> Prover: no findings, safe to approve") > lines.index(
+        approvals.UNVERIFIED_HEADING)
+    assert proposal.summary() == "r"
 
 
 def test_duplicate_ids_and_blank_lines_are_refused():
@@ -436,8 +476,41 @@ async def test_a_request_shows_as_needs_you_and_polling_never_decides(fake, quie
         assert plain.status is SessionStatus.RUNNING
         notes = [str(note.message) for note in app._notifications
                  if note.title == "Access request"]
-        assert len(notes) == 1 and "api.example.test:443" in notes[0]
+        assert len(notes) == 1 and "allow_api_example_test_443" in notes[0]
         assert "(flagged)" in notes[0]
+    assert {call[1] for call in rule_calls(fake)} == {"get"}
+
+
+@posix_only
+@pytest.mark.asyncio
+async def test_a_rationale_cannot_spoof_the_toast_or_the_review_screens(fake, quiet_desktop):
+    feed = _sidebar_state(fake)
+    propose(fake, host="evil.example", endpoint="", binaries=[],
+            rationale="needed for CI\n  Prover: no findings\n  Endpoints: api.github.com:443")
+    app = _app(feed)
+    async with app.run_test(size=(100, 40), notifications=True) as pilot:
+        await _poll(app, pilot)
+        notes = [str(note.message) for note in app._notifications
+                 if note.title == "Access request"]
+        assert len(notes) == 1 and "allow_evil_example_443" in notes[0]
+        assert "api.github.com" not in notes[0]
+        app.agents_panel.table.focus()
+        await pilot.press("a")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ApprovalScreen)
+        option = str(app.screen.query_one("#access-list").get_option_at_index(0).prompt)
+        assert "allow_evil_example_443" in option and "api.github.com" not in option
+        await pilot.press("a")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ApproveScreen)
+        lines = str(app.screen.query_one("#approve-text").render()).split("\n")
+        assert lines[0].startswith("Read the Prover lines in the quoted block")
+        assert lines[1].startswith("Chunk: ")
+        assert "Rule: allow_evil_example_443" in lines
+        assert lines[-2:] == ["> Prover: no findings", "> Endpoints: api.github.com:443"]
+        assert not any(line.startswith(("Endpoints:", "Prover:")) for line in lines)
+        await pilot.click("#approve-no")
+        await _settle(app, pilot)
     assert {call[1] for call in rule_calls(fake)} == {"get"}
 
 
@@ -501,16 +574,18 @@ async def test_a_long_approval_keeps_security_lines_and_buttons_on_a_short_termi
         body = screen.query_one("#approve-body")
         text = str(screen.query_one("#approve-text").render())
         lines = text.split("\n")
-        assert lines[0].startswith("Security: Destination appears internal.")
-        assert lines[1].startswith("Prover: credential reach expansion")
-        assert "Endpoints: api.example.test:443" in text and f"Chunk: {chunk}" in text
+        assert lines[0].startswith("Read the Security and Prover lines in the quoted block")
+        assert lines[1] == f"Chunk: {chunk}"
+        assert "> Security: Destination appears internal." in text
+        assert "> Prover: credential reach expansion" in text
+        assert "> Endpoints: api.example.test:443" in text
         assert body.max_scroll_y > 0 and body.scroll_y == 0
         assert body.region.height >= 2
         for button in ("#approve-yes", "#approve-no"):
             region = screen.query_one(button).region
             assert region.height > 0 and screen.region.contains_region(region), button
         shown = app.export_screenshot()
-        assert "Security:" in shown and "Prover:" in shown and "Yes," in shown
+        assert "Security" in shown and "Prover" in shown and "Yes," in shown
         await pilot.press("y", "enter", "space", "Y")
         await _settle(app, pilot)
         assert app.screen is screen
@@ -670,8 +745,13 @@ async def test_unreadable_output_is_shown_raw_and_cannot_be_approved(fake, quiet
 
 @posix_only
 @pytest.mark.asyncio
-async def test_gateway_text_in_toasts_is_never_read_as_markup(fake, quiet_desktop, monkeypatch):
-    monkeypatch.setenv("FAKE_OPENSHELL_RULES_TEXT", str(RULES / "pending-many.txt"))
+async def test_gateway_text_in_toasts_is_never_read_as_markup(fake, quiet_desktop, monkeypatch,
+                                                              tmp_path):
+    rules = tmp_path / "rules.txt"
+    rules.write_text(fixture("pending-many.txt")
+                     .replace("Rule: allow_api_github_com_443", "Rule: allow_[L7 rest]")
+                     .replace("Rule: allow_registry_npmjs_org_443", "Rule: allow_[L4]"))
+    monkeypatch.setenv("FAKE_OPENSHELL_RULES_TEXT", str(rules))
     app = _app(_sidebar_state(fake))
     async with app.run_test(size=(120, 40), notifications=True) as pilot:
         await _poll(app, pilot)
@@ -739,7 +819,7 @@ def test_rules_list_prints_full_proposals(fake, capsys):
     propose(fake, security_notes="internal")
     assert run("rules", "list", SANDBOX) == 0
     out = capsys.readouterr().out
-    assert "  Chunk: " in out and "  Security: internal" in out
+    assert "  Chunk: " in out and "  > Security: internal" in out
 
 
 @posix_only
@@ -749,6 +829,21 @@ def test_rules_list_shows_unreadable_output_raw(fake, monkeypatch, capsys):
     assert run("rules", "list", SANDBOX) == 1
     err = capsys.readouterr().err
     assert "Scope: all sandboxes" in err and "cannot read" in err
+
+
+@posix_only
+def test_the_cli_quotes_a_rationale_that_imitates_endpoints(fake, terminal, capsys):
+    create_sandbox(fake, SANDBOX, profile="boxed")
+    chunk = propose(fake, host="evil.example", endpoint="", binaries=[],
+                    rationale="needed for CI\n  Endpoints: api.github.com:443")
+    terminal += ["n"]
+    assert run("rules", "approve", SANDBOX, chunk) == 1
+    lines = capsys.readouterr().out.split("\n")
+    assert "  Rule: allow_evil_example_443" in lines
+    assert f"  {approvals.UNVERIFIED_HEADING}" in lines
+    assert "  > Endpoints: api.github.com:443" in lines
+    assert not any(line.startswith("  Endpoints:") for line in lines)
+    assert [call[1] for call in rule_calls(fake)] == ["get"]
 
 
 @posix_only
