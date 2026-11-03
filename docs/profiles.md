@@ -66,7 +66,7 @@ command = ["example-agent", "--interactive"]
 | `config_dir` | path | Sets `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `PI_CODING_AGENT_DIR` for the harness. Needs harness `claude`, `codex` or `pi` and must not also appear in `env`. |
 | `cwd` | path | Working directory for the agent. |
 | `model_args`, `effort_args` | list of strings | Appended after `command`, in that order. |
-| `mcp_control` | boolean, default `false` | Allows the profile to be driven through the MCP control tools once they exist. |
+| `mcp_control` | boolean, default `false` | Lets the profile use, and be driven by, the MCP agent control tools; see [MCP agent control](mcp-control.md). |
 
 Profile names match `^[a-z0-9][a-z0-9_-]{0,31}$`. Paths must be absolute or
 start with `~/`. Unknown keys are errors, so typos are caught.

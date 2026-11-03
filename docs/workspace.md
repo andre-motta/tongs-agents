@@ -108,8 +108,8 @@ created 0600 without following or replacing anything:
 
 `tongs-agents sidebar [--spawn-request TOKEN] [--compact]` (started by the
 layout as `python -m tongs_agents.commands.sidebar`) runs the compact agents
-panel inside a Zellij pane named `tongs-agents-sidebar`. It refuses to start
-outside Zellij. It shares the monitor's header, footer, theme and command
+panel inside a Zellij pane named `tongs-agents-sidebar` (or a tmux pane, see
+[tmux](#tmux)). It refuses to start outside a Zellij or tmux session. It shares the monitor's header, footer, theme and command
 palette (`Ctrl+P`, with `New agent: <profile>` and `Open tongs tab` for its
 own session) and reads its refresh interval, notify level and theme from
 `[ui]`; see [app settings](app.md).

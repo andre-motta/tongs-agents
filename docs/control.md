@@ -6,8 +6,10 @@ right now. A pane is named by its launch id: the 32-character hex id of its
 launch record, shown by `tongs-agents agent-status` and set as
 `TONGS_AGENTS_LAUNCH_ID` inside the pane.
 
-Control works with Zellij panes started by `tongs-agents workspace` or the
-sidebar. tmux and other terminals report "unsupported" (exit 6).
+Control works with Zellij and tmux panes started by `tongs-agents workspace`
+or the sidebar (on tmux see [tmux](workspace.md#tmux) for how pastes and
+reads are done). A launch whose multiplexer has no pane control reports
+"unsupported" (exit 6).
 
 ## Commands
 
@@ -57,8 +59,8 @@ Every call checks, in this order, and refuses (exit 5) when any check fails:
 
 1. The launch record exists, was claimed by its pane and was not replaced by a
    later claim.
-2. Its pane is listed in the same Zellij session, served from the same socket
-   dir.
+2. Its pane is listed in the same Zellij or tmux session, served from the
+   same socket (dir).
 3. The pane's program has not exited (otherwise exit 4).
 4. The claimed process is still alive with the start time recorded at claim
    time. A launch from a session that was killed and recreated with the same

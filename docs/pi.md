@@ -1,7 +1,7 @@
 # Pi lifecycle integration
 
-Pi support is optional. Install it after installing both Pi and Tongs Agents
-Monitor:
+Pi support is optional. Install it after installing both Pi and
+tongs-agents:
 
 ```bash
 tongs-agents install --agent pi
@@ -34,16 +34,16 @@ results, UI prompt titles, provider responses or raw error messages. Provider
 failures are reported as `turn failed`, and aborted turns as `turn aborted`.
 
 Events are serialized through a queue limited to 128 waiting entries. An event
-send is stopped after 1.5 seconds. Missing or failing Fleet hooks do not stop Pi.
+send is stopped after 1.5 seconds. Missing or failing tongs-agents hooks do not stop Pi.
 On shutdown, the bridge spends at most 1.5 seconds draining intermediate events,
 drops any remaining intermediate queue, and reserves up to 1.5 seconds for the
-final ended event. An abruptly killed Pi process is removed by Fleet's PID and
+final ended event. An abruptly killed Pi process is removed by tongs-agents' PID and
 process-start validation on the next store maintenance: the sidebar or monitor
 while one runs, `tongs-agents cleanup` or the `fleet_cleanup` MCP tool.
 
 ## Lifecycle behavior
 
-| Pi event | Fleet state |
+| Pi event | Session status |
 |----------|-------------|
 | `session_start` | `started` |
 | `before_agent_start` | `running` |
@@ -60,7 +60,7 @@ each native session has its own increasing event sequence. Events capture their
 session identity before entering the queue, so delayed events cannot be applied
 to a later session.
 
-Fleet records the terminal environment inherited by Pi. For example, a Pi
+tongs-agents records the terminal environment inherited by Pi. For example, a Pi
 process inside tmux can be associated with its exact pane. Desktop window
 activation still depends on the captured parent terminal and available display
 integration.
