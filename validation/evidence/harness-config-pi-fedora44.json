@@ -1,0 +1,330 @@
+{
+  "generated": "2026-11-03T13:17:31Z",
+  "host": {
+    "arch": "x86_64",
+    "os": "Fedora Linux 44",
+    "python": "3.14.8",
+    "system": "linux"
+  },
+  "isolation": {
+    "env": "built from scratch: PATH, USER, LANG, private HOME and XDG dirs, the harness config-dir variable, PROBE_SECRET and PROBE_INHERIT (synthetic values)",
+    "model_sessions_started": 0,
+    "namespace": "unshare --user --map-current-user --net (loopback down)",
+    "network": "unreachable"
+  },
+  "issue": 17,
+  "item": "M2-0",
+  "labels": {
+    "live": "the installed harness binary ran in isolated dirs and its output or files were observed",
+    "unvalidated": "documented or inferred, not exercised by this probe"
+  },
+  "probe_sha256": {
+    "fake_mcp.py": "d3bb022e692e24fba680543a7193965e65fa3951d7deff64f2f7a134817cfcbb",
+    "pi_loader.mjs": "217526a34457df652422dff09a944db49f023c29b14a134b072387c08d2babc9",
+    "probe.py": "53f95fd13eae4fc1cc7576103eb60eebc07ad3dae675c46bc84f755bf2dc1f80",
+    "recorder.py": "6a6577923ec3b496d6d2e6425324926ab135679f4a9b4fab6c56c1ad691a36b3"
+  },
+  "result": {
+    "checks": {
+      "instructions": {
+        "answer": {
+          "agents_md": true,
+          "append_system_md": true,
+          "at_import_expanded": false,
+          "symlinked_agents_md": true
+        },
+        "label": "live",
+        "question": "How does Pi take global instructions (DefaultResourceLoader)?"
+      },
+      "mcp_cli_writes": {
+        "answer": {
+          "env_stored_verbatim": true,
+          "indent_kept": true,
+          "same_name_replaced": true,
+          "top_level_unknown_key_kept": true,
+          "user_entry_kept": true
+        },
+        "exit_codes": {
+          "add_env": 0,
+          "add_plain": 0,
+          "readd": 0
+        },
+        "label": "live",
+        "question": "What does `pi mcp add` write, and does it keep the user's entries and unknown keys?"
+      },
+      "mcp_env_by_name": {
+        "answer": {
+          "disabled_user_server_started": false,
+          "env_placeholder": "expanded",
+          "no_env_inherits_PROBE_SECRET": "expanded"
+        },
+        "exit_code": 0,
+        "label": "live",
+        "question": "How do stdio MCP servers get environment values (servers started by `pi mcp list`)?",
+        "servers_started": {
+          "probe-env": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 18,
+            "env_names": [
+              "AI_AGENT",
+              "HOME",
+              "LANG",
+              "PATH",
+              "PI_CODING_AGENT",
+              "PI_CODING_AGENT_DIR",
+              "PI_OFFLINE",
+              "PI_SKIP_VERSION_CHECK",
+              "PI_TELEMETRY",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          },
+          "probe-plain-changed": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 18,
+            "env_names": [
+              "AI_AGENT",
+              "HOME",
+              "LANG",
+              "PATH",
+              "PI_CODING_AGENT",
+              "PI_CODING_AGENT_DIR",
+              "PI_OFFLINE",
+              "PI_SKIP_VERSION_CHECK",
+              "PI_TELEMETRY",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          }
+        }
+      },
+      "mcp_floor": {
+        "answer": "0.99.0 and newer per the changelog (M0-E); only the installed version was run here",
+        "installed": "1.5.0",
+        "label": "unvalidated",
+        "question": "Which Pi versions have native MCP?"
+      },
+      "skills_locations": {
+        "all_loaded": [
+          "agents-skill",
+          "linked-skill",
+          "nested-skill",
+          "package-skill",
+          "pi-skill",
+          "settings-skill"
+        ],
+        "answer": {
+          "agents-skill": true,
+          "linked-skill": true,
+          "nested-skill": true,
+          "package-skill": true,
+          "pi-skill": true,
+          "settings-skill": true
+        },
+        "diagnostics": [],
+        "label": "live",
+        "loader_error": null,
+        "pi_install_exit": 0,
+        "question": "Which skill locations does Pi load (DefaultResourceLoader, no session)?",
+        "settings_after_install": {
+          "packages": [
+            "../data/tongs-agents/pi/package"
+          ],
+          "skills": [
+            "<root>/pi/data/tongs-agents/pi/settings-skills"
+          ]
+        }
+      }
+    },
+    "commands": [
+      {
+        "argv": [
+          "pi",
+          "--version"
+        ],
+        "exit": 0,
+        "seconds": 0.3
+      },
+      {
+        "argv": [
+          "pi",
+          "mcp",
+          "add",
+          "probe-env",
+          "--env",
+          "PROBE_SECRET=${PROBE_SECRET}",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/pi/mcp.log",
+          "probe-env"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "pi",
+          "mcp",
+          "add",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/pi/mcp.log",
+          "probe-plain"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "pi",
+          "mcp",
+          "add",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/pi/mcp.log",
+          "probe-plain-changed"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "pi",
+          "mcp",
+          "list",
+          "--json"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "pi",
+          "install",
+          "<root>/pi/data/tongs-agents/pi/package"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "node",
+          "<probe>/pi_loader.mjs",
+          "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
+          "<root>/pi/pi",
+          "<root>/pi/work"
+        ],
+        "exit": 0,
+        "seconds": 0.3
+      },
+      {
+        "argv": [
+          "node",
+          "<probe>/pi_loader.mjs",
+          "/usr/local/lib/node_modules/@earendil-works/pi-coding-agent",
+          "<root>/pi/pi",
+          "<root>/pi/work"
+        ],
+        "exit": 0,
+        "seconds": 0.4
+      }
+    ],
+    "harness": "pi",
+    "version": "1.5.0"
+  },
+  "user_config": {
+    "~/.agents/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": true
+    },
+    "~/.claude/CLAUDE.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/agents/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.local.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/config.toml": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/hooks.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/mcp.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    }
+  }
+}
