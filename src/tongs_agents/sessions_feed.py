@@ -165,7 +165,9 @@ class WorkspaceFeed(SessionFeed):
         if env.get("ZELLIJ_SESSION_NAME") != self.session:
             return False
         captured = env.get("ZELLIJ_SOCKET_DIR")
-        return not captured or _same_dir(captured, self.socket_dir)
+        if not captured or not self.socket_dir:
+            return True
+        return _same_dir(captured, self.socket_dir)
 
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":

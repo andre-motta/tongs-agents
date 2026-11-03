@@ -81,11 +81,14 @@ def test_hook_rows_are_limited_to_this_session():
     assert [row.repo for row in workspace_feed.snapshot()] == ["here", "here-same-socket"]
 
 
-def test_a_captured_socket_dir_needs_a_known_sidebar_socket_dir():
-    workspace_feed, _ = feed([], [], hooks=[
-        hook_record(repo="default"), hook_record(repo="custom", socket_dir="/run/zj"),
-    ])
-    assert [row.repo for row in workspace_feed.snapshot()] == ["default"]
+def test_socket_dirs_are_compared_only_when_both_are_known():
+    hooks = [hook_record(repo="default"), hook_record(repo="custom", socket_dir="/run/zj")]
+    unknown, _ = feed([], [], hooks=hooks)
+    assert [row.repo for row in unknown.snapshot()] == ["default", "custom"]
+    other, _ = feed([], [], hooks=hooks, socket_dir="/run/other")
+    assert [row.repo for row in other.snapshot()] == ["default"]
+    same, _ = feed([], [], hooks=hooks, socket_dir="/run/zj")
+    assert [row.repo for row in same.snapshot()] == ["default", "custom"]
 
 
 def test_a_hook_row_from_another_session_does_not_hide_its_launch_row():

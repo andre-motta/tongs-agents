@@ -105,8 +105,8 @@ outside Zellij.
 
 The sidebar is per-session; `tongs-agents monitor` remains the fleet-wide
 view. It lists the hook sessions whose captured `ZELLIJ_SESSION_NAME` is its
-session (and, when the hook captured `ZELLIJ_SOCKET_DIR`, whose socket dir
-matches its own) plus every pane the launcher started in its session, joined
+session (and, when both the hook and the sidebar know a `ZELLIJ_SOCKET_DIR`, whose
+socket dir matches) plus every pane the launcher started in its session, joined
 by launch id. Agents in other Zellij sessions or other terminals appear only
 in `tongs-agents monitor`.
 
