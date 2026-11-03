@@ -25,6 +25,7 @@ from tongs_agents.multiplexers.base import (
 
 __all__ = [
     "LAUNCH_SOURCE",
+    "NOTIFY_SOURCE",
     "SORT_KEYS",
     "SessionFeed",
     "WorkspaceFeed",
@@ -41,6 +42,7 @@ Reader = Callable[[], Iterable[dict]]
 LaunchReader = Callable[[str], Iterable[LaunchRecord]]
 
 LAUNCH_SOURCE = "launch"
+NOTIFY_SOURCE = "notify"
 LAUNCH_ID_PREFIX = "launch:"
 
 
@@ -118,10 +120,10 @@ class WorkspaceFeed(SessionFeed):
     The sidebar is per-session; ``tongs-agents monitor`` stays fleet-wide.
     A hook session is kept only when its captured ``ZELLIJ_SESSION_NAME`` is
     ``session`` and, when it captured a socket dir, that dir is
-    ``socket_dir``. A launch record joins its hook session through the
-    launch id. Records with no hook session show their pane state from the
-    multiplexer: running, starting (launcher not claimed yet) or exited with
-    its status.
+    ``socket_dir``. A launch record joins its hook session, or the session
+    ``tongs-agents notify`` reports for it, through the launch id. Records
+    with no such session show their pane state from the multiplexer:
+    running, starting (launcher not claimed yet) or exited with its status.
     A claimed record whose process is gone while its pane id runs something
     else belongs to an earlier session of the same name and is skipped, as
     are records replaced by a later claim.

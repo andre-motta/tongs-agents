@@ -5,8 +5,9 @@ from __future__ import annotations
 from rich.text import Text
 from textual.widgets import DataTable
 
+from tongs_agents.attention import attention_state
 from tongs_agents.models import FleetSession, SessionStatus, format_age
-from tongs_agents.sessions_feed import LAUNCH_SOURCE
+from tongs_agents.sessions_feed import LAUNCH_SOURCE, NOTIFY_SOURCE
 
 FULL_MIN_WIDTH = 80
 COMPACT_FIXED_WIDTHS = {"attention": 1, "icon": 2, "status": 9, "age": 5}
@@ -72,9 +73,15 @@ def compact_status_label(status: SessionStatus) -> str:
 
 
 def status_label(session: FleetSession) -> str:
-    """The status column text; hookless launch rows show their pane state."""
+    """The status column text.
+
+    Hookless launch rows show their pane state; rows reported with
+    ``tongs-agents notify`` show the reported state (working, needs-you, ...).
+    """
     if session.source == LAUNCH_SOURCE and session.detail:
         return session.detail.upper()[:COMPACT_FIXED_WIDTHS["status"]]
+    if session.source == NOTIFY_SOURCE:
+        return attention_state(session).value.upper()
     return session.status.value.upper()
 
 
@@ -162,7 +169,7 @@ class SessionTable(DataTable):
                 icon,
                 Text(session_name(s), style="bold", no_wrap=True, overflow="ellipsis"),
                 Text(
-                    status_label(s) if s.source == LAUNCH_SOURCE
+                    status_label(s) if s.source in (LAUNCH_SOURCE, NOTIFY_SOURCE)
                     else compact_status_label(s.status),
                     style=style,
                 ),

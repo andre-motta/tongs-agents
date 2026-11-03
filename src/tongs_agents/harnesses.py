@@ -56,6 +56,16 @@ HARNESSES = {
         process_identity=ProcessIdentity.EMITTER,
         capabilities=frozenset({"extension-events", "exact-pid-input"}),
     ),
+    # Any other launched command. It has no hook events; ``tongs-agents notify``
+    # writes its records with the launched pid.
+    "other": HarnessSpec(
+        harness_id="other",
+        display_name="Other",
+        process_names=(),
+        events=frozenset(),
+        process_identity=ProcessIdentity.EMITTER,
+        capabilities=frozenset({"notify"}),
+    ),
 }
 
 
