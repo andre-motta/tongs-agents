@@ -6,6 +6,7 @@ output is vendored.
 """
 
 import json
+import os
 import subprocess
 import sys
 
@@ -620,6 +621,68 @@ def test_focus_never_uses_the_terminal_activation_path(fake, monkeypatch):
     assert _mux().focus(PaneRef("zellij", "agents", "3")).selection.succeeded
 
 
+REF = PaneRef("zellij", "agents", "3", SOCKET_DIR)
+
+
+@pytest.fixture
+def runtime(tmp_path, monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    return tmp_path / "state" / "run"
+
+
+def test_paste_names_the_pane_and_passes_text_after_the_separator(fake):
+    _mux().paste(REF, "-first line\nsecond line")
+
+    argv, kwargs = fake.calls[-1]
+    assert argv == [
+        ZELLIJ, "--session", "agents", "action", "paste", "--pane-id", "3", "--",
+        "-first line\nsecond line",
+    ]
+    assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+    assert kwargs["stdin"] is subprocess.DEVNULL
+
+
+def test_paste_is_capped_at_64_kib(fake):
+    _mux().paste(REF, "x" * mux_zellij.MAX_PASTE_BYTES)
+    with pytest.raises(MultiplexerError, match="limit"):
+        _mux().paste(REF, "x" * (mux_zellij.MAX_PASTE_BYTES + 1))
+    with pytest.raises(MultiplexerError, match="limit"):
+        _mux().paste(REF, "é" * (mux_zellij.MAX_PASTE_BYTES // 2 + 1))
+    assert len(fake.calls) == 1
+
+
+@pytest.mark.parametrize("text", [None, b"bytes", "nul\0inside", "\ud800"])
+def test_paste_refuses_text_argv_cannot_carry(fake, text):
+    with pytest.raises(MultiplexerError):
+        _mux().paste(REF, text)
+    assert fake.calls == []
+
+
+def test_paste_failure_is_an_error(fake):
+    fake.responses["paste"] = (1, "", "Session 'agents' not found")
+    with pytest.raises(MultiplexerError, match="paste"):
+        _mux().paste(REF, "hello")
+
+
+def test_send_keys_names_the_pane(fake):
+    _mux().send_keys(REF, ["Enter"])
+
+    argv, _ = fake.calls[-1]
+    assert argv == [
+        ZELLIJ, "--session", "agents", "action", "send-keys", "--pane-id", "3", "--",
+        "Enter",
+    ]
+
+
+@pytest.mark.parametrize(
+    "keys", [[], "Enter", ["-p"], ["Enter\n"], [""], ["x" * 40], [1], ["Enter"] * 17],
+)
+def test_send_keys_refuses_bad_keys(fake, keys):
+    with pytest.raises(MultiplexerError):
+        _mux().send_keys(REF, keys)
+    assert fake.calls == []
+
+
 @pytest.mark.parametrize(
     "call",
     [
@@ -629,10 +692,195 @@ def test_focus_never_uses_the_terminal_activation_path(fake, monkeypatch):
         lambda mux, ref: mux.subscribe(ref),
     ],
 )
-def test_pane_io_is_unsupported_until_m3(fake, call):
-    with pytest.raises(Unsupported):
-        call(_mux(), PaneRef("zellij", "agents", "3"))
+@pytest.mark.parametrize(
+    "ref",
+    [
+        PaneRef("tmux", "agents", "3"),
+        PaneRef("zellij", "agents", "%3"),
+        PaneRef("zellij", "-agents", "3"),
+        PaneRef("zellij", "agents", "3", "relative/dir"),
+        "zellij:agents:3",
+    ],
+)
+def test_pane_io_refuses_bad_refs_before_any_call(fake, runtime, call, ref):
+    with pytest.raises(MultiplexerError):
+        call(_mux(), ref)
     assert fake.calls == []
+
+
+def _dumping(fake, text, *, after=0):
+    """A dump-screen response that writes text to the --path file."""
+    attempts = []
+
+    def respond():
+        argv = fake.calls[-1][0]
+        path = argv[argv.index("--path") + 1]
+        attempts.append(path)
+        if len(attempts) > after and text:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+        return (0, "", "")
+
+    fake.responses["dump-screen"] = respond
+    return attempts
+
+
+def test_capture_dumps_full_scrollback_into_a_private_temp_file(fake, runtime):
+    seen = {}
+    rows = "".join(f"line {index}\n" for index in range(300)) + "\n\n   \n"
+
+    def respond():
+        argv = fake.calls[-1][0]
+        path = argv[argv.index("--path") + 1]
+        seen["mode"] = os.stat(path).st_mode & 0o777
+        seen["dir_mode"] = os.stat(os.path.dirname(path)).st_mode & 0o777
+        seen["path"] = path
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(rows)
+        return (0, "", "")
+
+    fake.responses["dump-screen"] = respond
+    text = _mux().capture(REF, lines=3)
+
+    argv, _ = fake.calls[-1]
+    assert argv[:9] == [
+        ZELLIJ, "--session", "agents", "action", "dump-screen", "--full",
+        "--pane-id", "3", "--path",
+    ]
+    assert text == "line 297\nline 298\nline 299"
+    assert seen["mode"] == 0o600 and seen["dir_mode"] == 0o700
+    assert os.path.dirname(seen["path"]) == str(runtime / mux_zellij.CAPTURE_DIR)
+    assert not os.path.exists(seen["path"])
+
+
+def test_capture_waits_briefly_for_a_late_dump(fake, runtime, monkeypatch):
+    paths_seen = _dumping(fake, "", after=0)
+    sleeps = []
+
+    def late_write(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) == 2:
+            with open(paths_seen[0], "w", encoding="utf-8") as handle:
+                handle.write("prompt> hello\n")
+
+    monkeypatch.setattr(mux_zellij.time, "sleep", late_write)
+    assert _mux().capture(REF) == "prompt> hello"
+    assert len(sleeps) == 2
+
+
+def test_capture_of_a_blank_pane_is_empty(fake, runtime):
+    fake.responses["dump-screen"] = (0, "", "")
+    assert _mux().capture(REF) == ""
+    assert list((runtime / mux_zellij.CAPTURE_DIR).iterdir()) == []
+
+
+def test_capture_reads_only_the_tail_of_a_huge_dump(fake, runtime, monkeypatch):
+    monkeypatch.setattr(mux_zellij, "MAX_CAPTURE_BYTES", 64)
+    _dumping(fake, "a" * 500 + "\nlast line\n")
+    assert _mux().capture(REF, lines=1) == "last line"
+
+
+def test_capture_unlinks_the_file_when_zellij_fails(fake, runtime):
+    fake.responses["dump-screen"] = (1, "", "Session 'agents' not found")
+    with pytest.raises(MultiplexerError):
+        _mux().capture(REF)
+    assert list((runtime / mux_zellij.CAPTURE_DIR).iterdir()) == []
+
+
+@pytest.mark.parametrize("lines", [0, -1, 10_001, 2.5, True, "5"])
+def test_capture_refuses_bad_line_counts(fake, runtime, lines):
+    with pytest.raises(MultiplexerError):
+        _mux().capture(REF, lines=lines)
+    assert fake.calls == []
+
+
+def _script(tmp_path, body):
+    path = tmp_path / "fake-zellij"
+    path.write_text(f"#!{sys.executable}\n{body}")
+    path.chmod(0o755)
+    return str(path)
+
+
+SUBSCRIBER = r"""import json, os, sys, time
+with open(os.environ["ARGV_LOG"], "w") as handle:
+    json.dump(sys.argv[1:], handle)
+for index in range(int(os.environ.get("EVENTS", "3"))):
+    print(json.dumps({"event": "pane_update", "pane_id": "terminal_3",
+                      "viewport": [f"row {index}"]}), flush=True)
+    print("", flush=True)
+time.sleep(float(os.environ.get("LINGER", "30")))
+"""
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipes and signals")
+def test_subscribe_yields_bounded_json_events_and_stops_its_child(tmp_path, monkeypatch):
+    log = tmp_path / "argv.json"
+    monkeypatch.setenv("ARGV_LOG", str(log))
+    started = []
+    real_popen = subprocess.Popen
+
+    def popen(*args, **kwargs):
+        process = real_popen(*args, **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    mux = ZellijMultiplexer(socket_dir=SOCKET_DIR, binary=_script(tmp_path, SUBSCRIBER))
+
+    events = mux.subscribe(REF, max_events=2, timeout=10)
+    assert started == []
+    received = list(events)
+
+    assert [event["viewport"] for event in received] == [["row 0"], ["row 1"]]
+    assert json.loads(log.read_text()) == [
+        "--session", "agents", "subscribe", "--pane-id", "3", "--format", "json",
+    ]
+    assert started[0].poll() is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipes and signals")
+def test_subscribe_close_terminates_the_child(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARGV_LOG", str(tmp_path / "argv.json"))
+    started = []
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(
+        subprocess, "Popen",
+        lambda *a, **k: started.append(real_popen(*a, **k)) or started[-1],
+    )
+    mux = ZellijMultiplexer(binary=_script(tmp_path, SUBSCRIBER))
+
+    events = mux.subscribe(REF, max_events=100, timeout=10)
+    assert next(events)["pane_id"] == "terminal_3"
+    events.close()
+
+    assert started[0].poll() is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipes and signals")
+def test_subscribe_ends_at_its_deadline(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARGV_LOG", str(tmp_path / "argv.json"))
+    monkeypatch.setenv("EVENTS", "1")
+    mux = ZellijMultiplexer(binary=_script(tmp_path, SUBSCRIBER))
+
+    received = list(mux.subscribe(REF, max_events=100, timeout=0.5))
+
+    assert len(received) == 1
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX pipes and signals")
+def test_subscribe_refuses_unrecognized_output(tmp_path):
+    mux = ZellijMultiplexer(binary=_script(tmp_path, 'print("not json", flush=True)\n'))
+    with pytest.raises(MultiplexerError, match="subscribe"):
+        list(mux.subscribe(REF, timeout=5))
+
+
+@pytest.mark.parametrize(
+    "options", [{"max_events": 0}, {"max_events": 1.5}, {"timeout": 0},
+                {"timeout": True}, {"timeout": 7200}],
+)
+def test_subscribe_refuses_unbounded_options(options):
+    with pytest.raises(MultiplexerError):
+        ZellijMultiplexer(binary=ZELLIJ).subscribe(REF, **options)
 
 
 def test_package_exports_the_interface():

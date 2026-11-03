@@ -1,0 +1,326 @@
+{
+  "schema": "send-validation/1",
+  "provenance": "instrumented",
+  "runs": {
+    "0.44.2": {
+      "schema": "send-validation-run/1",
+      "result": "pass",
+      "error": null,
+      "zellij_version": "zellij 0.44.2",
+      "provenance": "instrumented",
+      "provenance_detail": "real zellij server (headless session), real tongs-agents spawn path, launcher and send/read/wait/agent-status CLI processes in a private root; a fake REPL fixture with bracketed paste stands in for agents and logs submitted prompts",
+      "fixtures": {
+        "r1": "fake REPL profile (harness other) spawned by tongs-agents",
+        "r2": "fake REPL profile (harness other) spawned by tongs-agents",
+        "plain pane": "fake REPL started by zellij new-pane without a launch record",
+        "claude, codex and pi on PATH": "stub CLI that records its arguments"
+      },
+      "send_delay_ms": 150,
+      "spawn": {
+        "profiles": [
+          "r1",
+          "r2"
+        ],
+        "claimed": true,
+        "seconds": 0.13,
+        "pane_ids": {
+          "r1": "1",
+          "r2": "2"
+        },
+        "socket_dir_recorded": true
+      },
+      "multi_line": {
+        "argv": [
+          "tongs-agents",
+          "send",
+          "<r1>",
+          "-"
+        ],
+        "exit_code": 0,
+        "sent_lines": 3,
+        "submitted_prompts": 1,
+        "text_intact": true,
+        "pastes_in_prompt": 1,
+        "received_lines": 3
+      },
+      "concurrent": {
+        "senders": 4,
+        "separate_processes": true,
+        "bytes_each": 2094,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "seconds": 2.18,
+        "submitted_prompts": 4,
+        "all_intact": true,
+        "sha256_match": true,
+        "one_paste_each": true
+      },
+      "read": {
+        "argv": [
+          "tongs-agents",
+          "read",
+          "<r2>",
+          "--lines",
+          "5"
+        ],
+        "send_exit_code": 0,
+        "exit_code": 0,
+        "lines_returned": 4,
+        "acknowledgement_in_tail": true,
+        "last_line_is_prompt": true,
+        "one_line_exit_code": 0,
+        "one_line_is_prompt": true
+      },
+      "status": {
+        "agent_status_exit_code": 0,
+        "state": "quiet",
+        "wait_exit_code": 2,
+        "wait_output": "timeout"
+      },
+      "not_spawned": {
+        "plain_pane": "a fake REPL started with zellij new-pane, no launch record",
+        "plain_pane_ready": true,
+        "cases": {
+          "unknown launch id": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: launch <id> was not spawned by tongs-agents"
+          },
+          "malformed launch id": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: not a tongs-agents launch id"
+          },
+          "unclaimed launch record": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: launch <id> has not been claimed by its pane"
+          }
+        },
+        "plain_pane_prompts": 0
+      },
+      "stale_launch": {
+        "session": "killed, deleted and recreated with the same name",
+        "old_pane_id": "1",
+        "pane_id_reused_by_other_program": true,
+        "send_exit_code": 5,
+        "read_exit_code": 5,
+        "agent_status_exit_code": 5,
+        "refusal": "tongs-agents: launch <r1>: pane 1 no longer runs the launched process (stale launch)",
+        "reused_pane_prompts": 0
+      },
+      "audit": {
+        "mode": "0o600",
+        "lines": 19,
+        "fields": [
+          "action",
+          "actor",
+          "bytes",
+          "caller_launch_id",
+          "exit_code",
+          "launch_id",
+          "outcome",
+          "sha256",
+          "ts"
+        ],
+        "sends_ok": 6,
+        "sends_refused": 4,
+        "sent_text_found": false
+      },
+      "cleanup": {
+        "tracked": 8,
+        "survivors": 0,
+        "marker_strays": 0,
+        "temp_dir_removed": true,
+        "marker_strays_after_run": 0
+      },
+      "user_config_unchanged": true,
+      "user_agent_config_unchanged": true,
+      "user_zellij_cache_entries_for_run": 0,
+      "duration_seconds": 11.0,
+      "platform": {
+        "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+        "kernel_release": "7.2.11-200.fc44.x86_64",
+        "desktop": "KDE",
+        "session_type": "wayland",
+        "python_version": "3.14.8"
+      },
+      "tested_commit": "694ab5b91d25e2e21c2f048bdcbc47b7573ca479",
+      "modified_since_commit": false,
+      "sha256": {
+        "src/tongs_agents/commands/supervisor.py": "c30ee3517a9eaf615c57c888fe2cb6c76fc6df53277fe9bf571585f695b4f28a",
+        "src/tongs_agents/control.py": "fe9312092e22ac617b28409e988c9bd0eefb912125a997a125fbc442e3abf796",
+        "src/tongs_agents/launch.py": "5eaba1a54cb5ea7342e3e1209408db61918ddcb8d402e1976a31f2c9217040e4",
+        "src/tongs_agents/launches.py": "54ad8c0f7668f88f35def09435fde30a414c97cc54870a3e7079fcb4f9f3236d",
+        "src/tongs_agents/multiplexers/zellij.py": "fd8d53f46b2cba3f467d36228ec9fe12f4f160f855f88f750aa0ea2dc956ad7b",
+        "src/tongs_agents/workspace_spawn.py": "462a0aa712598f7a8617eca6ec4d72dd54583af26875d2d6abeeee86fe9a31bf",
+        "validation/fixtures/fake_repl.py": "63c7adb36164ba465316144ae14e78be4bd2e3ebfa2333d0d7e1ec43699a75eb",
+        "validation/send.py": "ce16c6d133c5eca867d270b416afd02e6672629f4b04f14fe40e000c45aeadf4"
+      }
+    },
+    "0.45.1": {
+      "schema": "send-validation-run/1",
+      "result": "pass",
+      "error": null,
+      "zellij_version": "zellij 0.45.1",
+      "provenance": "instrumented",
+      "provenance_detail": "real zellij server (headless session), real tongs-agents spawn path, launcher and send/read/wait/agent-status CLI processes in a private root; a fake REPL fixture with bracketed paste stands in for agents and logs submitted prompts",
+      "fixtures": {
+        "r1": "fake REPL profile (harness other) spawned by tongs-agents",
+        "r2": "fake REPL profile (harness other) spawned by tongs-agents",
+        "plain pane": "fake REPL started by zellij new-pane without a launch record",
+        "claude, codex and pi on PATH": "stub CLI that records its arguments"
+      },
+      "send_delay_ms": 150,
+      "spawn": {
+        "profiles": [
+          "r1",
+          "r2"
+        ],
+        "claimed": true,
+        "seconds": 0.11,
+        "pane_ids": {
+          "r1": "1",
+          "r2": "2"
+        },
+        "socket_dir_recorded": true
+      },
+      "multi_line": {
+        "argv": [
+          "tongs-agents",
+          "send",
+          "<r1>",
+          "-"
+        ],
+        "exit_code": 0,
+        "sent_lines": 3,
+        "submitted_prompts": 1,
+        "text_intact": true,
+        "pastes_in_prompt": 1,
+        "received_lines": 3
+      },
+      "concurrent": {
+        "senders": 4,
+        "separate_processes": true,
+        "bytes_each": 2094,
+        "exit_codes": [
+          0,
+          0,
+          0,
+          0
+        ],
+        "seconds": 1.93,
+        "submitted_prompts": 4,
+        "all_intact": true,
+        "sha256_match": true,
+        "one_paste_each": true
+      },
+      "read": {
+        "argv": [
+          "tongs-agents",
+          "read",
+          "<r2>",
+          "--lines",
+          "5"
+        ],
+        "send_exit_code": 0,
+        "exit_code": 0,
+        "lines_returned": 4,
+        "acknowledgement_in_tail": true,
+        "last_line_is_prompt": true,
+        "one_line_exit_code": 0,
+        "one_line_is_prompt": true
+      },
+      "status": {
+        "agent_status_exit_code": 0,
+        "state": "quiet",
+        "wait_exit_code": 2,
+        "wait_output": "timeout"
+      },
+      "not_spawned": {
+        "plain_pane": "a fake REPL started with zellij new-pane, no launch record",
+        "plain_pane_ready": true,
+        "cases": {
+          "unknown launch id": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: launch <id> was not spawned by tongs-agents"
+          },
+          "malformed launch id": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: not a tongs-agents launch id"
+          },
+          "unclaimed launch record": {
+            "send_exit_code": 5,
+            "read_exit_code": 5,
+            "refusal": "tongs-agents: launch <id> has not been claimed by its pane"
+          }
+        },
+        "plain_pane_prompts": 0
+      },
+      "stale_launch": {
+        "session": "killed, deleted and recreated with the same name",
+        "old_pane_id": "1",
+        "pane_id_reused_by_other_program": true,
+        "send_exit_code": 5,
+        "read_exit_code": 5,
+        "agent_status_exit_code": 5,
+        "refusal": "tongs-agents: launch <r1>: pane 1 no longer runs the launched process (stale launch)",
+        "reused_pane_prompts": 0
+      },
+      "audit": {
+        "mode": "0o600",
+        "lines": 19,
+        "fields": [
+          "action",
+          "actor",
+          "bytes",
+          "caller_launch_id",
+          "exit_code",
+          "launch_id",
+          "outcome",
+          "sha256",
+          "ts"
+        ],
+        "sends_ok": 6,
+        "sends_refused": 4,
+        "sent_text_found": false
+      },
+      "cleanup": {
+        "tracked": 8,
+        "survivors": 0,
+        "marker_strays": 0,
+        "temp_dir_removed": true,
+        "marker_strays_after_run": 0
+      },
+      "user_config_unchanged": true,
+      "user_agent_config_unchanged": true,
+      "user_zellij_cache_entries_for_run": 0,
+      "duration_seconds": 10.2,
+      "platform": {
+        "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+        "kernel_release": "7.2.11-200.fc44.x86_64",
+        "desktop": "KDE",
+        "session_type": "wayland",
+        "python_version": "3.14.8"
+      },
+      "tested_commit": "694ab5b91d25e2e21c2f048bdcbc47b7573ca479",
+      "modified_since_commit": false,
+      "sha256": {
+        "src/tongs_agents/commands/supervisor.py": "c30ee3517a9eaf615c57c888fe2cb6c76fc6df53277fe9bf571585f695b4f28a",
+        "src/tongs_agents/control.py": "fe9312092e22ac617b28409e988c9bd0eefb912125a997a125fbc442e3abf796",
+        "src/tongs_agents/launch.py": "5eaba1a54cb5ea7342e3e1209408db61918ddcb8d402e1976a31f2c9217040e4",
+        "src/tongs_agents/launches.py": "54ad8c0f7668f88f35def09435fde30a414c97cc54870a3e7079fcb4f9f3236d",
+        "src/tongs_agents/multiplexers/zellij.py": "fd8d53f46b2cba3f467d36228ec9fe12f4f160f855f88f750aa0ea2dc956ad7b",
+        "src/tongs_agents/workspace_spawn.py": "462a0aa712598f7a8617eca6ec4d72dd54583af26875d2d6abeeee86fe9a31bf",
+        "validation/fixtures/fake_repl.py": "63c7adb36164ba465316144ae14e78be4bd2e3ebfa2333d0d7e1ec43699a75eb",
+        "validation/send.py": "ce16c6d133c5eca867d270b416afd02e6672629f4b04f14fe40e000c45aeadf4"
+      }
+    }
+  }
+}

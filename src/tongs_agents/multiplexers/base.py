@@ -1,8 +1,10 @@
 """Pane-lifecycle abstraction for terminal multiplexers.
 
-A Multiplexer creates, lists and selects panes inside a multiplexer session.
-It sits beside TerminalAPI, which focuses an existing agent from outside:
-a Multiplexer never activates an emulator window.
+A Multiplexer creates, lists and selects panes inside a multiplexer session,
+and pastes into, sends keys to and captures a pane. It sits beside
+TerminalAPI, which focuses an existing agent from outside: a Multiplexer never
+activates an emulator window. Adapters hold no policy: which panes may be
+driven is decided by ``tongs_agents.control`` alone.
 """
 
 from __future__ import annotations
@@ -77,10 +79,23 @@ class Multiplexer(Protocol):
 
     def focus(self, ref: PaneRef) -> FocusResult: ...
 
-    def paste(self, ref: PaneRef, text: str) -> None: ...
+    def paste(self, ref: PaneRef, text: str) -> None:
+        """Paste text into the pane as one bracketed paste; never submits it."""
+        ...
 
-    def send_keys(self, ref: PaneRef, keys: list[str]) -> None: ...
+    def send_keys(self, ref: PaneRef, keys: list[str]) -> None:
+        """Send named keys (for example ``["Enter"]``) to the pane."""
+        ...
 
-    def capture(self, ref: PaneRef, lines: int = 200) -> str: ...
+    def capture(self, ref: PaneRef, lines: int = 200) -> str:
+        """The last ``lines`` lines of the pane's screen and scrollback."""
+        ...
 
-    def subscribe(self, ref: PaneRef) -> Iterator[dict]: ...
+    def subscribe(
+        self, ref: PaneRef, *, max_events: int = 1000, timeout: float = 60.0
+    ) -> Iterator[dict]:
+        """Bounded render updates of the pane; closing it stops the child.
+
+        A primitive only: it is not a status source.
+        """
+        ...

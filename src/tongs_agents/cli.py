@@ -1109,7 +1109,8 @@ def build_parser(modules=None):
         "uninstall", help="Remove agent monitoring",
         description=(
             "Remove agent monitoring: hooks and MCP entries, plus session records for the "
-            "default or --agent all selection unless --keep-data. The "
+            "default or --agent all selection, or when a config directory option is given, "
+            "unless --keep-data. The "
             f"<name>{owned.BACKUP_SUFFIX} copies install kept before its first "
             "edit of settings.json or hooks.json are left in place; delete them yourself "
             "once you no longer need them."
