@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from tongs_agents import paths, profiles
+from tongs_agents import launches, paths, profiles
 from tongs_agents.profiles import Profile, ProfileError, load_profiles
 
 
@@ -232,3 +232,10 @@ def test_foreign_owned_config_is_refused(config_dir, monkeypatch):
     monkeypatch.setattr(profiles.os, "getuid", lambda: real_getuid() + 1)
     with pytest.raises(ProfileError, match="another user"):
         load_profiles()
+
+
+def test_name_patterns_reject_trailing_newline():
+    assert not profiles.PROFILE_NAME_RE.match("claude-alt\n")
+    assert not profiles.ENV_KEY_RE.match("FOO\n")
+    assert not launches.is_launch_id("a" * 32 + "\n")
+    assert profiles.PROFILE_NAME_RE.match("claude-alt")

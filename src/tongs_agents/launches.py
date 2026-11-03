@@ -27,7 +27,7 @@ from tongs_agents.profiles import HARNESSES, PROFILE_NAME_RE, Profile
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 64 * 1024
 MAX_TEXT_LENGTH = 1024
-LAUNCH_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+LAUNCH_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 STATES = ("pending", "running")
 
 

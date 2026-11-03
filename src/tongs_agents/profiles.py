@@ -22,8 +22,8 @@ from tongs_agents import paths
 CONFIG_FILE_NAME = "config.toml"
 MAX_CONFIG_BYTES = 64 * 1024
 MAX_ENV_VALUE_BYTES = 4 * 1024
-PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
-ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+PROFILE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}\Z")
+ENV_KEY_RE = re.compile(r"^[A-Z_][A-Z0-9_]*\Z")
 RESERVED_ENV_PREFIX = "TONGS_AGENTS_"
 
 Harness = Literal["claude", "codex", "pi", "other"]
