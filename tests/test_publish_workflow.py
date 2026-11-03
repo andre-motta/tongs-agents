@@ -1,6 +1,7 @@
 """Text-level contract for the release pipeline, so drift fails without a YAML parser."""
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -79,6 +80,21 @@ def test_tests_workflow_runs_plugin_tests_with_tongs_extra():
     body = tongs_jobs[0]
     assert 'python-version: "3.12"' in body
     assert re.search(r"^\s+run: pytest", body, re.M)
+
+
+def test_tests_workflow_runs_lowest_textual_on_oldest_python():
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    textual = [d for d in dependencies["project"]["dependencies"] if d.startswith("textual")]
+    floor = re.fullmatch(r"textual>=(\d+),<\d+", textual[0])
+    assert floor, textual
+    lowest = [
+        body for body in _jobs("test.yml").values()
+        if f'"textual=={floor.group(1)}.0.0"' in body
+    ]
+    assert len(lowest) == 1
+    assert 'python-version: "3.11"' in lowest[0]
+    assert 'pip install -e ".[dev]"' in lowest[0]
+    assert re.search(r"^\s+run: pytest", lowest[0], re.M)
 
 
 def test_publish_triggers_only_on_version_tags():
