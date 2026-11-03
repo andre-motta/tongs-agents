@@ -12,6 +12,11 @@ hookless rows by selecting their pane directly after checking it is listed.
 folder with path completion and optional extra arguments, started through
 the same spawn path as ``tongs-agents run``.
 
+``:`` (or the palette's Command line) opens the command line
+(``widgets.command_line``): ``run PROFILE [DIR] [-- ARGS]`` with the CLI's
+syntax and checks, in this session, with history and Tab completion; the
+result or the error shows under the prompt and Escape closes it.
+
 Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
 the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
 selected launched pane, each confirmed in a dialog), Post to chat and Open
@@ -51,11 +56,13 @@ from tongs_agents.multiplexers import (
     PaneRef,
     get_multiplexer,
 )
-from tongs_agents.palette import AppShell, PaletteCommand
+from tongs_agents.palette import COMMAND_LINE, AppShell, PaletteCommand
+from tongs_agents.profiles import load_profiles
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
 from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel
+from tongs_agents.widgets.command_line import CommandContext, CommandLine
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 NAME = "sidebar"
@@ -119,12 +126,14 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("plus", "add_agent", "Add agent", show=True),
+        Binding("colon", "command_line", "Command", show=True, key_display=":"),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
         Binding("a", "review_access", "Access", show=True),
     ]
 
     agents_panel_id = "agents-panel"
+    command_line_id = "command-line"
 
     def __init__(
         self,
@@ -172,6 +181,10 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
                          refusal=self.chat_refusal, id=self.chat_panel_id)
         chat.display = False
         yield chat
+        yield CommandLine(
+            CommandContext(self.multiplexer, self.session, load_profiles),
+            id=self.command_line_id,
+        )
         yield AppFooter()
 
     def on_mount(self) -> None:
@@ -188,7 +201,26 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         commands = super().palette_commands()
         chat = len(self.chat_commands()) if self.chat_enabled else 0
         at = len(commands) - chat
-        return [*commands[:at], *self.approval_commands(), *commands[at:]]
+        entry = PaletteCommand(
+            COMMAND_LINE,
+            f"Type a workspace verb (run PROFILE [DIR] [-- ARGS]) for session {self.session}",
+            self.action_command_line,
+        )
+        return [*commands[:at], entry, *self.approval_commands(), *commands[at:]]
+
+    @property
+    def command_line(self) -> CommandLine:
+        return self.query_one(f"#{self.command_line_id}", CommandLine)
+
+    def action_command_line(self) -> None:
+        self.command_line.open()
+
+    def on_command_line_ran(self, event: CommandLine.Ran) -> None:
+        if event.ok:
+            self.agents_panel.poll()
+
+    def on_command_line_closed(self, event: CommandLine.Closed) -> None:
+        self.agents_panel.table.focus()
 
     @work(thread=True, exclusive=True, group="spawn-request")
     def consume_spawn_request(self) -> None:

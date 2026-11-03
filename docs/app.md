@@ -105,11 +105,34 @@ to Textual's own entries (theme switcher, keys, quit) it lists:
 
 The monitor counts as inside a session when it runs in a Zellij pane (the
 sidebar also detects tmux); started elsewhere it offers only the last four
-commands. In the sidebar the
-palette also has the chat entries (`Grant chat`, `Grant chat and wake`,
+commands. In the sidebar the palette also has `Command line`, which opens the
+[sidebar command line](#sidebar-command-line) like `:`, and the chat entries (`Grant chat`, `Grant chat and wake`,
 `Revoke chat`, `Post to chat`, `Toggle chat` and `Open chat pane`); see
 [agent chat](chat.md). A spawn that fails is shown as an error notification and
 its launch record is removed.
+
+## Sidebar command line
+
+`:` in the sidebar (or `Command line` in its palette) opens a one-line prompt
+at the bottom for workspace verbs. It takes them with exactly the syntax,
+checks and messages of the CLI, because it uses the CLI verb's own argument
+parser, and it always works on the session the sidebar runs in:
+
+| Verb | What it does |
+| --- | --- |
+| `run PROFILE [DIR] [-- ARGS ...]` | Same as [`tongs-agents run`](workspace.md#adding-agents-run) inside the session: adds a pane for the profile, in DIR, with ARGS appended for this launch. DIR defaults to the folder the sidebar started in, and a relative DIR is resolved from there. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
+
+The line is split like a shell line (`run alpha ~/src -- --resume 'two
+words'`) but never run through a shell: a first word that is not a verb, such
+as `ls` or `!make`, is refused and nothing runs. `run -h` shows the verb's
+help.
+
+| Key | Action |
+| --- | --- |
+| Enter | Run the line. The result (`started alpha in /src/app with --resume`) or the error (an unknown profile, a missing folder, an argparse usage error with the usage line) is shown under the prompt; a refused line stays in the prompt to be fixed. |
+| Up, Down | Older and newer lines from the history. The history keeps the last 100 submitted lines, in memory only, for as long as the sidebar runs; Down past the newest line brings back what you were typing. |
+| Tab | Completes the word at the end of the line: the verb, a profile name, or a folder (`~` expanded, relative to the sidebar's folder, hidden folders only after a typed dot). When several remain it extends to their common start and lists them under the prompt. Arguments after `--` and options are not completed. |
+| Escape | Closes the prompt and returns to the agents list. |
 
 ## Theme
 
