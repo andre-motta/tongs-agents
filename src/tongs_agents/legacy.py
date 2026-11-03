@@ -16,6 +16,10 @@ LEGACY_HOOK_SCRIPTS = (
 )
 LEGACY_MCP_NAME = "fleet"
 LEGACY_MCP_MODULES = ("claude_fleet_monitor.mcp_server",)
+# The bash-era installer registered ``uv run --directory ~/.claude/fleet-mcp server.py``.
+LEGACY_MCP_RUNNER = "uv"
+LEGACY_MCP_DIR_NAME = "fleet-mcp"
+LEGACY_MCP_SCRIPT = "server.py"
 LEGACY_PI_CONFIG_NAME = "claude-fleet-monitor.json"
 LEGACY_PI_CONFIG_OWNER = "claude-fleet-monitor"
 LEGACY_PACKAGE = "claude_fleet_monitor"

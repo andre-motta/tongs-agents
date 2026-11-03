@@ -36,7 +36,7 @@ MCP_MODULE = "tongs_agents.mcp_server"
 MCP_NAME = "tongs-agents"
 MCP_NAMES = (MCP_NAME, legacy.LEGACY_MCP_NAME)
 FLEET_FILE_PATTERNS = (
-    "*.json",
+    "fleet-v*-*.json",
     ".fleet-v*-*.lock",
     ".fleet-identity-v*-*.lock",
     ".fleet-tmp-*.tmp",
@@ -103,15 +103,48 @@ def _is_legacy_script(path):
         return False
 
 
+def _starts_with_legacy_script(command):
+    """The bash-era installer wrote ``<script> <arg>`` unquoted, so a HOME with a
+    space splits argv[0]; try each prefix that ends at a space or the end."""
+    ends = [index for index, char in enumerate(command) if char == " "]
+    return any(_is_legacy_script(command[:end]) for end in [*ends, len(command)] if end)
+
+
 def _is_owned_hook(hook):
     if not isinstance(hook, dict) or not isinstance(hook.get("command"), str):
         return False
     argv = _command_argv(hook["command"])
-    if not argv or not argv[0]:
-        return False
-    if _executable_name(argv[0]) in (HOOK_COMMAND, *legacy.LEGACY_HOOK_COMMANDS):
-        return True
-    return _is_legacy_script(argv[0])
+    if argv and argv[0]:
+        if _executable_name(argv[0]) in (HOOK_COMMAND, *legacy.LEGACY_HOOK_COMMANDS):
+            return True
+        if _is_legacy_script(argv[0]):
+            return True
+    return _starts_with_legacy_script(hook["command"])
+
+
+def _same_path(left, right):
+    def normal(value):
+        return os.path.normcase(os.path.abspath(os.path.expanduser(value)))
+    return normal(str(left)) == normal(str(right))
+
+
+def legacy_mcp_dir():
+    return CLAUDE_DIR / legacy.LEGACY_MCP_DIR_NAME
+
+
+def _is_legacy_uv_mcp(transport):
+    command = transport.get("command")
+    args = transport.get("args")
+    return (
+        isinstance(command, str)
+        and _executable_name(command).lower() == legacy.LEGACY_MCP_RUNNER
+        and isinstance(args, list)
+        and len(args) == 4
+        and args[:2] == ["run", "--directory"]
+        and args[3] == legacy.LEGACY_MCP_SCRIPT
+        and isinstance(args[2], str)
+        and _same_path(args[2], legacy_mcp_dir())
+    )
 
 
 def _is_owned_mcp(config):
@@ -126,7 +159,7 @@ def _is_owned_mcp(config):
         isinstance(command, str)
         and transport.get("args") in owned_args
         and _executable_name(command).lower().startswith("python")
-    )
+    ) or _is_legacy_uv_mcp(transport)
 
 
 def _is_current_mcp(config):
@@ -595,9 +628,38 @@ def _remove_legacy_codex_mcp(codex_cmd, directory=None):
         _run_codex_mcp(codex_cmd, ["remove", legacy.LEGACY_MCP_NAME], "remove", directory)
 
 
+def _codex_add_arguments(command, args, env=None):
+    flags = [part for key, value in (env or {}).items() for part in ("--env", f"{key}={value}")]
+    return ["add", MCP_NAME, *flags, "--", command, *args]
+
+
+def _restore_codex_mcp(codex_cmd, previous, directory=None):
+    """Re-add a replaced entry after a failed add, and say what to rerun."""
+    rerun = Target("codex", directory).install_command()
+    transport = previous.get("transport", previous)
+    env = transport.get("env")
+    if not isinstance(env, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in env.items()
+    ):
+        env = None
+    restored = _run_codex_mcp(
+        codex_cmd,
+        _codex_add_arguments(transport["command"], transport["args"], env),
+        "restore",
+        directory,
+    )
+    if restored:
+        print(f"  Restored the previous Codex MCP server {MCP_NAME}; "
+              f"run '{rerun}' to retry the update")
+    else:
+        print(f"  The previous Codex MCP server {MCP_NAME} was removed and could not be "
+              f"restored; run '{rerun}' to register it again")
+
+
 def _install_codex_mcp(codex_cmd, directory=None):
     _remove_legacy_codex_mcp(codex_cmd, directory)
     existing = _get_codex_mcp(codex_cmd, MCP_NAME, directory)
+    replaced = None
     if existing is not None:
         if not _is_owned_mcp(existing):
             print(f"  Kept existing Codex MCP server named {MCP_NAME}")
@@ -606,12 +668,15 @@ def _install_codex_mcp(codex_cmd, directory=None):
             return
         if not _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "replace", directory):
             return
-    _run_codex_mcp(
+        replaced = existing
+    added = _run_codex_mcp(
         codex_cmd,
-        ["add", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
+        _codex_add_arguments(sys.executable, ["-m", MCP_MODULE]),
         "add",
         directory,
     )
+    if not added and replaced is not None:
+        _restore_codex_mcp(codex_cmd, replaced, directory)
 
 
 def _uninstall_codex_mcp(codex_cmd, directory=None):
@@ -792,17 +857,40 @@ def cmd_install(args):
             print("In Codex, review installed hooks with /hooks.")
 
 
+def _legacy_mcp_registrations():
+    """Claude Code MCP entries that still start the bash-era server."""
+    found = []
+    for path, servers in (
+        (CLAUDE_USER_CONFIG, _claude_user_servers()),
+        (SETTINGS_FILE, _claude_user_servers(SETTINGS_FILE)),
+    ):
+        for name, config in servers.items():
+            transport = config.get("transport", config) if isinstance(config, dict) else None
+            if isinstance(transport, dict) and _is_legacy_uv_mcp(transport):
+                found.append((path, name))
+    return found
+
+
 def _remove_legacy_claude_files():
     bin_dir = CLAUDE_DIR / "bin"
-    mcp_dir = CLAUDE_DIR / "fleet-mcp"
+    mcp_dir = legacy_mcp_dir()
     for name in ("fleet-hook.sh", "fleet-monitor.sh", "fleet-focus.sh"):
         f = bin_dir / name
         if f.exists():
             f.unlink()
             print(f"  Removed legacy {f}")
-    if mcp_dir.exists():
-        shutil.rmtree(mcp_dir)
-        print(f"  Removed legacy {mcp_dir}")
+    if not mcp_dir.exists():
+        return
+    registered = _legacy_mcp_registrations()
+    if registered:
+        path, name = registered[0]
+        print(f"  Kept legacy {mcp_dir} because {path} still registers MCP server "
+              f"'{name}' from it; run "
+              f"'{_command_string(['claude', 'mcp', 'remove', '--scope', 'user', name])}' "
+              "and uninstall again")
+        return
+    shutil.rmtree(mcp_dir)
+    print(f"  Removed legacy {mcp_dir}")
 
 
 def cmd_uninstall(args):
@@ -817,8 +905,6 @@ def cmd_uninstall(args):
 
     commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
     for target in hook_targets:
-        if target.directory is None and target.harness == "claude":
-            _remove_legacy_claude_files()
         if target.directory is None or os.path.lexists(target.config_file):
             config = load_json(target.config_file)
             _remove_hooks(config)
@@ -832,6 +918,8 @@ def cmd_uninstall(args):
             _uninstall_claude_mcp(command, target.directory)
         elif command:
             _uninstall_codex_mcp(command, target.directory)
+        if target.directory is None and target.harness == "claude":
+            _remove_legacy_claude_files()
 
     pi_failed = False
     if pi_targets:
@@ -899,7 +987,7 @@ def hook_report(config, harness):
                 if not _is_owned_hook(hook):
                     continue
                 argv = _command_argv(hook["command"])
-                if _executable_name(argv[0]) != HOOK_COMMAND:
+                if not argv or _executable_name(argv[0]) != HOOK_COMMAND:
                     legacy_commands += 1
                     continue
                 if event in expected and expected[event] in argv[1:2]:
