@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.10.1 (experimental)
+
+The first round of feedback from using 0.10.0 every day: start empty, add
+agents on demand, see one agent at a time, and bring open sessions in.
 
 ### Changed
 
@@ -24,6 +27,25 @@
   palette): a profile picker, a folder field with directory completion and
   an arguments field, with the resulting command shown before it starts.
 - `tongs-agents --version`.
+- One agent at a time (`[workspace] layout = "single"`, the default): the
+  sidebar on the left and one agent in the main area. On Zellij agents share
+  a stacked column whose collapsed title lines act as tabs, with a capacity
+  check and automatic recovery of the stack's home pane; on tmux each agent
+  lives in its own window and is swapped into the main slot.
+  `layout = "split"` keeps the previous side-by-side panes (#124).
+- A command line in the sidebar: `:` opens a prompt for the workspace verbs
+  (`run`, `resume`) with the CLI's syntax, history and Tab completion (#123).
+- `tongs-agents resume` lists recent sessions and starts one in the workspace
+  with the matching profile, folder and resume arguments (Claude Code
+  `--resume <id>`, Codex `resume <id>`); the sidebar has Resume in workspace
+  (`u`) and a picker. A session already running in this workspace is
+  refused, one running elsewhere needs confirmation, and nothing is ever
+  killed (#125).
+
+### Fixed
+
+- Zellij 0.44.2 sometimes answered "no active session" when creating a pane;
+  pane creation now retries that answer like the read-only queries (#107).
 
 ## 0.10.0 (experimental)
 
