@@ -1,0 +1,10 @@
+[1;36mNetwork Rules:[0m  (version 2, 1 chunk)
+
+  [2mChunk:[0m 6f1c2b8e-3a4d-4c5e-9f60-718293a4b5c6
+  [2mStatus:[0m [33mpending[39m
+  [2mRule:[0m allow_api_example_test_443
+  [2mBinary:[0m /usr/bin/curl
+  [2mConfidence:[0m 85%
+  [2mRationale:[0m Blocked connection to api.example.test:443 by /usr/bin/curl
+  [2mEndpoints:[0m api.example.test:443 [L4]
+  [2mBinaries:[0m /usr/bin/curl

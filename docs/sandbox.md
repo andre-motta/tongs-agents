@@ -5,7 +5,7 @@ A profile with a `sandbox` table runs its agent inside an
 own Zellij pane, with its status in the sidebar like any other agent. The
 design and its approval record are in
 [openshell-sandbox.md](work/openshell-sandbox.md) (#34); this page describes
-what M7-A (#35) and M7-B (#36) implement.
+what M7-A (#35), M7-B (#36) and M7-C (#37) implement.
 
 Status: **instrumented only.** Every OpenShell call has been exercised against
 the fake CLI in `tests/fixtures/fake_openshell/`, which reproduces the argument
@@ -208,6 +208,9 @@ openshell's default.
 | `sandbox policy check [NAME] [--policy F] [--boundary F]`, alias `sandbox diff` | a diff, then `openshell-prover check F --boundary <active policy>` |
 | `sandbox advisor on\|off NAME` | `openshell settings set NAME --key agent_policy_proposals_enabled --value true\|false` |
 | `sandbox sync` | one bridge pass, like `python -m tongs_agents.sandbox sync` |
+| `sandbox rules list NAME [--status pending\|approved\|rejected]` | `openshell rule get NAME --status pending`, every proposal in full |
+| `sandbox rules approve NAME CHUNK` | shows the proposal, asks at a terminal, then `openshell rule approve NAME --chunk-id CHUNK` |
+| `sandbox rules reject NAME CHUNK --reason R [--yes]` | shows the proposal, asks (or `--yes`), then `openshell rule reject NAME --chunk-id CHUNK --reason R` |
 
 Lifecycle commands are idempotent: starting a Ready sandbox, stopping a
 stopped one (`Stopped`, `Suspending`, `Suspended`, `Completed`), deleting an
@@ -233,8 +236,9 @@ unified diff, then runs `openshell-prover check <candidate> --boundary
 <active policy>` (row 17). The prover is optional: without it on `PATH` the
 diff is shown unproved and the command still succeeds. A non-zero prover exit
 (findings or failure) makes the command exit 1. Nothing here applies a
-policy, approves a rule, changes the approval mode or writes a `--global`
-setting (rows 14, 16); `advisor` changes only the named sandbox.
+policy, changes the approval mode or writes a `--global` setting (rows 14,
+16); `advisor` changes only the named sandbox. Rules are approved one at a
+time, only as described in [Access requests](#access-requests).
 
 Text from the gateway and the sandbox (logs, policies, labels) is printed
 with terminal escape sequences and control characters removed, because an
@@ -275,12 +279,65 @@ Every command above is instrumented against the fake CLI and a fake
 unvalidated against a live gateway and a prover release until the
 maintainer's run (row 21).
 
+### Access requests
+
+OpenShell drafts a network rule for every connection a sandbox's policy
+blocks and, with the policy advisor on, for each proposal the agent submits.
+Approving one widens what the agent can reach, so it stays a decision for you
+(rows 14 and 15): tongs-agents never sets an approval mode, never runs `rule
+approve-all`, and offers approval in no MCP tool. Approvals happen in the
+sidebar or with `tongs-agents sandbox rules`, one rule at a time.
+
+**Sidebar.** Every 5 seconds the sidebar runs
+`openshell [-g G] rule get <sandbox> --status pending` (with `NO_COLOR=1`, 15
+second timeout) for the sandboxes its listed rows run in, and nothing at all
+while no row is sandboxed. A row whose sandbox has pending rules reads as
+waiting, so it counts as needing you, `n` jumps to it and the usual desktop
+notification fires; its detail says how many requests wait. Each new request
+also raises a notice in the sidebar naming the sandbox and endpoint, marked
+when OpenShell attached security notes. Then:
+
+- `a` (or the palette's **Review access requests**) opens the requests of the
+  selected row's sandbox (or the first sandbox with requests), with each
+  proposal's full text: rule, binary, confidence, rationale, `Security:`,
+  `Prover:`, endpoints, binaries and hits;
+- `a` in that view asks **Approve this network access?** with the full text
+  again; only `y` there approves;
+- `d` asks for a reason, which is required, and rejects.
+
+Before acting, tongs-agents reads the pending list again: a rule that is no
+longer pending is refused, and an approval is refused when the proposal
+changed since it was shown (a growing hit count does not count as a change).
+A failed `rule get` (gateway unreachable, not logged in) shows a warning and
+does not mark the row.
+
+**CLI.** `sandbox rules list NAME` prints the proposals. `sandbox rules
+approve NAME CHUNK` prints the proposal and asks; it refuses to run off a
+terminal and has no `--yes`. `sandbox rules reject NAME CHUNK --reason R`
+prints it and asks, or takes `--yes`. Both refuse an unlabelled sandbox.
+
+**Parsing.** `rule get` has no JSON output, so its text is parsed strictly:
+the known first line, exactly the number of rules the header announces, and
+only the labels upstream `sandbox_draft_get` prints, in its order, each once
+(`Validation:` is read as the older name of `Prover:`). Escape sequences and
+control characters are removed first, because the agent writes the
+rationale. Output that does not match, such as a new label or a rationale
+that forges a second rule, still marks the row as needing you, but the
+review view and `rules list` show the raw text and nothing can be approved
+from tongs-agents; decide with `openshell rule approve` or `reject` yourself.
+An upstream `--output json` for `rule get` would remove this parser; asking
+for it is the maintainer's call (row 15).
+
+The text format is taken from upstream source (`run.rs` at `ba302a6`), not
+from a live gateway: the fixtures in `tests/fixtures/openshell_rules/` are
+built by hand, and the live check is pending the maintainer's run (row 21).
+
 ## Live validation
 
 ```console
 python validation/openshell.py --image <image> [--gateway <name>] [--provider <p>]
     [--policy <file> --allow-host <host>] [--deny-host <host>] [--deny-path <path>]
-    [--keep] [--output <file>]
+    [--approval-host <host> [--reject-host <host>]] [--keep] [--output <file>]
 ```
 
 Run it against a gateway you started yourself, for example the rootless Podman
@@ -293,7 +350,15 @@ Positive controls run first: a write in the working directory and, with
 `--policy`, a fetch of `--allow-host` (a host or URL the policy allows) must
 succeed. Only then are the denied host and path checked; without `--policy`,
 or when the matching control did not pass, those checks are recorded as not
-applicable (`passed: null`). tongs-agents state and config go to a temporary
+applicable (`passed: null`). With `--approval-host` (a host the sandbox
+policy denies), it also checks access requests end to end: a fetch of that
+host is denied, the drafted rule shows as a needs-you row in a headless
+sidebar, the validator approves it there with the same keys you would use
+(`a`, `a`, `y`), and the retry passes once the rule hot-reloads; then a fetch
+of `--reject-host` (default `example.net`) is denied, rejected there with a
+reason (`a`, `d`) and stays denied. This is the one place tongs-agents
+presses approve for you, and only in the throwaway validation sandbox you
+asked for. tongs-agents state and config go to a temporary
 directory; the sandbox is deleted whenever it exists at the end, even when
 the launch failed after creating it, unless `--keep`. The test suite runs the same script
 against the fake CLI and labels that evidence `instrumented`.

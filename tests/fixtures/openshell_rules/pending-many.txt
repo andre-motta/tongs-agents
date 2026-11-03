@@ -1,0 +1,31 @@
+Network Rules:  (version 7, 3 chunks)
+
+  Chunk: 0b6e2f4a-1c3d-4e5f-8a9b-0c1d2e3f4a5b
+  Status: pending
+  Rule: allow_10_0_0_5_5432
+  Binary: /usr/bin/psql
+  Confidence: 60%
+  Rationale: Blocked connection to 10.0.0.5:5432 by /usr/bin/psql
+  Security: Destination '10.0.0.5' appears to be an internal/private address. Port 5432 is a well-known database/service port.
+  Prover: credential reach expansion: provider github may be sent to 10.0.0.5
+  Endpoints: 10.0.0.5:5432 [L4]
+  Binaries: /usr/bin/psql
+  Hits: 4 (first seen 2026-11-03 12:00:00, last seen 2026-11-03 12:04:10)
+
+  Chunk: 2d4f6a8c-0e1f-4a2b-9c3d-4e5f6a7b8c9d
+  Status: pending
+  Rule: allow_api_github_com_443
+  Binary: /usr/bin/node
+  Confidence: 90%
+  Rationale: The agent asked to list pull requests
+  Candidate: 9e8d7c6b5a49
+  Endpoints: api.github.com:443 [L7 rest, access=read-only, allow GET /repos/*/pulls, deny DELETE *]
+  Binaries: /usr/bin/node, /usr/local/bin/gh
+
+  Chunk: 7a9c1e3b-5d7f-4b9a-8c1e-3f5a7b9c1d3e
+  Status: pending
+  Rule: allow_registry_npmjs_org_443
+  Confidence: 40%
+  Rationale: npm install needs the registry
+  Application: policy merge failed: rule allow_registry_npmjs_org_443 conflicts with an existing deny
+  Endpoints: registry.npmjs.org:443 [L4]

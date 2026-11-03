@@ -1,0 +1,11 @@
+Network Rules:  (version 3, 1 chunk)
+
+  Chunk: 6f1c2b8e-3a4d-4c5e-9f60-718293a4b5c6
+  Status: pending
+  Rule: allow_api_example_test_443
+  Binary: /usr/bin/curl
+  Confidence: 85%
+  Rationale: Blocked connection to api.example.test:443 by /usr/bin/curl
+  Validation: no findings
+  Endpoints: api.example.test:443 [L4]
+  Binaries: /usr/bin/curl
