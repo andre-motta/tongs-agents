@@ -25,6 +25,9 @@ and may define:
     ``tongs-agents doctor`` reports with its built-in checks. It must only
     read: no writes, no network and no long-running subprocess.
 
+A module may instead define ``COMMANDS``, a sequence of objects that each
+follow the contract above (``NAME`` required), to add several subcommands.
+
 A module that lacks ``add_arguments`` or ``run``, or whose name collides with
 a built-in verb or another module, makes ``cli.main`` raise
 ``CommandCollisionError`` (or ``CommandModuleError``) instead of shadowing it.
@@ -67,8 +70,11 @@ def discover(package: ModuleType | None = None) -> list[ModuleType]:
     )
     for name in names:
         module = importlib.import_module(f"{package.__name__}.{name}")
-        for attribute in ("add_arguments", "run"):
-            if not callable(getattr(module, attribute, None)):
-                raise CommandModuleError(f"{module.__name__}: missing {attribute}()")
-        modules.append(module)
+        entries = getattr(module, "COMMANDS", None)
+        for entry in (module,) if entries is None else entries:
+            for attribute in ("add_arguments", "run"):
+                if not callable(getattr(entry, attribute, None)):
+                    raise CommandModuleError(f"{module.__name__}: missing {attribute}()")
+            modules.append(entry)
+    modules.sort(key=command_name)
     return modules

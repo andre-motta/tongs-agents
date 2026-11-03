@@ -6,6 +6,13 @@ session's socket dir in its environment. `action` exits 0 for an unknown or
 EXITED session, so output is parsed strictly and anything unexpected raises.
 Focus moves only the client that most recently sent input and is confirmed by
 `list-clients` readback; no emulator window is ever activated.
+
+Pane I/O always names the pane with `--pane-id`: `paste` (bracketed when the
+pane's program turned bracketed paste on, at most 64 KiB), `send-keys`,
+`dump-screen --full` into a 0600 temp file under runtime_dir() that is read
+and unlinked, and a bounded `subscribe --format json` stream. `action` exits 0
+for an unknown pane id, so callers verify the pane first (control.py); the
+adapter holds no policy.
 """
 
 from __future__ import annotations
@@ -13,10 +20,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import select
+import stat
 import subprocess
+import tempfile
 import time
 from collections.abc import Iterator
 
+from tongs_agents import paths
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
     SESSION_EXITED,
@@ -24,7 +35,6 @@ from tongs_agents.multiplexers.base import (
     MultiplexerError,
     PaneInfo,
     PaneRef,
-    Unsupported,
 )
 from tongs_agents.multiplexers.zellij_binary import (
     ZELLIJ_CEILING,
@@ -52,7 +62,17 @@ MAX_NAME_BYTES = 256
 MAX_ARG_BYTES = 128 * 1024
 ACTIVATION_SKIPPED = "skipped: same zellij session"
 NO_SESSIONS = "no active zellij sessions"
-UNSUPPORTED_IO = "zellij pane I/O is not implemented yet (M3)"
+MAX_PASTE_BYTES = 64 * 1024
+MAX_KEYS = 16
+MAX_KEY_LENGTH = 32
+MAX_CAPTURE_LINES = 10_000
+MAX_CAPTURE_BYTES = 4 * 1024 * 1024
+MAX_EVENT_BYTES = 1024 * 1024
+SUBSCRIBE_EVENTS = 1000
+SUBSCRIBE_SECONDS = 60.0
+STOP_TIMEOUT = 2.0
+CAPTURE_DIR = "capture"
+_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]*\Z")
 _NEW_PANE = re.compile(r"terminal_([0-9]{1,12})")
 _SESSION_LINE = re.compile(r" \[Created [^\]\n]*\](?: \([^()\n]*\))*")
 _PANE_KEYS = {
@@ -422,13 +442,198 @@ class ZellijMultiplexer:
         return _failed(f"no zellij client moved to pane {pane}")
 
     def paste(self, ref: PaneRef, text: str) -> None:
-        raise Unsupported(UNSUPPORTED_IO)
+        """Paste text into the pane; bracketed when the program asked for it."""
+        session, pane, socket_dir = _target(ref)
+        self._action(
+            session, socket_dir, "paste", "--pane-id", pane, "--", _paste_text(text)
+        )
 
     def send_keys(self, ref: PaneRef, keys: list[str]) -> None:
-        raise Unsupported(UNSUPPORTED_IO)
+        session, pane, socket_dir = _target(ref)
+        self._action(
+            session, socket_dir, "send-keys", "--pane-id", pane, "--", *_keys(keys)
+        )
 
     def capture(self, ref: PaneRef, lines: int = 200) -> str:
-        raise Unsupported(UNSUPPORTED_IO)
+        """The last ``lines`` non-blank-trailing lines of screen and scrollback."""
+        session, pane, socket_dir = _target(ref)
+        if not _int(lines) or not 1 <= lines <= MAX_CAPTURE_LINES:
+            raise MultiplexerError(f"refused capture line count {lines!r:.20}")
+        try:
+            directory = paths.ensure_private_dir(
+                paths.runtime_dir(create=True) / CAPTURE_DIR
+            )
+            descriptor, name = tempfile.mkstemp(
+                dir=directory, prefix="dump-", suffix=".txt"
+            )
+            os.close(descriptor)
+        except OSError as error:
+            raise MultiplexerError(f"cannot create a capture file: {error}") from error
+        try:
+            self._action(
+                session, socket_dir, "dump-screen", "--full", "--pane-id", pane,
+                "--path", name,
+            )
+            raw = _read_dump(name)
+            for _ in range(READBACK_ATTEMPTS - 1):
+                if raw:
+                    break
+                time.sleep(READBACK_INTERVAL)
+                raw = _read_dump(name)
+        finally:
+            try:
+                os.unlink(name)
+            except OSError:
+                pass
+        return _tail(raw.decode("utf-8", errors="replace"), lines)
 
-    def subscribe(self, ref: PaneRef) -> Iterator[dict]:
-        raise Unsupported(UNSUPPORTED_IO)
+    def subscribe(
+        self,
+        ref: PaneRef,
+        *,
+        max_events: int = SUBSCRIBE_EVENTS,
+        timeout: float = SUBSCRIBE_SECONDS,
+    ) -> Iterator[dict]:
+        """At most ``max_events`` JSON render updates within ``timeout`` seconds.
+
+        The `zellij subscribe` child starts on the first ``next()`` and is
+        terminated when the iterator ends, is closed or is collected.
+        """
+        session, pane, socket_dir = _target(ref)
+        if not _int(max_events) or max_events < 1:
+            raise MultiplexerError(f"refused subscribe event count {max_events!r:.20}")
+        if (
+            not isinstance(timeout, (int, float))
+            or isinstance(timeout, bool)
+            or not 0 < timeout <= 3600
+        ):
+            raise MultiplexerError(f"refused subscribe timeout {timeout!r:.20}")
+        argv = [
+            self._zellij(), "--session", session, "subscribe", "--pane-id", pane,
+            "--format", "json",
+        ]
+        env = _cli_env(self._effective_socket_dir(socket_dir))
+        return _events(argv, env, max_events, float(timeout))
+
+
+def _target(ref) -> tuple[str, str, str | None]:
+    if not isinstance(ref, PaneRef) or ref.multiplexer != NAME:
+        raise MultiplexerError("refused pane ref for another multiplexer")
+    return _session(ref.session), _pane_id(ref.pane_id), _socket_dir(ref.socket_dir)
+
+
+def _paste_text(value) -> str:
+    if not isinstance(value, str) or "\0" in value:
+        raise MultiplexerError("refused paste text")
+    try:
+        size = len(value.encode("utf-8"))
+    except UnicodeEncodeError:
+        raise MultiplexerError("refused paste text that is not valid UTF-8") from None
+    if size > MAX_PASTE_BYTES:
+        raise MultiplexerError(
+            f"refused paste of {size} bytes (limit {MAX_PASTE_BYTES})"
+        )
+    return value
+
+
+def _keys(value) -> list[str]:
+    if (
+        not isinstance(value, (list, tuple))
+        or not 0 < len(value) <= MAX_KEYS
+        or not all(
+            isinstance(key, str)
+            and len(key) <= MAX_KEY_LENGTH
+            and _KEY.match(key)
+            for key in value
+        )
+    ):
+        raise MultiplexerError(f"refused zellij keys {value!r:.80}")
+    return list(value)
+
+
+def _read_dump(name: str) -> bytes:
+    """The last MAX_CAPTURE_BYTES of a dump file, never following a symlink."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(name, flags)
+    except OSError as error:
+        raise MultiplexerError(f"cannot read the zellij dump: {error}") from error
+    with os.fdopen(descriptor, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise MultiplexerError("the zellij dump is not a regular file")
+        if info.st_size > MAX_CAPTURE_BYTES:
+            stream.seek(info.st_size - MAX_CAPTURE_BYTES)
+        return stream.read(MAX_CAPTURE_BYTES)
+
+
+def _tail(text: str, lines: int) -> str:
+    rows = text.splitlines()
+    while rows and not rows[-1].strip():
+        rows.pop()
+    return "\n".join(rows[-lines:])
+
+
+def _stop(process: subprocess.Popen) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(STOP_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(STOP_TIMEOUT)
+    if process.stdout is not None:
+        process.stdout.close()
+
+
+def _events(
+    argv: list[str], env: dict | None, max_events: int, timeout: float
+) -> Iterator[dict]:
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except OSError as error:
+        raise MultiplexerError(f"zellij subscribe failed: {error}") from error
+    try:
+        descriptor = process.stdout.fileno()
+        deadline = time.monotonic() + timeout
+        buffer = b""
+        count = 0
+        while count < max_events:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            ready, _, _ = select.select([descriptor], [], [], remaining)
+            if not ready:
+                return
+            chunk = os.read(descriptor, 65536)
+            if not chunk:
+                return
+            buffer += chunk
+            while b"\n" in buffer and count < max_events:
+                line, buffer = buffer.split(b"\n", 1)
+                if not line.strip():
+                    continue
+                yield _event(line)
+                count += 1
+            if len(buffer) > MAX_EVENT_BYTES:
+                raise MultiplexerError("zellij subscribe event exceeds the size limit")
+    finally:
+        _stop(process)
+
+
+def _event(line: bytes) -> dict:
+    if len(line) > MAX_EVENT_BYTES:
+        raise MultiplexerError("zellij subscribe event exceeds the size limit")
+    try:
+        event = json.loads(line)
+    except ValueError as error:
+        raise MultiplexerError("unrecognized zellij subscribe output") from error
+    if not isinstance(event, dict):
+        raise MultiplexerError("unrecognized zellij subscribe output")
+    return event
