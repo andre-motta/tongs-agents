@@ -4,6 +4,10 @@ Only the ``[profiles]`` section of ``config_dir()/config.toml`` is read here;
 other sections belong to their own loaders and are ignored. Nothing is ever
 shell-parsed: a profile's command is an argv list passed to ``os.execvpe``.
 
+A profile is a template: ``tongs-agents run`` and the sidebar's Add agent
+dialog may start it in another folder (``folder_problem`` checks that folder)
+and append arguments for one launch. ``cwd`` is only its default folder.
+
 A profile may carry a ``[profiles.<name>.sandbox]`` table (docs/sandbox.md):
 its agent then runs inside an OpenShell sandbox. Unknown sandbox keys are
 errors, like unknown profile keys.
@@ -396,6 +400,36 @@ def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
                 return f"{folder} holds your home folder"
             if candidate.parent == place and candidate.name.startswith("."):
                 return f"{folder} is a hidden folder in your home, where credentials live"
+    return None
+
+
+def uploads_workspace(profile: Profile) -> bool:
+    """True when the launcher uploads the profile's folder into its sandbox."""
+    spec = profile.sandbox
+    return spec is not None and spec.mode == "exec" and spec.upload
+
+
+def folder_problem(profile: Profile, folder: Path) -> str | None:
+    """Why ``profile`` cannot start in ``folder``, or None when it can.
+
+    The folder must be an existing directory; for a sandboxed profile that
+    uploads its workspace it must also pass ``unsafe_folder``, the rule its
+    ``cwd`` follows.
+    """
+    if not folder.is_absolute():
+        return f"{folder} is not an absolute path"
+    try:
+        if not folder.is_dir():
+            return f"{folder} is not a directory" if folder.exists() else (
+                f"{folder} does not exist"
+            )
+    except OSError as error:
+        return f"{folder}: {error.strerror or error}"
+    if uploads_workspace(profile):
+        unsafe = unsafe_folder(folder)
+        if unsafe is not None:
+            return (f"{unsafe}; the sandbox upload of profile {profile.name} would "
+                    "include its credentials (pick a project folder)")
     return None
 
 

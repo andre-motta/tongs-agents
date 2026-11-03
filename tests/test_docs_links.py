@@ -239,11 +239,12 @@ def test_shown_command_parses(where, argv):
     parser, _ = cli.build_parser()
     shown = " ".join(argv)
     try:
-        args = parser.parse_args(argv[1:])
+        args = cli.parse_args(parser, argv[1:])
     except SystemExit as error:
         assert error.code == 0, f"{where}: {shown}"
         return
-    assert args.command is not None, f"{where}: {shown}"
+    # A bare tongs-agents is a command too: it opens the empty workspace.
+    assert args.command is not None or argv == ["tongs-agents"], f"{where}: {shown}"
 
 
 def test_frontmatter_is_not_prose():

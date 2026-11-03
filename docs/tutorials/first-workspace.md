@@ -1,13 +1,14 @@
 ---
 title: "Tutorial: your first workspace"
-description: "Install tongs-agents, describe your agents as profiles, install hooks and open a workspace with the sidebar."
+description: "Install tongs-agents, describe your agents as profiles, install hooks, open the workspace and add agents to it."
 sidebar:
   order: 1
 ---
 
 In this tutorial you install tongs-agents, describe four agents as profiles
 (two Claude Code config dirs, Codex and Pi), install their hooks, check the
-setup with `doctor`, and open a workspace with the sidebar.
+setup with `doctor`, open the workspace and add agents to it in the folders
+you work in.
 
 It takes about 15 minutes. You need Linux, Python 3.11 or newer and
 [pipx](https://pipx.pypa.io/) or [uv](https://docs.astral.sh/uv/).
@@ -44,7 +45,9 @@ Follow this tutorial, then [tmux instead of Zellij](tmux.md).
 
 ## 3. Describe your agents
 
-A profile is a named command that tongs-agents can start in a pane. Create
+A profile is a template for an agent: the command, the harness, the config
+dir, the model. You choose the folder, and any extra arguments such as
+`--resume`, each time you start one. Create
 `~/.config/tongs-agents/config.toml` (or `$XDG_CONFIG_HOME/tongs-agents/config.toml`)
 with the agents you have; drop the ones you do not:
 
@@ -62,9 +65,9 @@ config_dir = "~/.claude-alt"
 [profiles.codex-review]
 command = ["codex"]
 
-# Pi with a local model through Ollama (no API cost). Replace cwd with a
-# project directory you have, or drop the line to start in the workspace's
-# directory.
+# Pi with a local model through Ollama (no API cost). cwd is only a default
+# folder (the palette's "New agent: pi-local" starts there); replace it with
+# a project directory you have, or drop it.
 [profiles.pi-local]
 command = ["pi", "--provider", "ollama", "--model", "qwen3-coder"]
 cwd = "~/src/example"
@@ -136,25 +139,42 @@ warnings and 2 with errors.
 ## 6. Open the workspace
 
 ```bash
-tongs-agents workspace --profile claude-main --profile claude-alt --profile codex-review --profile pi-local
+tongs-agents
 ```
 
-This creates a Zellij session named `agents` with the sidebar and one pane
-per profile, then attaches to it. If `tongs` is on `PATH`, a `tongs` tab is
-added; `--no-tongs` leaves it out.
+This creates a Zellij session named `agents` with only the sidebar, then
+attaches to it. If `tongs` is on `PATH`, a `tongs` tab is added. No agent
+starts yet; you add them next. Run `tongs-agents` again later and it attaches
+to the same session.
 
-To start the same set every time, put it in the config file and run plain
-`tongs-agents workspace`:
+## 7. Add agents
 
-```toml
-[workspace]
-default_profiles = ["claude-main", "codex-review"]
+Open a shell pane in the workspace (in Zellij, Ctrl p then n) and start
+agents in the folders you work in:
+
+```bash
+cd ~/src/example
+tongs-agents run claude-main                       # in the current directory
+tongs-agents run claude-alt ~/src/other            # in another folder
+tongs-agents run codex-review ~/src/example -- resume --last
 ```
+
+Each command adds one pane and returns. Everything after `--` is appended to
+the profile's command for that launch only, so `-- --resume` continues a
+Claude Code conversation and `-- resume --last` the last Codex one. The
+folder must exist. `run` works from a terminal outside the workspace too: it
+adds the pane to the running session, or opens the workspace with that pane
+when none is running.
+
+Or stay in the sidebar: press `+` (or Ctrl+P, then `Add agent…`), pick a
+profile, type a folder (Right arrow completes directory names), optionally
+type arguments such as `--resume`, check the command shown under the fields
+and choose Start.
 
 A new Claude config dir starts without your settings and may ask you to sign
 in inside its pane.
 
-## 7. Use the sidebar
+## 8. Use the sidebar
 
 Each row is one pane. Rows with hooks show the agent's status (`RUNNING`,
 `IDLE`, `WAITING` and so on); a pane without hook data yet shows its pane
@@ -164,26 +184,27 @@ state (`STARTING`, `RUNNING` or `EXITED`).
 | --- | --- |
 | Enter or click | Focus that agent's pane |
 | `n` | Jump to the next agent that needs you (waiting, or idle for more than two minutes) |
+| `+` | Add an agent: profile, folder and arguments |
 | `m` | Show or hide the chat panel ([tutorial 5](chat-and-web.md)) |
 | `r` | Refresh |
 | `q` | Quit the sidebar |
 | Ctrl+P | Command palette |
 
 Give an agent a prompt in its pane, then watch its row go from `RUNNING` to
-`IDLE`. Open the palette with Ctrl+P and choose `New agent: pi-local` to add
-another pane to the running session.
+`IDLE`. The palette's `New agent: pi-local` starts a profile in its default
+folder in one step.
 
-## 8. Leave and come back
+## 9. Leave and come back
 
 Detach from Zellij with its own keys (Ctrl o, then d by default); the agents
-keep running. Run `tongs-agents workspace` again to attach. Running it with
-`--profile` while the session runs adds those panes; it never duplicates the
-default profiles.
+keep running. Run `tongs-agents` again to attach; it never starts agents.
 
 When you quit the session, Zellij keeps it as `EXITED`. The next
-`tongs-agents workspace` deletes exactly that exited session and starts it
-fresh; `--resurrect` attaches to it instead (agents are not restarted).
-See [agent workspace](../workspace.md).
+`tongs-agents` deletes exactly that exited session and starts it fresh;
+`tongs-agents workspace --resurrect` attaches to it instead (agents are not
+restarted). Prefer the same set of agents every time? `tongs-agents workspace
+--profile NAME` (or `[workspace].default_profiles`) starts profiles in their
+default folders with a new session. See [agent workspace](../workspace.md).
 
 To see every agent on the machine, including ones started outside any
 workspace, run `tongs-agents monitor` or `tongs-agents status`.
@@ -199,10 +220,12 @@ command = ["bash", "--norc"]
 ```
 
 ```bash
-tongs-agents workspace --session tryout --profile scratch
+tongs-agents run --session tryout scratch /tmp
 ```
 
-The sidebar shows `scratch` as `RUNNING` until you type `exit` in its pane,
+This opens a workspace named `tryout` with the sidebar and the `scratch`
+pane in `/tmp`. The sidebar shows `scratch` as `RUNNING` until you type
+`exit` in its pane,
 then as `EXITED 0`. The next tutorial makes such panes report real status.
 
 ## Next

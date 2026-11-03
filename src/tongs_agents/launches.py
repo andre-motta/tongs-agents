@@ -5,7 +5,10 @@ claims it exactly once with its own pid, process start token and pane
 identity before it execs the agent. A second claim of the same id (a
 resurrected pane, for example) gets a fresh record that names the old one in
 ``replaces``. A launch spawned through the MCP control tools names the
-caller's launch id in ``spawned_by``. Records live in
+caller's launch id in ``spawned_by``. A launch the maintainer started with a
+folder or extra harness arguments (``tongs-agents run``, the sidebar's Add
+agent dialog) carries them in ``folder`` and ``args``; the MCP tools never set
+them. Records live in
 ``state_dir()/launches/<launch_id>.json``: written atomically at 0600, read
 without following symlinks, 64 KiB at most.
 """
@@ -29,6 +32,9 @@ from tongs_agents.profiles import HARNESSES, PROFILE_NAME_RE, Profile
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 64 * 1024
 MAX_TEXT_LENGTH = 1024
+MAX_ARGS = 64
+MAX_ARG_LENGTH = 4096
+MAX_ARGS_TOTAL = 16 * 1024
 LAUNCH_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 STATES = ("pending", "running")
 
@@ -52,12 +58,19 @@ class LaunchRecord:
     state: str = "pending"
     replaces: str | None = None
     spawned_by: str | None = None
+    folder: str | None = None
+    args: tuple[str, ...] = ()
     schema_version: int = SCHEMA_VERSION
 
     def to_json(self) -> dict:
         data = asdict(self)
-        if data["spawned_by"] is None:
-            del data["spawned_by"]
+        for key in ("spawned_by", "folder"):
+            if data[key] is None:
+                del data[key]
+        if data["args"]:
+            data["args"] = list(data["args"])
+        else:
+            del data["args"]
         return {"schema_version": data.pop("schema_version"), **data}
 
 
@@ -73,6 +86,40 @@ def _text(value, *, optional: bool = False) -> bool:
         and 0 < len(value) <= MAX_TEXT_LENGTH
         and value.isprintable()
     )
+
+
+def _args_problem(value) -> str | None:
+    if not isinstance(value, (list, tuple)) or not all(isinstance(item, str) for item in value):
+        return "must be a list of strings"
+    if len(value) > MAX_ARGS:
+        return f"at most {MAX_ARGS} arguments"
+    for index, item in enumerate(value):
+        if "\0" in item:
+            return f"argument {index + 1} contains a NUL character"
+        if len(item) > MAX_ARG_LENGTH:
+            return f"argument {index + 1} is longer than {MAX_ARG_LENGTH} characters"
+    if sum(len(item) for item in value) > MAX_ARGS_TOTAL:
+        return f"longer than {MAX_ARGS_TOTAL} characters in all"
+    return None
+
+
+def check_args(value) -> tuple[str, ...]:
+    """Extra harness arguments as an argv tuple; LaunchError when they are refused."""
+    problem = _args_problem(value)
+    if problem is not None:
+        raise LaunchError(f"invalid extra arguments: {problem}")
+    return tuple(value)
+
+
+def _folder_text(value) -> bool:
+    return _text(value) and os.path.isabs(value)
+
+
+def check_folder(value) -> str:
+    """A launch folder as stored: an absolute, printable path of bounded length."""
+    if not _folder_text(value):
+        raise LaunchError(f"invalid folder: {value!r:.200} (an absolute path is needed)")
+    return value
 
 
 def _parse(data) -> LaunchRecord | None:
@@ -94,11 +141,15 @@ def _parse(data) -> LaunchRecord | None:
         and data.get("state") in STATES
         and (data.get("replaces") is None or is_launch_id(data["replaces"]))
         and (data.get("spawned_by") is None or is_launch_id(data["spawned_by"]))
+        and (data.get("folder") is None or _folder_text(data["folder"]))
+        and _args_problem(data.get("args", [])) is None
         and type(created) is int
     ):
         return None
     fields = LaunchRecord.__dataclass_fields__
-    return LaunchRecord(**{key: data.get(key) for key in fields})
+    values = {key: data.get(key) for key in fields}
+    values["args"] = tuple(data.get("args", ()))
+    return LaunchRecord(**values)
 
 
 def _record_path(launch_id: str) -> Path:
@@ -165,15 +216,23 @@ def _check_text(name: str, value: str | None, *, optional: bool = False) -> None
 
 
 def create_pending(profile: Profile, session: str, multiplexer: str, *,
-                   spawned_by: str | None = None) -> LaunchRecord:
+                   spawned_by: str | None = None, folder: str | None = None,
+                   args=()) -> LaunchRecord:
     """Write a pending record for a pane about to run ``profile``.
 
     ``spawned_by`` is the launch id of the MCP caller that asked for it.
+    ``folder`` and ``args`` are the maintainer's choice for this launch only:
+    the folder the agent starts in and arguments appended to its command.
+    Only the format is checked here; ``workspace_spawn.check_launch`` and the
+    launcher check the folder itself.
     """
     _check_text("session", session)
     _check_text("multiplexer", multiplexer)
     if spawned_by is not None and not is_launch_id(spawned_by):
         raise LaunchError(f"invalid spawning launch id: {spawned_by!r}")
+    if folder is not None:
+        check_folder(folder)
+    args = check_args(args)
     record = LaunchRecord(
         launch_id=secrets.token_hex(16),
         profile=profile.name,
@@ -182,6 +241,8 @@ def create_pending(profile: Profile, session: str, multiplexer: str, *,
         session=session,
         created=int(time.time()),
         spawned_by=spawned_by,
+        folder=folder,
+        args=args,
     )
     return _write(record)
 
