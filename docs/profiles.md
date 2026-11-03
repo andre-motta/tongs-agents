@@ -114,3 +114,54 @@ stays readable.
 Launch records are stored in `state_dir()/launches/<launch_id>.json` (0600,
 in a 0700 directory), written atomically and read without following symlinks.
 `launches.prune()` removes records older than seven days whose process has exited.
+
+## Reporting state from any command
+
+Claude Code, Codex and Pi report their own state through hooks. A profile with
+harness `other` (a build, a test watcher, a script, an agent without hooks) can
+report its state with
+
+```
+tongs-agents notify <state> [message ...]
+```
+
+| State | Shown as | Session status |
+| --- | --- | --- |
+| `working` | WORKING | `running` |
+| `needs-you` | NEEDS-YOU | `waiting` |
+| `done` | DONE | `idle` |
+| `failed` | FAILED | `error` |
+| `quiet` | QUIET | `discovered` |
+
+The sidebar and `tongs-agents monitor` treat these rows like hook sessions:
+the same attention, filters, sorting and desktop notifications (`needs-you` at
+once, `done` after two minutes). The optional message becomes the row's detail;
+it is folded onto one printable line and cut to 512 bytes.
+
+`notify` finds its pane through `TONGS_AGENTS_LAUNCH_ID`, which the launcher
+sets, and the claimed launch record, and writes the same schema v1 session
+record as the hook (harness `other`, source `notify`, the launched pid). It is
+offline and touches only the state directory. It exits 1 with one line on
+stderr when it is not inside a launched pane, when the launched process is
+gone, or when the pane's profile uses a hooked harness (`claude`, `codex` or
+`pi`). When the record cannot be written it says so on stderr and still exits
+0, so a status report never fails the command that sent it.
+
+Examples, with synthetic names:
+
+```toml
+# Run the tests and report the outcome. The shell stays the launched process,
+# so the row lives as long as the pane's shell.
+[profiles.tests]
+command = ["sh", "-c", "tongs-agents notify working 'running tests'; make test && tongs-agents notify done 'tests passed' || tongs-agents notify failed 'tests failed'; exec sh"]
+cwd = "~/src/example"
+
+# A long-running script that asks for attention itself.
+[profiles.deploy-watch]
+command = ["/opt/example/bin/deploy-watch"]
+harness = "other"
+```
+
+where `deploy-watch` calls, for example,
+`tongs-agents notify needs-you "approve the rollout"` when it stops for input
+and `tongs-agents notify quiet` once there is nothing to report.

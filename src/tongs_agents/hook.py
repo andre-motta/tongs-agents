@@ -176,6 +176,69 @@ def _normalized_update(agent, payload):
     return status, detail, tool, event_id
 
 
+def build_session_record(
+    *,
+    agent,
+    session_id,
+    instance_id,
+    cwd,
+    process,
+    process_identity,
+    status,
+    detail,
+    tool,
+    now,
+    started,
+    event_id,
+    terminal,
+    terminal_env,
+    sequence=None,
+    launch=None,
+    source="hook",
+):
+    """The schema v1 session record the hook (and ``notify``) writes."""
+    canonical_id = canonical_session_id(agent, session_id, instance_id)
+    process_pid = str(process.pid) if process is not None else ""
+    process_start = process.start_token if process is not None else ""
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "record_kind": "session",
+        "canonical_id": canonical_id,
+        "session_id": session_id,
+        "instance_id": instance_id,
+        "harness_id": agent,
+        "agent": agent,
+        "repo": os.path.basename(os.path.normpath(cwd)) if cwd else "",
+        "cwd": cwd,
+        "pid": process_pid,
+        "process_start": process_start,
+        "process_identity": process_identity,
+        "status": status,
+        "detail": detail,
+        "tool": tool,
+        "ts": now,
+        "started": started,
+        "source": source,
+        "last_event": event_id,
+        "terminal": terminal,
+        "terminal_env": terminal_env,
+        "focus_target": {
+            "kind": (
+                "terminal"
+                if terminal and process is not None
+                else "unavailable"
+            ),
+            "terminal": terminal,
+            "terminal_env": terminal_env,
+        },
+    }
+    if sequence is not None:
+        record["sequence"] = sequence
+    if launch is not None:
+        record["launch"] = launch
+    return record
+
+
 def _store_event(
     harness,
     event,
@@ -242,45 +305,24 @@ def _store_event(
         if existing is None or event == "session-start"
         else existing.get("started", now)
     )
-    canonical_id = canonical_session_id(agent, session_id, instance_id)
-    process_pid = str(process.pid) if process is not None else ""
-    process_start = process.start_token if process is not None else ""
-    record = {
-        "schema_version": SCHEMA_VERSION,
-        "record_kind": "session",
-        "canonical_id": canonical_id,
-        "session_id": session_id,
-        "instance_id": instance_id,
-        "harness_id": agent,
-        "agent": agent,
-        "repo": os.path.basename(os.path.normpath(cwd)),
-        "cwd": cwd,
-        "pid": process_pid,
-        "process_start": process_start,
-        "process_identity": process_identity,
-        "status": status,
-        "detail": detail,
-        "tool": tool,
-        "ts": now,
-        "started": started,
-        "source": "hook",
-        "last_event": event_id,
-        "terminal": terminal,
-        "terminal_env": terminal_env,
-        "focus_target": {
-            "kind": (
-                "terminal"
-                if terminal and process is not None
-                else "unavailable"
-            ),
-            "terminal": terminal,
-            "terminal_env": terminal_env,
-        },
-    }
-    if sequence is not None:
-        record["sequence"] = sequence
-    if launch is not None:
-        record["launch"] = launch
+    record = build_session_record(
+        agent=agent,
+        session_id=session_id,
+        instance_id=instance_id,
+        cwd=cwd,
+        process=process,
+        process_identity=process_identity,
+        status=status,
+        detail=detail,
+        tool=tool,
+        now=now,
+        started=started,
+        event_id=event_id,
+        terminal=terminal,
+        terminal_env=terminal_env,
+        sequence=sequence,
+        launch=launch,
+    )
     written = write_session_record(record)
     if (
         written
