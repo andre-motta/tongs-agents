@@ -5,9 +5,13 @@ with its own pid, process start token and pane identity, builds the agent's
 environment, changes to the profile's cwd and execs the profile argv. Exec
 keeps the pid, so the record names the agent (or its exec wrapper).
 
-Exit status 64 means a bad profile or launch id, 127 that exec failed. Either
-way one line is printed and, on a TTY, the pane waits for Enter so the
-message stays readable.
+A profile with a ``sandbox`` table execs ``openshell`` instead: the sandbox
+is created or reused and confirmed Ready first (``sandbox.launcher``), and
+the agent argv runs inside it.
+
+Exit status 64 means a bad profile or launch id, 69 a sandbox that cannot be
+prepared, 127 that exec failed. Either way one line is printed and, on a TTY,
+the pane waits for Enter so the message stays readable.
 """
 
 from __future__ import annotations
@@ -26,9 +30,11 @@ from tongs_agents.profiles import (
     ProfileError,
     load_profiles,
 )
+from tongs_agents.sandbox import launcher as sandbox_launcher
 from tongs_agents.terminal_apis._env import is_decimal_id
 
 EXIT_USAGE = 64
+EXIT_SANDBOX = 69
 EXIT_EXEC_FAILED = 127
 LAUNCH_ID_ENV = "TONGS_AGENTS_LAUNCH_ID"
 PROFILE_ENV = "TONGS_AGENTS_PROFILE"
@@ -172,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
         return _fail(EXIT_USAGE, f"cannot claim launch {args.launch_id}: {error}")
     env = build_env(profile, record.launch_id, os.environ)
     command = build_argv(profile)
+    if profile.sandbox is not None:
+        try:
+            prepared = sandbox_launcher.prepare(profile, record, os.environ, command)
+        except sandbox_launcher.SandboxLaunchError as error:
+            return _fail(EXIT_SANDBOX, f"profile {profile.name}: {error}")
+        command, env = prepared.argv, prepared.env
     if profile.cwd is not None:
         try:
             os.chdir(profile.cwd)

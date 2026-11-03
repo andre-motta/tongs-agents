@@ -106,7 +106,8 @@ has the reproduction commands.
 | `sidebar` | Runs in the workspace: consumes the spawn request once, lists each launched pane with hook status or pane state | instrumented (same validator) |
 | Launch profiles and `profiles` | Named argv commands with their own config dir, cwd, env and model arguments | instrumented (fixture profiles with private config dirs), mocked |
 | `install --claude-config-dir DIR` (also `--codex-home`, `--pi-agent-dir`) | Installs hooks into one harness config dir and leaves the default untouched | instrumented for Claude (a fixture in that dir reports hook status), mocked |
-| `status` | Plain table of agent, repo, status, detail and age | unvalidated |
+| `status` | Plain table of agent, repo, status, detail and age; read only, and suggests `cleanup` when no sidebar or monitor has maintained the store in the last hour | unvalidated |
+| `cleanup` | Runs session store maintenance now (the sidebar and `monitor` already do while they run): records agent processes no hook reported and removes ended, exited and stale records; exits 1 when another maintainer holds the lock or the store is unavailable ([session store](https://github.com/andre-motta/tongs-agents/blob/main/docs/sessions.md)) | mocked |
 | `doctor` | Read-only report of claude-fleet-monitor leftovers | mocked |
 | `tongs-agents-hook` | Hook entry point for Claude Code, Codex and pi events | instrumented (nine shells in Podman, synthetic payloads) |
 | MCP server `tongs-agents` | Five tools for agents to read and focus sessions (below) | instrumented (real server over stdio, synthetic session), mocked |
@@ -149,7 +150,7 @@ turns alerts off.
 | `fleet_session` | One session by ID or prefix |
 | `fleet_sessions_needing_attention` | Sessions waiting for input, or idle for more than 2 minutes |
 | `fleet_focus` | Focus a session's terminal |
-| `fleet_cleanup` | Remove ended session records older than 5 minutes |
+| `fleet_cleanup` | Run session store maintenance now: record agent processes no hook reported and remove ended, exited and stale records; replies `{"removed": N}`, plus `"skipped"` when another maintainer holds the lock or the store is unavailable ([session store](https://github.com/andre-motta/tongs-agents/blob/main/docs/sessions.md)) |
 
 ### tongs plugin
 

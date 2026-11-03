@@ -22,6 +22,7 @@ from tongs_agents.multiplexers.base import (
     PaneInfo,
     PaneRef,
 )
+from tongs_agents.sandbox import bridge as sandbox_bridge
 
 __all__ = [
     "LAUNCH_SOURCE",
@@ -51,8 +52,10 @@ class SessionFeed:
     """Read session records and parse them into FleetSession objects.
 
     The feed is the store's one cleanup owner: reading the store (no
-    ``reader`` given) first runs ``session_store.maintain_store``, which
-    skips itself while another sidebar or monitor ran it recently. A custom
+    ``reader`` given) first imports sandboxed agents' hook events
+    (``sandbox.bridge.sync_all``, a no-op without sandboxed launches), then
+    runs ``session_store.maintain_store``, which skips itself while another
+    sidebar or monitor ran it recently. A custom
     ``reader`` reads without maintenance unless a ``maintainer`` is given.
     Both defaults are looked up at call time so tests can replace them.
     """
@@ -68,6 +71,7 @@ class SessionFeed:
         if maintainer is None:
             if self._reader is not None:
                 return
+            sandbox_bridge.sync_all()
             maintainer = session_store.maintain_store
         maintainer()
 

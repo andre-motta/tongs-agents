@@ -14,6 +14,7 @@ that changes the store outside the hook goes through this module:
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import time
@@ -25,6 +26,8 @@ from tongs_agents import discovery, paths
 from tongs_agents.models import SCHEMA_VERSION
 
 MIN_INTERVAL_SECONDS = 5.0
+OVERDUE_SECONDS = 3600.0
+FUTURE_TOLERANCE_SECONDS = 60.0
 STAMP_NAME = ".fleet-maintenance.stamp"
 MAX_STAMP_BYTES = 64
 
@@ -37,6 +40,7 @@ __all__ = [
     "MaintenanceResult",
     "import_session_record",
     "maintain_store",
+    "maintenance_overdue",
 ]
 
 
@@ -86,6 +90,26 @@ def _write_stamp(now: float) -> None:
         stream.write(f"{now:.3f}".encode("ascii"))
 
 
+def maintenance_overdue(*, clock: Callable[[], float] = time.time) -> bool:
+    """True when the store exists and its last maintenance run is missing or stale.
+
+    Stale means older than ``OVERDUE_SECONDS`` or stamped more than
+    ``FUTURE_TOLERANCE_SECONDS`` in the future (the stamp is rounded to the
+    millisecond). Read only: for ``tongs-agents status`` to suggest
+    ``tongs-agents cleanup``.
+    """
+    try:
+        if not paths.sessions_dir().is_dir():
+            return False
+    except (OSError, ValueError):
+        return False
+    last = _read_stamp()
+    if last is None:
+        return True
+    age = clock() - last
+    return age > OVERDUE_SECONDS or age < -FUTURE_TOLERANCE_SECONDS
+
+
 def _is_recent(last: float | None, now: float, min_interval: float) -> bool:
     return last is not None and 0 <= now - last < min_interval
 
@@ -102,20 +126,25 @@ def maintain_store(
     stamp any maintainer leaves) is skipped, so several sidebars and monitors
     polling the same store share one run. A held lock is never waited for.
     Each unlink takes the record's lock and re-reads it first, so a hook write
-    racing the cleanup is kept. Never raises for store errors.
+    racing the cleanup is kept. Only failing to take the maintenance lock is
+    ``busy``; any other store error, including a record lock timing out
+    during the run, is ``unavailable``. A run that fails after writing the
+    stamp still counts toward the interval. Never raises for store errors.
     """
     try:
         if not discovery._store_available(create=True):
             return MaintenanceResult(False, skipped=SKIPPED_UNAVAILABLE)
-        with discovery.store_maintenance_lock():
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(discovery.store_maintenance_lock())
+            except TimeoutError:
+                return MaintenanceResult(False, skipped=SKIPPED_BUSY)
             now = clock()
             if not force and _is_recent(_read_stamp(), now, min_interval):
                 return MaintenanceResult(False, skipped=SKIPPED_RECENT)
             _write_stamp(now)
             discovery.discover_processes()
             removed = discovery._cleanup_stale_sessions()
-    except TimeoutError:
-        return MaintenanceResult(False, skipped=SKIPPED_BUSY)
     except (OSError, ValueError):
         return MaintenanceResult(False, skipped=SKIPPED_UNAVAILABLE)
     return MaintenanceResult(True, removed=removed)

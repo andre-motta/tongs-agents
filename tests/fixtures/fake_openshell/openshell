@@ -1,0 +1,275 @@
+#!/usr/bin/env python3
+"""A fake ``openshell`` CLI for tests and the instrumented validator run.
+
+It accepts the argument shapes of the OpenShell CLI at upstream ``ba302a6``
+(v0.1.6) that tongs-agents uses, prints ``sandbox get -o json`` objects with
+the keys of ``sandbox_to_json``, and keeps its state under
+``$FAKE_OPENSHELL_HOME``:
+
+- ``calls.jsonl``: one ``{"argv": [...], "no_color": ..., "cwd": ...}`` line per call;
+- ``state.json``: sandboxes (name, labels, phase queue, settings);
+- ``fs/<sandbox>/...``: each sandbox's filesystem. Sandbox paths starting
+  with ``/sandbox`` map there, so ``sandbox exec --no-tty`` runs the command
+  for real on the host against that tree (the bridge's pull script).
+
+Uploads follow upstream ``sandbox_sync_up``: a directory lands at
+``<dest>/<basename>`` (flat only for ``.``), so a nesting mistake shows up in
+``fs/``.
+
+Knobs: ``FAKE_OPENSHELL_VERSION`` (default ``0.1.6``),
+``FAKE_OPENSHELL_PHASES`` (comma-separated phases returned by successive
+``get`` calls after create, the last one sticks; default ``Ready``),
+``FAKE_OPENSHELL_FAIL`` (comma-separated subcommands that fail) and
+``FAKE_OPENSHELL_RUN_TTY=1`` (run ``exec --tty`` commands like ``--no-tty``
+instead of printing them). It never starts a gateway or a container.
+"""
+
+import json
+import os
+import posixpath
+import shutil
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+HOME = Path(os.environ["FAKE_OPENSHELL_HOME"])
+STATE = HOME / "state.json"
+FS = HOME / "fs"
+PREFIX = "/sandbox"
+
+
+def load():
+    if STATE.exists():
+        return json.loads(STATE.read_text())
+    return {"sandboxes": {}}
+
+
+def save(data):
+    STATE.write_text(json.dumps(data, indent=1, sort_keys=True))
+
+
+def fail(message, code=1):
+    print(f"Error:   x {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def failing(name):
+    return name in os.environ.get("FAKE_OPENSHELL_FAIL", "").split(",")
+
+
+def mapped(sandbox, value):
+    if value == PREFIX or value.startswith(PREFIX + "/"):
+        return str(FS / sandbox) + value
+    return value
+
+
+def basename(local):
+    """Rust ``Path::file_name``: None for ``.``, ``..``, ``/`` and paths ending in ``..``."""
+    name = Path(local).name
+    return None if name in ("", "..") or local.rstrip("/").endswith("/..") else name
+
+
+def copy_in(sandbox, local, dest):
+    """Upstream ``sandbox_sync_up`` at ba302a6 (ssh.rs), relative to this process's cwd.
+
+    A directory always lands at ``<dest>/<basename>/...`` like ``cp -r``,
+    whether or not ``<dest>`` exists; a source without a basename (``.``)
+    lands flat at ``<dest>``. A file (or symlink) goes to ``dest`` itself unless
+    ``dest`` ends with ``/`` or its parent is ``/``, else to ``<dest>/<basename>``.
+    """
+    source = Path(local)
+    if not source.exists() and not source.is_symlink():
+        fail(f"local path does not exist: {local}")
+    file_like = source.is_symlink() or source.is_file()
+    if file_like and not dest.endswith("/") and posixpath.dirname(dest) not in ("", "/"):
+        target = Path(mapped(sandbox, dest))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target, follow_symlinks=False)
+        return
+    root = Path(mapped(sandbox, dest.rstrip("/") or "/"))
+    name = basename(local)
+    target = root / name if name else root
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if file_like:
+        shutil.copy2(source, target, follow_symlinks=False)
+    else:
+        shutil.copytree(source, target, symlinks=True, dirs_exist_ok=True)
+
+
+def sandbox_json(sandbox):
+    return {
+        "id": sandbox["id"],
+        "name": sandbox["name"],
+        "workspace": "default",
+        "host_key_fingerprint": "",
+        "labels": sandbox["labels"],
+        "annotations": {},
+        "resource_version": 1,
+        "created_at": "2026-11-03 12:00:00",
+        "phase": sandbox["phases"][0],
+        "current_policy_version": 1,
+        "exit_code": None,
+        "conditions": [],
+        "endpoint_statuses": [],
+        "last_token_grant_failure": None,
+        "configuration_admission": None,
+        "provisioning": None,
+        "created_from_workload_template": None,
+    }
+
+
+def take(args, flag):
+    values = []
+    while flag in args:
+        index = args.index(flag)
+        values.append(args[index + 1])
+        del args[index:index + 2]
+    return values
+
+
+def split_command(args):
+    if "--" in args:
+        index = args.index("--")
+        return args[:index], args[index + 1:]
+    return args, []
+
+
+def create(args):
+    if failing("create"):
+        fail("create failed")
+    args, command = split_command(args)
+    name = take(args, "--name")[0]
+    data = load()
+    if name in data["sandboxes"]:
+        fail(f"sandbox '{name}' already exists")
+    labels = dict(item.split("=", 1) for item in take(args, "--label"))
+    uploads = take(args, "--upload")
+    phases = os.environ.get("FAKE_OPENSHELL_PHASES", "Ready").split(",")
+    data["sandboxes"][name] = {
+        "id": uuid.uuid4().hex, "name": name, "labels": labels, "phases": phases,
+        "settings": {}, "command": command, "args": args,
+    }
+    save(data)
+    (FS / name).mkdir(parents=True, exist_ok=True)
+    for spec in uploads:
+        local, _, dest = spec.partition(":")
+        copy_in(name, local, dest or PREFIX)
+    print(f"Created sandbox {name}")
+
+
+def get(args):
+    if failing("get"):
+        fail("status: Unavailable, message: \"gateway unreachable\"")
+    name = args[0]
+    data = load()
+    sandbox = data["sandboxes"].get(name)
+    if sandbox is None:
+        fail('status: NotFound, message: "sandbox not found"')
+    print(json.dumps(sandbox_json(sandbox), indent=2))
+    if len(sandbox["phases"]) > 1:
+        sandbox["phases"].pop(0)
+        save(data)
+
+
+def upload(args):
+    if failing("upload"):
+        fail("upload failed")
+    args = [arg for arg in args if arg != "--no-git-ignore"]
+    name, local = args[0], args[1]
+    dest = args[2] if len(args) > 2 else PREFIX
+    if name not in load()["sandboxes"]:
+        fail('status: NotFound, message: "sandbox not found"')
+    copy_in(name, local, dest)
+
+
+def run_inside(name, args, command):
+    workdir = take(args, "--workdir")
+    env = dict(os.environ)
+    for item in take(args, "--env"):
+        key, _, value = item.partition("=")
+        env[key] = mapped(name, value)
+    cwd = mapped(name, workdir[0]) if workdir else str(FS / name)
+    Path(cwd).mkdir(parents=True, exist_ok=True)
+    argv = [mapped(name, part) for part in command]
+    result = subprocess.run(argv, cwd=cwd, env=env)
+    sys.exit(result.returncode)
+
+
+def exec_(args):
+    if failing("exec"):
+        fail("exec failed")
+    args, command = split_command(args)
+    names = take(args, "-n") or take(args, "--name")
+    name = names[0]
+    data = load()
+    sandbox = data["sandboxes"].get(name)
+    if sandbox is None:
+        fail('status: NotFound, message: "sandbox not found"')
+    if sandbox["phases"][0] != "Ready":
+        fail(f"sandbox '{name}' is not ready (phase: {sandbox['phases'][0]}); "
+             "wait for it to reach Ready state")
+    tty = "--tty" in args
+    if tty and os.environ.get("FAKE_OPENSHELL_RUN_TTY") != "1":
+        print(json.dumps({"exec": name, "args": args, "command": command}))
+        return
+    run_inside(name, args, command)
+
+
+def settings(args):
+    if args[0] != "set" or "--global" in args:
+        fail("the fake only supports per-sandbox settings set")
+    rest = args[1:]
+    key = take(rest, "--key")[0]
+    value = take(rest, "--value")[0]
+    data = load()
+    data["sandboxes"][rest[0]]["settings"][key] = value
+    save(data)
+
+
+def delete(args):
+    data = load()
+    for name in args:
+        data["sandboxes"].pop(name, None)
+        shutil.rmtree(FS / name, ignore_errors=True)
+    save(data)
+
+
+def main():
+    args = sys.argv[1:]
+    HOME.mkdir(parents=True, exist_ok=True)
+    with open(HOME / "calls.jsonl", "a", encoding="utf-8") as stream:
+        stream.write(json.dumps({"argv": args, "no_color": os.environ.get("NO_COLOR"),
+                                 "cwd": os.getcwd()}) + "\n")
+    if args in (["--version"], ["-V"]):
+        print(f"openshell {os.environ.get('FAKE_OPENSHELL_VERSION', '0.1.6')}")
+        return
+    gateway = take(args, "-g") + take(args, "--gateway")
+    del gateway
+    if args[:2] == ["status", "-o"]:
+        print(json.dumps({"gateway": "fake", "status": "connected"}))
+        return
+    if args and args[0] == "settings":
+        return settings(args[1:])
+    if not args or args[0] != "sandbox":
+        fail(f"unsupported command {args!r}", 2)
+    verb, rest = args[1], args[2:]
+    if verb == "create":
+        return create(rest)
+    if verb == "get":
+        rest = [arg for arg in rest if arg not in ("-o", "json")]
+        return get(rest)
+    if verb == "upload":
+        return upload(rest)
+    if verb == "exec":
+        return exec_(rest)
+    if verb == "connect":
+        print(json.dumps({"connect": rest[0]}))
+        return
+    if verb == "delete":
+        return delete(rest)
+    fail(f"unsupported sandbox command {verb!r}", 2)
+
+
+if __name__ == "__main__":
+    main()

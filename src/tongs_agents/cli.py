@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import commands, legacy, owned, paths
+from tongs_agents import commands, legacy, owned, paths, session_store
 from tongs_agents.pi_install import (
     PI_CONFIG_NAME,
     install_pi,
@@ -1032,9 +1032,17 @@ def cmd_focus(args):
         sys.exit(1)
 
 
+CLEANUP_HINT = (
+    "Hint: no sidebar or monitor has maintained the session store in the last hour; "
+    "run `tongs-agents cleanup` to drop ended and exited sessions."
+)
+
+
 def cmd_status(args):
     from tongs_agents.discovery import read_sessions
     sessions = read_sessions()
+    if session_store.maintenance_overdue():
+        print(CLEANUP_HINT, file=sys.stderr)
 
     if not sessions:
         print("No sessions found.")

@@ -212,6 +212,12 @@ missing reattach only matters when the local gateway connection drops. `attach`
 mode stays available for images that already contain the workspace, with the
 key caveats shown in the pane and in `doctor`.
 
+Implementation note (M7-A review): OpenShell places a directory upload at
+`<dest>/<directory name>/` (flat only for a source such as `.`), so M7-A
+uploads the workspace as `.` from `cwd` and the staged `.tongs-agents`
+directory to the parent of its destination, `<dest>`, so it lands at
+`<dest>/.tongs-agents`; see [sandbox.md](../sandbox.md#what-a-launch-does).
+
 ### 3. Workspace access
 
 **Unvalidated (docs).**
