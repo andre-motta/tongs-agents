@@ -285,6 +285,27 @@ def test_unlisted_panes_fall_back_to_the_existing_path(
     assert all("focus-pane-id" not in argv for argv, _ in fake.calls)
 
 
+def test_transient_list_panes_misses_keep_the_in_session_branch(
+    fleet_dir, caller, fake, no_activation, monkeypatch
+):
+    # zellij 0.44.2 now and then answers list-panes with nothing or briefly
+    # reports no active session (#72); a resolved record in the caller's
+    # session must not fall back to the emulator path because of it.
+    seen = []
+    _live_process(monkeypatch, seen)
+    fake.responses["list-panes"] = _sequence(
+        (0, "", ""),
+        (1, "", "There is no active session!\n"),
+        (0, json.dumps(LIST_PANES["0.44.2"]), ""),
+    )
+    _record(fleet_dir, kind="terminal")
+    result = focus_session("wrapped-claude")
+    assert result.selection.succeeded
+    assert result.activation.detail == "skipped: same zellij session"
+    assert result.pid == 4242
+    assert seen == ["wrapped-claude"]
+
+
 def test_relative_socket_dir_in_record_is_not_trusted(
     fleet_dir, caller, fake, existing_path, monkeypatch
 ):
