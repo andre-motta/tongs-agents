@@ -8,6 +8,11 @@ pending launches; failures become notifications. Selecting a row focuses its
 pane: hook rows through ``focus.focus_session`` (its in-session branch), and
 hookless rows by selecting their pane directly after checking it is listed.
 
+Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
+the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
+selected launched pane, each confirmed in a dialog), Post to chat and Open
+chat pane. At start it removes stale grants and messages past retention.
+
 It reads ``[ui]`` (refresh interval, notify level, theme) and ``[workspace]``
 (default profiles first in the palette, ``tongs_tab``) from the config file.
 An invalid config file does not stop it: the request is still consumed, with
@@ -39,6 +44,7 @@ from tongs_agents.multiplexers import (
 from tongs_agents.palette import AppShell
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
+from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 NAME = "sidebar"
@@ -77,8 +83,8 @@ def focus_launch_pane(mux: Multiplexer, current_session: str,
         return FocusResult(state="failed", reason=error.detail, backend=mux.name)
 
 
-class SidebarApp(AppShell, FocusOnSelect, App):
-    """The workspace sidebar: a compact AgentsPanel plus spawn-on-mount."""
+class SidebarApp(AppShell, ChatActions, FocusOnSelect, App):
+    """The workspace sidebar: a compact AgentsPanel, chat and spawn-on-mount."""
 
     TITLE = "tongs-agents"
 
@@ -86,6 +92,7 @@ class SidebarApp(AppShell, FocusOnSelect, App):
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("n", "next_attention", "Next", show=True),
+        Binding("m", "toggle_chat", "Chat", show=True),
     ]
 
     agents_panel_id = "agents-panel"
@@ -130,6 +137,10 @@ class SidebarApp(AppShell, FocusOnSelect, App):
             compact=self.compact,
             id=self.agents_panel_id,
         )
+        chat = ChatPanel(refresh_interval=max(self.refresh_interval, 1.0),
+                         refusal=self.chat_refusal, id=self.chat_panel_id)
+        chat.display = False
+        yield chat
         yield AppFooter()
 
     def on_mount(self) -> None:
@@ -139,6 +150,7 @@ class SidebarApp(AppShell, FocusOnSelect, App):
                         severity="error", timeout=15)
         if self.token is not None:
             self.consume_spawn_request()
+        self.chat_housekeeping()
 
     @work(thread=True, exclusive=True, group="spawn-request")
     def consume_spawn_request(self) -> None:

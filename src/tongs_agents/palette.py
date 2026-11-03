@@ -10,7 +10,12 @@ offers through ``AppShell.palette_commands()``:
   ``[workspace].tongs_tab`` is not false);
 - ``Next needing attention``, ``Focus session`` and ``Toggle detail`` act on
   the agents panel like their keys;
-- ``Reload profiles`` re-reads the profiles from the config file.
+- ``Reload profiles`` re-reads the profiles from the config file;
+- in a host with chat actions (the sidebar, ``widgets.chat_panel.ChatActions``):
+  ``Grant chat``, ``Grant chat and wake`` and ``Revoke chat`` for the selected
+  launched pane (each confirmed in a dialog), ``Post to chat`` and
+  ``Toggle chat``; ``Open chat pane`` starts ``tongs-agents chat`` in a new
+  pane of the session.
 
 ``AppShell`` is the host mixin: it registers the provider next to Textual's
 system commands, applies ``[ui].theme`` and runs the spawns in worker
@@ -20,6 +25,7 @@ threads, reporting the outcome as notifications.
 from __future__ import annotations
 
 import shutil
+import sys
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,6 +49,14 @@ FOCUS_SESSION = "Focus session"
 TOGGLE_DETAIL = "Toggle detail"
 RELOAD_PROFILES = "Reload profiles"
 TONGS_PANE_NAME = "tongs"
+CHAT_GRANT = "Grant chat"
+CHAT_GRANT_WAKE = "Grant chat and wake"
+CHAT_REVOKE = "Revoke chat"
+CHAT_POST = "Post to chat"
+CHAT_TOGGLE = "Toggle chat"
+CHAT_OPEN = "Open chat pane"
+CHAT_PANE_NAME = "chat"
+CHAT_PANE_ARGV = (sys.executable, "-m", "tongs_agents.commands.chat")
 
 
 @dataclass(frozen=True)
@@ -170,6 +184,30 @@ class AppShell:
                            self.action_toggle_detail),
             PaletteCommand(RELOAD_PROFILES, reload_help, self.palette_reload_profiles),
         ]
+        if getattr(self, "chat_enabled", False):
+            commands += self.chat_commands()
+        return commands
+
+    def chat_commands(self) -> list[PaletteCommand]:
+        """The chat entries of a host with ``ChatActions``."""
+        commands = [
+            PaletteCommand(CHAT_GRANT, "Let the selected launched pane use chat",
+                           partial(self.chat_grant, False)),
+            PaletteCommand(CHAT_GRANT_WAKE,
+                           "Let the selected pane use chat and be woken on mention",
+                           partial(self.chat_grant, True)),
+            PaletteCommand(CHAT_REVOKE, "Take chat away from the selected pane",
+                           self.chat_revoke),
+            PaletteCommand(CHAT_POST, "Post a message as @maintainer",
+                           self.chat_post_prompt),
+            PaletteCommand(CHAT_TOGGLE, "Show or hide the chat panel",
+                           self.action_toggle_chat),
+        ]
+        if self._in_session():
+            commands.append(PaletteCommand(
+                CHAT_OPEN, f"Start the chat pane in session {self.palette_session}",
+                self.palette_open_chat,
+            ))
         return commands
 
     def palette_focus_selected(self) -> None:
@@ -210,6 +248,21 @@ class AppShell:
             self.call_from_thread(self._palette_failed, "tongs", detail)
             return
         self.call_from_thread(self._palette_spawned, "Opened tongs")
+
+    @work(thread=True, group="palette-spawn")
+    def palette_open_chat(self) -> None:
+        if not self._in_session():
+            self.call_from_thread(self._palette_failed, "chat", "not in a workspace session")
+            return
+        try:
+            self.palette_multiplexer.spawn(
+                self.palette_session, list(CHAT_PANE_ARGV), name=CHAT_PANE_NAME, focus=True
+            )
+        except (MultiplexerError, OSError) as error:
+            detail = getattr(error, "detail", None) or str(error)
+            self.call_from_thread(self._palette_failed, "chat", detail)
+            return
+        self.call_from_thread(self._palette_spawned, "Opened chat")
 
     def _palette_spawned(self, message: str) -> None:
         self.notify(message, timeout=3)
