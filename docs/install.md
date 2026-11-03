@@ -6,19 +6,31 @@ description: "Install tongs-agents and see what install changes in Claude Code, 
 ## Get the package
 
 tongs-agents needs Python 3.11 or newer. Its runtime dependencies are
-`textual` and `mcp`. Install it from source into a virtual environment:
+`textual` and `mcp`. Install it from PyPI as a tool:
+
+```bash
+pipx install tongs-agents     # or: uv tool install tongs-agents
+```
+
+`pip install tongs-agents` into a virtual environment works too. The tongs
+plugin needs the `[tongs]` extra in the environment tongs runs from:
+`pip install "tongs-agents[tongs]"` there, or `pipx inject tongs tongs-agents`
+when tongs came from pipx.
+
+To work on tongs-agents itself, install it editable from a clone:
 
 ```bash
 git clone https://github.com/andre-motta/tongs-agents.git
 cd tongs-agents
 python3 -m venv .venv
 . .venv/bin/activate
-pip install -e .              # or: pip install -e ".[tongs]" for the tongs plugin
+pip install -e ".[dev]"
 ```
 
-Hooks and MCP registrations point at the entry points of this environment
-(`tongs-agents`, `tongs-agents-hook` and its Python). If you move or recreate
-the environment, run `tongs-agents install` again.
+Hooks and MCP registrations point at the entry points of the environment you
+installed into (`tongs-agents`, `tongs-agents-hook` and its Python): the pipx
+or uv tool environment, your virtual environment, or the clone's `.venv`. If
+you move or recreate the environment, run `tongs-agents install` again.
 
 The workspace needs a multiplexer: Zellij 0.44.2 or newer, or tmux 3.2 or
 newer. On Linux x86_64, `tongs-agents doctor --fix zellij` downloads the
@@ -66,7 +78,7 @@ as JSON, and `--config-dir KIND=DIR` also checks one more config dir.
 tongs-agents uninstall              # hooks, MCP entries and session records
 tongs-agents uninstall --keep-data  # keep the sessions directory
 tongs-agents uninstall --agent pi   # only the Pi extension
-pip uninstall tongs-agents
+pipx uninstall tongs-agents         # or uv tool uninstall, or pip uninstall, matching how you installed it
 ```
 
 The rest of this page covers how `install` and `uninstall` change files and

@@ -14,6 +14,9 @@ GATES = {
     "tmux": "tmux-mux.yml",
 }
 FULL_SHA_PIN = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40} # v\d+(\.\d+)*$")
+DRY_RUN = "release-dry-run.yml"
+DRY_RUN_VERSION = "${{ inputs.version || '0.10.0' }}"
+TAG_ON_MAIN_STEP = "Verify the tag commit is on main"
 
 
 def _read(name: str) -> str:
@@ -41,6 +44,31 @@ def _sections(text: str, indent: int) -> dict[str, str]:
 
 def _jobs(name: str) -> dict[str, str]:
     return _sections(_sections(_read(name), 0)["jobs"], 2)
+
+
+def _steps(job: str) -> list[str]:
+    """The steps of one job body, each as its text without trailing blank lines."""
+    body = job.split("\n    steps:\n", 1)[1]
+    steps = re.split(r"(?m)^(?=      - )", body)
+    return [step.rstrip() for step in steps if step.strip()]
+
+
+def _run_blocks(text: str) -> list[str]:
+    """Every ``run:`` value, with its indented continuation lines."""
+    blocks = []
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        match = re.match(r"^(\s*)(?:- )?run:(.*)$", line)
+        if not match:
+            continue
+        indent = len(match.group(1))
+        block = [match.group(2)]
+        for following in lines[index + 1:]:
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            block.append(following)
+        blocks.append("\n".join(block))
+    return blocks
 
 
 def _uses(text: str) -> list[str]:
@@ -179,7 +207,7 @@ def test_gate_actions_are_pinned_by_full_sha(name):
         assert FULL_SHA_PIN.match(ref), ref
 
 
-@pytest.mark.parametrize("name", [*sorted(GATES.values()), "publish.yml"])
+@pytest.mark.parametrize("name", [*sorted(GATES.values()), "publish.yml", DRY_RUN])
 def test_checkouts_do_not_persist_credentials(name):
     lines = _read(name).splitlines()
     starts = [i for i, line in enumerate(lines) if re.match(r"^\s+- uses: actions/checkout@", line)]
@@ -217,3 +245,90 @@ def test_release_requirements_are_exact_and_hashed():
         assert match.group(1) not in pins, match.group(1)
         pins[match.group(1)] = match.group(2)
     assert {"build", "twine", "hatchling", "hatch-vcs"} <= set(pins)
+
+
+def test_publish_verify_installs_and_runs_the_built_wheel():
+    smoke = [step for step in _steps(_jobs("publish.yml")["verify"])
+             if "Install the built wheel in a clean venv" in step]
+    assert len(smoke) == 1
+    step = smoke[0]
+    assert 'python3 -m venv "$smoke/venv"' in step
+    assert "--only-binary :all:" in step and "dist/*.whl" in step
+    assert '"$smoke/venv/bin/tongs-agents" --help' in step
+    assert "workspace.load_template()" in step
+    assert "zellij_download.load_pins()" in step
+    assert '"pi_pins.json"' in step
+    assert "pi_extension_path()" in step
+    assert '("tongs.plugins", "agents", "tongs_agents.tongs_plugin:FleetMonitorPlugin")' in step
+
+
+@pytest.mark.parametrize("name", ["publish.yml", DRY_RUN])
+def test_release_run_blocks_do_not_interpolate_expressions(name):
+    blocks = _run_blocks(_read(name))
+    assert blocks
+    for block in blocks:
+        assert "${{" not in block, block
+
+
+def test_dry_run_triggers_on_dispatch_and_release_file_prs_only():
+    triggers = _sections(_sections(_read(DRY_RUN), 0)["on"], 2)
+    assert set(triggers) == {"workflow_dispatch", "pull_request"}
+    pull_request = triggers["pull_request"]
+    assert re.search(r"^\s+branches:\s*\n\s+- main$", pull_request, re.M)
+    paths = set(re.findall(r'^\s+- "([^"]+)"$', pull_request, re.M))
+    assert {
+        ".github/release-requirements.txt",
+        ".github/workflows/publish.yml",
+        f".github/workflows/{DRY_RUN}",
+        "pyproject.toml",
+        "README.md",
+        "src/tongs_agents/data/**",
+        "src/tongs_agents/layouts/**",
+        "src/tongs_agents/pi_extension/**",
+    } <= paths
+    dispatch = triggers["workflow_dispatch"]
+    assert re.search(r'^\s+default: "\d+\.\d+\.\d+"$', dispatch, re.M)
+
+
+def test_dry_run_cannot_publish():
+    text = _read(DRY_RUN)
+    top = _sections(text, 0)
+    assert re.fullmatch(r"\s*contents: read\s*", top["permissions"])
+    assert "id-token" not in text
+    assert "environment:" not in text
+    assert "secrets." not in text
+    assert "gh-action-pypi-publish" not in text
+    assert set(_jobs(DRY_RUN)) == {"build", "verify"}
+    for job in _jobs(DRY_RUN).values():
+        assert re.fullmatch(r"\s*contents: read\s*", _sections(job, 4)["permissions"])
+
+
+def test_dry_run_build_runs_the_publish_build_steps_with_a_pretend_version():
+    dry = _jobs(DRY_RUN)["build"]
+    assert _steps(dry) == _steps(_jobs("publish.yml")["build"])
+    env = _sections(dry, 4)["env"]
+    assert re.fullmatch(
+        rf"\s*SETUPTOOLS_SCM_PRETEND_VERSION_FOR_TONGS_AGENTS: {re.escape(DRY_RUN_VERSION)}\s*",
+        env,
+    )
+
+
+def test_dry_run_verify_runs_the_publish_verify_steps_except_the_tag_check():
+    publish = [step for step in _steps(_jobs("publish.yml")["verify"])
+               if TAG_ON_MAIN_STEP not in step]
+    dry = _jobs(DRY_RUN)["verify"]
+    assert "build" in _sections(dry, 4)["needs"]
+    tag_env = "TAG_NAME: ${{ github.ref_name }}"
+    dry_tag_env = f"TAG_NAME: v{DRY_RUN_VERSION}"
+    assert _steps(dry) == [step.replace(tag_env, dry_tag_env) for step in publish]
+    assert dry_tag_env in dry
+    assert TAG_ON_MAIN_STEP not in dry
+
+
+def test_dry_run_actions_use_the_publish_pins():
+    remote = [u for u in _uses(_read(DRY_RUN)) if not u.startswith("./")]
+    assert remote
+    publish = set(_uses(_read("publish.yml")))
+    for ref in remote:
+        assert FULL_SHA_PIN.match(ref), ref
+        assert ref in publish, ref

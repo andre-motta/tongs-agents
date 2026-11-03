@@ -9,7 +9,8 @@ In this tutorial you install tongs-agents, describe four agents as profiles
 (two Claude Code config dirs, Codex and Pi), install their hooks, check the
 setup with `doctor`, and open a workspace with the sidebar.
 
-It takes about 15 minutes. You need Linux, Python 3.11 or newer and git.
+It takes about 15 minutes. You need Linux, Python 3.11 or newer and
+[pipx](https://pipx.pypa.io/) or [uv](https://docs.astral.sh/uv/).
 Agents are optional: every step works with the agents you have, and the
 [free walkthrough](#no-agent-installed-yet) at the end uses a plain shell
 instead.
@@ -17,16 +18,15 @@ instead.
 ## 1. Install tongs-agents
 
 ```bash
-git clone https://github.com/andre-motta/tongs-agents.git
-cd tongs-agents
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
+pipx install tongs-agents        # or: uv tool install tongs-agents
 tongs-agents --help
 ```
 
-Keep this virtual environment: the hooks you install later point at it. If
-you recreate it, run `tongs-agents install` again.
+The hooks and MCP registrations you install later point at this tool
+environment. If you move or recreate it, run `tongs-agents install` again.
+`pip install tongs-agents` into a virtual environment works too; then keep
+that environment. To work from a clone instead, see
+[Installing](../install.md#get-the-package).
 
 ## 2. Get a multiplexer
 

@@ -145,6 +145,43 @@ jobs:
           print(f"dist matches {tag}: {[p.name for p in files]}")
           PY
 
+      - name: Install the built wheel in a clean venv and run it
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/wheel-smoke"
+          python3 -m venv "$smoke/venv"
+          mkdir "$smoke/home"
+          wheels=(dist/*.whl)
+          "$smoke/venv/bin/python" -m pip install --only-binary :all: "${wheels[@]}"
+          cd "$smoke"
+          HOME="$smoke/home" XDG_CONFIG_HOME="$smoke/home/.config" \
+            XDG_STATE_HOME="$smoke/home/.local/state" \
+            "$smoke/venv/bin/tongs-agents" --help > /dev/null
+          "$smoke/venv/bin/python" -I - <<'PY'
+          import json
+          from importlib import metadata, resources
+
+          from tongs_agents import zellij_download
+          from tongs_agents.commands import workspace
+          from tongs_agents.pi_install import pi_extension_path
+
+          if not workspace.load_template().strip():
+              raise SystemExit("the workspace layout template is empty")
+          zellij_download.load_pins()
+          json.loads(resources.files("tongs_agents").joinpath("data", "pi_pins.json").read_text("utf-8"))
+          if not (pi_extension_path() / "package.json").is_file():
+              raise SystemExit("the Pi extension is missing")
+          points = {(e.group, e.name, e.value) for e in metadata.distribution("tongs-agents").entry_points}
+          expected = {
+              ("console_scripts", "tongs-agents", "tongs_agents.cli:main"),
+              ("console_scripts", "tongs-agents-hook", "tongs_agents.hook:main"),
+              ("tongs.plugins", "agents", "tongs_agents.tongs_plugin:FleetMonitorPlugin"),
+          }
+          if points != expected:
+              raise SystemExit(f"unexpected entry points {sorted(points)}")
+          print("installed wheel runs and loads its data files")
+          PY
+
   publish:
     needs: [tests, shells, pi, zellij, tmux, build, verify]
     runs-on: ubuntu-24.04

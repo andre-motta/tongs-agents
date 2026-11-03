@@ -99,14 +99,22 @@ FIRST_PROFILES = ("f1", "f2")
 RERUN_PROFILES = ("f3", "f4")
 HOOKED_PROFILE = "f3"
 CONTROL_PROFILE = "f4"
+# A budget is what a quiet machine meets; it is recorded in the evidence, and
+# only its ceiling fails the run. Shared hosted runners can be slow enough to
+# miss the budget with nothing wrong (#107).
 SESSION_BUDGET = 5.0
+SESSION_CEILING = 20.0
+PANES_CEILING = 20.0
 STATUS_BUDGET = 4.0
+STATUS_CEILING = 15.0
 REPORT_WAIT = 10.0
 TOKEN_RE = re.compile(r"--spawn-request ([0-9a-f]{32})")
 DOWN_ARROW = b"\x1b[B"
 PRIVATE_PATH_RE = re.compile(r"/(?:tmp|home|run/user)/\S*")
 DIAGNOSTIC_LINES = 40
 SCREEN_AFTER = 5.0
+CLIENT_TAIL_BYTES = 16384
+ANSI_RE = re.compile(rb"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07|\x1b[()=>][0-9A-Za-z]?")
 RERUN_STDERR = "rerun.stderr"
 # exec keeps the rerun the pane's own process; only its stderr goes to the file.
 STDERR_TO_FILE = 'exec "$@" 2>"$0"'
@@ -429,6 +437,33 @@ def install(root, env, tongs_bin, observations):
         "claude_config_dir_is_target"], "MCP registration did not target the config dir")
 
 
+class CapturingClient(PtyClient):
+    """A PtyClient that keeps its last output, to explain a failed workspace start."""
+
+    def __init__(self, *arguments):
+        self.tail = b""
+        super().__init__(*arguments)
+
+    def _drain(self):
+        while True:
+            try:
+                data = os.read(self.fd, 65536)
+            except OSError:
+                return
+            if not data:
+                return
+            self.tail = (self.tail + data)[-CLIENT_TAIL_BYTES:]
+
+    def screen(self):
+        return screen_text(self.tail)
+
+
+def screen_text(raw):
+    """Terminal output as plain text lines, with escape sequences removed."""
+    text = ANSI_RE.sub(b"", raw).decode("utf-8", "replace")
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
 def pane_titles(target):
     return sorted(pane.get("title", "") for pane in target.panes())
 
@@ -459,10 +494,24 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
         argv += ["--profile", name]
     argv += ["--no-tongs", "--session", session]
     started = time.monotonic()
-    PtyClient(argv, env, str(root / "work"), tracker, "client")
-    created = wait_until(lambda: session in target.sessions(), 15)
+    client = CapturingClient(argv, env, str(root / "work"), tracker, "client")
+    created = wait_until(lambda: session in target.sessions(), SESSION_CEILING)
     session_seconds = round(time.monotonic() - started, 2)
-    expect(created, "workspace did not create the session")
+    timing = {
+        "session_listed_seconds": session_seconds,
+        "session_budget_seconds": SESSION_BUDGET,
+        "session_within_budget": bool(created) and session_seconds <= SESSION_BUDGET,
+        "session_ceiling_seconds": SESSION_CEILING,
+    }
+    if not created:
+        observations["workspace"] = {
+            **timing,
+            "session_listed": False,
+            "other_sessions": len(target.sessions()),
+            "client_screen": diagnostic_lines(client.screen(), root),
+        }
+    expect(created, f"workspace did not create the session within {SESSION_CEILING} s "
+                    "(see workspace.client_screen)")
     expected = len(FIRST_PROFILES) + 1
     early = {}
 
@@ -474,7 +523,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
             early["screen"] = pane_screen(target, workspace_spawn.SIDEBAR_PANE_NAME, root)
         return False
 
-    ready = wait_until(panes_ready, 15)
+    ready = wait_until(panes_ready, PANES_CEILING)
     panes_seconds = round(time.monotonic() - started, 2)
     tracker.sweep()
     panes = target.panes()
@@ -485,9 +534,9 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
     observations["workspace"] = {
         "argv": ["tongs-agents", "workspace", "--profile", "f1", "--profile", "f2",
                  "--no-tongs", "--session", "<session>"],
-        "session_listed_seconds": session_seconds,
+        **timing,
         "panes_listed_seconds": panes_seconds,
-        "session_budget_seconds": SESSION_BUDGET,
+        "panes_ceiling_seconds": PANES_CEILING,
         "terminal_panes": len(panes),
         "expected_terminal_panes": expected,
         "pane_titles": pane_titles(target),
@@ -496,9 +545,11 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
     if not ready or len(panes) != expected:
         observations["workspace"]["sidebar_screen"] = early.get("screen") or pane_screen(
             target, workspace_spawn.SIDEBAR_PANE_NAME, root)
+        observations["workspace"]["client_screen"] = diagnostic_lines(client.screen(), root)
     observations["_panes_ready_at"] = time.monotonic()
-    expect(session_seconds <= SESSION_BUDGET,
-           f"session took {session_seconds} s (budget {SESSION_BUDGET} s)")
+    expect(session_seconds <= SESSION_CEILING,
+           f"session took {session_seconds} s (ceiling {SESSION_CEILING} s, "
+           f"budget {SESSION_BUDGET} s)")
     expect(ready and len(panes) == expected, f"expected {expected} panes, got {len(panes)}")
     expect(len(sidebar_panes) == 1, "the workspace does not have exactly one sidebar pane")
     expect(match is not None, "the sidebar pane does not name a spawn request")
@@ -530,7 +581,7 @@ def spawn_request_consumed(session, token, target, observations):
 
 def hook_rows(session, feed, target, profiles, since, observations, key):
     """Wait until every profile has a hook row joined to its launch record."""
-    deadline = since + 15
+    deadline = since + STATUS_CEILING
     found = {}
     while time.monotonic() < deadline:
         records = records_by_profile(session)
@@ -552,6 +603,7 @@ def hook_rows(session, feed, target, profiles, since, observations, key):
         facts[name] = {
             "hook_row": True,
             "seconds_after_panes_listed": seconds,
+            "within_status_budget": seconds <= STATUS_BUDGET,
             "source": row.source,
             "status": row.status.value,
             "agent": row.agent,
@@ -562,11 +614,14 @@ def hook_rows(session, feed, target, profiles, since, observations, key):
             "pane_matches_launch": row.terminal_env.get("ZELLIJ_PANE_ID") == record.pane_id,
             "session_matches": row.terminal_env.get("ZELLIJ_SESSION_NAME") == session,
         }
-    observations[key] = {"status_budget_seconds": STATUS_BUDGET, "profiles": facts}
+    observations[key] = {"status_budget_seconds": STATUS_BUDGET,
+                         "status_ceiling_seconds": STATUS_CEILING, "profiles": facts}
     for name, item in facts.items():
-        expect(item["hook_row"], f"profile {name} has no hook row in sidebar data")
-        expect(item["seconds_after_panes_listed"] <= STATUS_BUDGET,
-               f"profile {name} status took {item['seconds_after_panes_listed']} s")
+        expect(item["hook_row"], f"profile {name} has no hook row in sidebar data "
+                                 f"within {STATUS_CEILING} s")
+        expect(item["seconds_after_panes_listed"] <= STATUS_CEILING,
+               f"profile {name} status took {item['seconds_after_panes_listed']} s "
+               f"(ceiling {STATUS_CEILING} s, budget {STATUS_BUDGET} s)")
         expect(item["launch_id_matches"] and item["profile_id_matches"]
                and item["pane_matches_launch"] and item["session_matches"],
                f"profile {name} row does not match its launch record")
@@ -642,7 +697,7 @@ def rerun_rows(session, feed, target, observations):
     records = records_by_profile(session)
     control = records.get(CONTROL_PROFILE)
     row = wait_until(lambda: rows_by_launch(feed).get(control.launch_id) if control else None,
-                     STATUS_BUDGET)
+                     STATUS_CEILING)
     observations["claude_config_dir"]["control"] = {
         "profile": CONTROL_PROFILE,
         "config_dir_installed": False,
