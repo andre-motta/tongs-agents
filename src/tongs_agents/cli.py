@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import __version__, commands, legacy, owned, paths, session_store, toml_tables
+from tongs_agents import commands, legacy, owned, paths, session_store, toml_tables
 from tongs_agents.pi_install import (
     PI_CONFIG_NAME,
     install_pi,
@@ -1150,6 +1150,18 @@ def bare_args(parser):
     return args
 
 
+def package_version() -> str:
+    """The installed version; the shell validator loads this module from source.
+
+    It imports ``tongs_agents.cli`` without running the package ``__init__``,
+    and ``_version.py`` only exists in a built or installed tree.
+    """
+    try:
+        return metadata.version("tongs-agents")
+    except metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def build_parser(modules=None):
     """The argument parser with built-in verbs and every command module.
 
@@ -1164,7 +1176,7 @@ def build_parser(modules=None):
             "(or attaches to it); add agents with 'tongs-agents run PROFILE [DIR]'."
         ),
     )
-    parser.add_argument("--version", action="version", version=f"tongs-agents {__version__}")
+    parser.add_argument("--version", action="version", version=f"tongs-agents {package_version()}")
     sub = parser.add_subparsers(dest="command")
 
     p_install = sub.add_parser(
