@@ -243,11 +243,12 @@ def test_the_hook_does_not_import_notify():
     subprocess.run([sys.executable, "-c", code], check=True, timeout=60)
 
 
-def test_notify_is_a_cli_command():
+def test_notify_is_a_cli_command(monkeypatch):
     from tongs_agents import cli
     parser, handlers = cli.build_parser()
     args = parser.parse_args(["notify", "needs-you", "review", "the", "diff"])
-    assert handlers["notify"] is notify.run
+    monkeypatch.setattr(notify, "run", lambda parsed: ("dispatched", parsed))
+    assert handlers["notify"](args) == ("dispatched", args)
     assert (args.state, args.message) == ("needs-you", ["review", "the", "diff"])
     with pytest.raises(SystemExit):
         parser.parse_args(["notify", "finished"])

@@ -44,7 +44,7 @@ Codex sessions --------/
 - `views/fleet_screen.py`: `FleetScreen(Screen)` for embedding in tongs. Same features as standalone but escape pops back.
 - `tongs_plugin.py`: `FleetMonitorPlugin(TongsPlugin)` ABC implementation, registered as the `agents` entry point in `tongs.plugins` (tongs config `[plugins.agents]`). Optional tongs dependency. Registers command palette entry and screen.
 - `focus.py`: Session lookup and PID resolution. Delegates to terminal APIs for actual focus.
-- `cli.py`: Entry point for `tongs-agents` command. Installs Claude Code and Codex hooks and the `tongs-agents` MCP server (`claude mcp add --scope user`, `codex mcp add`), removes claude-fleet-monitor leftovers, reports the rest with `doctor`, then delegates to tui/focus/status.
+- `cli.py`: Entry point for `tongs-agents` command. Installs Claude Code and Codex hooks and the `tongs-agents` MCP server (`claude mcp add --scope user`; for Codex the `[mcp_servers.tongs-agents]` table in `config.toml`, written by the owned-table writer), removes claude-fleet-monitor leftovers, reports the rest with `doctor`, then delegates to tui/focus/status.
 
 ### Terminal APIs (`terminal_apis/`)
 

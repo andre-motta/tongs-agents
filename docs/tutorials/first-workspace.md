@@ -9,7 +9,8 @@ In this tutorial you install tongs-agents, describe four agents as profiles
 (two Claude Code config dirs, Codex and Pi), install their hooks, check the
 setup with `doctor`, and open a workspace with the sidebar.
 
-It takes about 15 minutes. You need Linux, Python 3.11 or newer and git.
+It takes about 15 minutes. You need Linux, Python 3.11 or newer and
+[pipx](https://pipx.pypa.io/) or [uv](https://docs.astral.sh/uv/).
 Agents are optional: every step works with the agents you have, and the
 [free walkthrough](#no-agent-installed-yet) at the end uses a plain shell
 instead.
@@ -17,16 +18,15 @@ instead.
 ## 1. Install tongs-agents
 
 ```bash
-git clone https://github.com/andre-motta/tongs-agents.git
-cd tongs-agents
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .
+pipx install tongs-agents        # or: uv tool install tongs-agents
 tongs-agents --help
 ```
 
-Keep this virtual environment: the hooks you install later point at it. If
-you recreate it, run `tongs-agents install` again.
+The hooks and MCP registrations you install later point at this tool
+environment. If you move or recreate it, run `tongs-agents install` again.
+`pip install tongs-agents` into a virtual environment works too; then keep
+that environment. To work from a clone instead, see
+[Installing](../install.md#get-the-package).
 
 ## 2. Get a multiplexer
 
@@ -62,7 +62,9 @@ config_dir = "~/.claude-alt"
 [profiles.codex-review]
 command = ["codex"]
 
-# Pi with a local model through Ollama (no API cost).
+# Pi with a local model through Ollama (no API cost). Replace cwd with a
+# project directory you have, or drop the line to start in the workspace's
+# directory.
 [profiles.pi-local]
 command = ["pi", "--provider", "ollama", "--model", "qwen3-coder"]
 cwd = "~/src/example"
@@ -100,8 +102,9 @@ What it writes:
 - hooks in `settings.json` (Claude Code) and `hooks.json` (Codex) of each
   home, after keeping a one-time `<name>.tongs-agents.bak` copy of a file
   that already existed;
-- the `tongs-agents` MCP server, through `claude mcp add --scope user` and
-  `codex mcp add`, when those CLIs are on `PATH`;
+- the `tongs-agents` MCP server, through `claude mcp add --scope user` for
+  Claude Code and as a table in Codex's `config.toml`, when those CLIs are on
+  `PATH`;
 - the packaged Pi extension, through Pi itself.
 
 Restart agents that were already running. The first time you start Codex
@@ -118,9 +121,14 @@ tongs-agents doctor
 fix. Typical findings at this point:
 
 - a profile's config home is missing hooks: run `tongs-agents install` again;
+- the Pi extension is not installed because Pi is missing or older than
+  0.84.4 (a warning): install Pi and run `tongs-agents install` again, or
+  remove the `pi-local` profile;
+- a profile's `cwd` is not a directory (a warning): create it or change `cwd`
+  in step 3;
 - `zellij` is missing or too old: see step 2;
-- a profile with harness `other` runs unmonitored: expected, see
-  [any command as a pane](any-command.md).
+- a profile with harness `other` has no hooks (a note): expected, it reports
+  with `tongs-agents notify`, see [any command as a pane](any-command.md).
 
 Run it until it reports no errors. It exits 0 when only notes remain, 1 with
 warnings and 2 with errors.

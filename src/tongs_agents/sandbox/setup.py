@@ -9,7 +9,10 @@ Shared by ``tongs-agents sandbox setup`` and the Textual wizard in
    gateway answers, the providers it already has (``provider list -o json``);
 2. takes a ``Plan``: a profile name, a host folder, a harness, network
    presets, provider names (credentials stay OpenShell providers, row 13),
-   an optional image and gateway;
+   an optional image and gateway. The folder is uploaded into the sandbox,
+   so ``/``, the home folder and any folder holding it are refused
+   (``unsafe_folder``), and the current directory is never the default
+   when it is one of them;
 3. renders the plan's policy (``policy_text``) for review. ``review`` turns
    it into a ``ReviewedPolicy``, which is the only thing ``probe_image`` and
    ``write_policy`` accept, so no sandbox starts before the policy was shown;
@@ -49,11 +52,13 @@ from tongs_agents.profiles import (
     ProfileError,
     parse_profile,
     profiles_path,
+    unsafe_folder,
 )
 from tongs_agents.sandbox.approvals import clean
 from tongs_agents.sandbox.launcher import READY_TIMEOUT, SandboxLaunchError, wait_ready
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
+    SANDBOX_DOCS_URL,
     OpenShell,
     OpenShellError,
     flavour,
@@ -101,6 +106,9 @@ PROBE_SCRIPT = (
 # and mv; the bridge pulls with head and base64; uploads need tar.
 IMAGE_TOOLS: tuple[str, ...] = ("sh", "bash", "tar", "cat", "mv", "head", "base64")
 CHAT_TOOL = "tongs-agents"
+# The upload skips only what .gitignore lists; the wizard warns about these.
+SECRET_NAMES: tuple[str, ...] = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".env",
+                                 ".netrc", ".git-credentials")
 
 
 class SetupError(ValueError):
@@ -138,12 +146,13 @@ def version_checks(client: OpenShell, *, required: bool = True) -> tuple[list[Ch
     version = parse_version(text)
     error, warnings = version_problems(version)
     if error:
-        return [Check("openshell", level, error,
-                      "Install a supported OpenShell CLI yourself (see docs/sandbox.md)")], text
+        remediation = f"Install a supported OpenShell CLI yourself (see {SANDBOX_DOCS_URL})"
+        return [Check("openshell", level, error, remediation)], text
     shown = ".".join(map(str, version))
     checks = [Check("openshell", "ok",
                     f"openshell {shown} ({flavour(text)}) at {client.executable}")]
-    checks += [Check("openshell", "warn", warning, "See docs/sandbox.md for supported versions")
+    checks += [Check("openshell", "warn", warning,
+                     f"See {SANDBOX_DOCS_URL} for supported versions")
                for warning in warnings]
     return checks, text
 
@@ -449,13 +458,25 @@ def _yaml(value, indent: int = 0) -> list[str]:
 # Plan
 
 
+def secret_paths(folder: Path) -> tuple[str, ...]:
+    """Well-known credential files or folders directly inside ``folder``."""
+    found = []
+    for name in SECRET_NAMES:
+        try:
+            if (Path(folder) / name).exists():
+                found.append(name)
+        except OSError:
+            continue
+    return tuple(found)
+
+
 @dataclass(frozen=True)
 class Plan:
     """The wizard's answers; ``check`` validates them."""
 
     profile: str
     harness: str
-    folder: Path
+    folder: Path | None
     presets: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
     image: str | None = None
@@ -480,11 +501,17 @@ class Plan:
             )
         if self.harness not in SETUP_HARNESSES:
             raise SetupError(f"harness: one of {', '.join(SETUP_HARNESSES)}")
+        if self.folder is None or not str(self.folder).strip():
+            raise SetupError("folder: name the project folder to upload into the sandbox")
         folder = Path(self.folder).expanduser()
         if not folder.is_absolute() or "\0" in str(folder):
             raise SetupError("folder: an absolute path")
         if not folder.is_dir():
             raise SetupError(f"folder: {folder} is not a directory")
+        unsafe = unsafe_folder(folder)
+        if unsafe is not None:
+            raise SetupError(f"folder: {unsafe}; everything in it would be uploaded into "
+                             "the sandbox, credentials included. Pick a project folder")
         unknown = [key for key in self.presets if key not in PRESETS]
         if unknown:
             raise SetupError(f"network preset {unknown[0]!r}: one of {', '.join(PRESETS)}")
@@ -520,13 +547,23 @@ def suggested_providers(harness: str, presets: Iterable[str] = ()) -> tuple[str,
     ))
 
 
+def default_folder() -> Path | None:
+    """The current directory, unless uploading it is refused (``unsafe_folder``)."""
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        return None
+    return None if unsafe_folder(cwd) is not None else cwd
+
+
 def default_plan(harness: str = "claude", folder: Path | None = None,
                  profile: str | None = None) -> Plan:
+    """The wizard's starting answers; no folder when the current one may not be uploaded."""
     presets = suggested_presets(harness)
     return Plan(
         profile=profile or f"{harness}-boxed",
         harness=harness,
-        folder=folder if folder is not None else Path.cwd(),
+        folder=folder if folder is not None else default_folder(),
         presets=presets,
         providers=suggested_providers(harness, presets),
     )
@@ -724,6 +761,11 @@ def finish(plan: Plan, report: HostReport | None, reviewed: ReviewedPolicy | Non
                      "from the sidebar.")
     if report is not None and report.provider_error:
         notes.append(f"Could not list providers: {report.provider_error}")
+    secrets_found = secret_paths(plan.folder)
+    if secrets_found:
+        notes.append(f"{plan.folder} holds {', '.join(secrets_found)}. The upload skips only "
+                     "what .gitignore lists, so unless it lists them the agent can read "
+                     "these; move them out or pick a narrower folder.")
     if not plan.presets:
         notes.append("The policy allows no network access; the agent cannot reach its model "
                      "API until you approve a rule.")

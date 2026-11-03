@@ -34,6 +34,8 @@ def add_arguments(parser):
 
 
 def _home(profile) -> str:
+    if profile.sandbox is not None:
+        return "inside the OpenShell sandbox"
     harness, directory, problem = cli.profile_home(profile)
     if problem is not None:
         return f"unmonitored: {problem}"
@@ -42,6 +44,25 @@ def _home(profile) -> str:
     target = cli.Target(harness)
     default = target.pi_dir if harness == "pi" else target.config_file.parent
     return f"{default} (default)"
+
+
+def _sandbox(spec) -> dict | None:
+    if spec is None:
+        return None
+    return {
+        "mode": spec.mode,
+        "upload": spec.upload,
+        "workdir": spec.workdir,
+        "name": spec.name,
+        "image": spec.image,
+        "providers": list(spec.providers),
+        "policy": str(spec.policy) if spec.policy else None,
+        "gateway": spec.gateway,
+        "cpu": spec.cpu,
+        "memory": spec.memory,
+        "policy_advisor": spec.policy_advisor,
+        "driver_config": spec.driver_config is not None,
+    }
 
 
 def describe(profile) -> dict:
@@ -56,6 +77,7 @@ def describe(profile) -> dict:
         "config_home": _home(profile),
         "cwd": str(profile.cwd) if profile.cwd else None,
         "mcp_control": profile.mcp_control,
+        "sandbox": _sandbox(profile.sandbox),
     }
 
 
@@ -78,6 +100,12 @@ def _print_profile(info):
     for key, value in info.items():
         if isinstance(value, list):
             value = cli._command_string(value) if key != "env" else ", ".join(value)
+        elif isinstance(value, dict):
+            value = ", ".join(
+                f"{name}={', '.join(item) if isinstance(item, list) else item}"
+                for name, item in value.items() if item not in (None, [], False)
+                or name == "upload"
+            )
         print(f"{key}: {'' if value is None else value}")
 
 
@@ -107,7 +135,7 @@ def run(args) -> int:
 
 
 def doctor_checks():
-    """Profiles that would run unmonitored or cannot be checked."""
+    """Profiles that would run unmonitored, fail to start or cannot be checked."""
     try:
         profiles = load_profiles()
     except ProfileError as error:
@@ -116,13 +144,22 @@ def doctor_checks():
         )]
     checks = []
     for profile in profiles.values():
+        if profile.cwd is not None and not os.path.isdir(profile.cwd):
+            checks.append(Check(
+                "profiles", "warn",
+                f"Profile {profile.name} has cwd {profile.cwd}, which is not a directory; "
+                "its pane fails to start",
+                f"Create that directory or change cwd in [profiles.{profile.name}]",
+            ))
         harness, directory, problem = cli.profile_home(profile)
         if harness is None:
             checks.append(Check(
-                "profiles", "warn",
-                f"Profile {profile.name} (harness other) runs unmonitored: "
-                "tongs-agents installs hooks only for claude, codex and pi",
-                f"Set harness in [profiles.{profile.name}] if it runs one of them",
+                "profiles", "info",
+                f"Profile {profile.name} (harness other) has no hooks: tongs-agents installs "
+                "them only for claude, codex and pi, so its status comes only from "
+                "tongs-agents notify",
+                "Report status with tongs-agents notify, or set harness in "
+                f"[profiles.{profile.name}] for a wrapper of claude, codex or pi",
             ))
             continue
         if problem is not None:

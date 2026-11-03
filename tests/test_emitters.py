@@ -19,7 +19,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import owned, pi_install, toml_tables
+from tongs_agents import cli, owned, pi_install, toml_tables
 from tongs_agents.config_layer import emitters, schema
 from tongs_agents.config_layer.emitters import (
     EMITTERS,
@@ -195,11 +195,11 @@ def test_an_emitter_refuses_another_harness_target(world):
         EMITTERS["claude"].plan(load(world), target(world, "codex"))
 
 
-def test_plan_accepts_an_engine_object_with_root_and_document(world):
+def test_plan_refuses_an_untyped_engine_object(world):
     document = tomllib.loads((FIXTURE / "agentic.toml").read_text())
     engine_config = SimpleNamespace(root=FIXTURE, document=document, profiles=world.profiles)
-    changes = EMITTERS["codex"].plan(engine_config, target(world, "codex"))
-    assert {change.kind for change in changes} == {"create"}
+    with pytest.raises(TypeError, match="SimpleNamespace"):
+        EMITTERS["codex"].plan(engine_config, target(world, "codex"))
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
@@ -325,7 +325,7 @@ def test_codex_layout(world):
                                 "env_vars": ["EXAMPLE_ISSUES_TOKEN"]}
     assert tables["notes"] == {"command": str(world.home / "bin" / "example-notes-mcp"),
                                "cwd": str(world.home / "notes")}
-    assert tables["tongs-agents"]["env_vars"] == ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]
+    assert tables["tongs-agents"] == cli.codex_mcp_table()
     assert set(tables) == {"issues", "notes", "tongs-agents"}
     assert "# tongs-agents" not in (directory / "config.toml").read_text()
     assert world.cli.calls == []
@@ -584,8 +584,41 @@ def test_m1_entries_are_adopted(world):
         'args = ["-m", "tongs_agents.mcp_server"]\n')
     plan = emit(world, "codex", load(world, mcp_servers={}))
     assert any("adopted" in note for note in plan.notes)
-    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"][
-        "env_vars"] == ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]
+    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"] == (
+        cli.codex_mcp_table())
+
+
+def test_install_and_apply_write_the_same_codex_table(world):
+    config_toml = world.dirs["codex"] / "config.toml"
+    assert cli._install_codex_mcp(world.dirs["codex"])
+    installed = config_toml.read_bytes()
+    plan = emit(world, "codex", load(world, mcp_servers={}))
+    assert any("adopted" in note for note in plan.notes)
+    assert config_toml.read_bytes() == installed
+
+    assert cli._install_codex_mcp(world.dirs["codex"])
+    assert config_toml.read_bytes() == installed
+    plan = EMITTERS["codex"].plan_full(load(world, mcp_servers={}), target(world, "codex"))
+    assert all(change.kind == "unchanged" for change in plan.changes
+               if change.path == config_toml)
+
+
+def test_apply_replaces_a_table_recorded_with_the_old_env_vars(world):
+    emit(world, "codex", load(world, mcp_servers={}))
+    config_toml = world.dirs["codex"] / "config.toml"
+    old = {**cli.codex_mcp_table(), "env_vars": ["XDG_STATE_HOME", "TONGS_AGENTS_STATE_DIR"]}
+    config_toml.write_text(toml_tables.render_tables(
+        config_toml.read_text(), {"tongs-agents": old}))
+    entries = owned.manifest_entries_for(target(world, "codex"))
+    recorded = dict(entries["toml-table:tongs-agents"], sha256=_common.digest_value(old))
+    changes = owned.ChangeSet()
+    changes.record_entries(target(world, "codex"),
+                           {**entries, "toml-table:tongs-agents": recorded})
+    changes.commit()
+
+    emit(world, "codex", load(world, mcp_servers={}))
+    assert tomllib.loads(config_toml.read_text())["mcp_servers"]["tongs-agents"] == (
+        cli.codex_mcp_table())
 
 
 def test_a_failed_cli_step_keeps_the_previous_record(world):
@@ -624,9 +657,9 @@ def test_profile_narrowing_selects_targets(world):
     ("mcp_servers", {"x": {"command": ["a"], "url": "https://h"}}, "exactly one"),
     ("mcp_servers", {"x": {"url": "http://example.invalid"}}, "https"),
     ("mcp_servers", {"x": {"command": ["a"], "env": ["lower"]}}, "variable name"),
-    ("instructions", {"files": ["../outside.md"]}, "inside the dotfiles"),
-    ("instructions", {"files": ["/etc/hostname"]}, "inside the dotfiles"),
-    ("skills", {"dirs": ["skills"], "overrides": {"nope": {}}}, "no such skill"),
+    ("instructions", {"files": ["../outside.md"]}, "relative to the dotfiles"),
+    ("instructions", {"files": ["/etc/hostname"]}, "relative to the dotfiles"),
+    ("skills", {"dirs": ["skills"], "overrides": {"nope": {}}}, "no skill named"),
     ("mcp_servers", {"x": {"command": ["a"], "profiles": ["ghost"]}}, "unknown profile"),
 ])
 def test_invalid_canonical_config_is_refused(world, key, value, message):
@@ -646,7 +679,7 @@ def test_skill_contents_are_checked(world, tmp_path):
         load(world, root=root)
     (skill / "link.md").unlink()
     (skill / "SKILL.md").write_text("---\nname: other\ndescription: x\n---\n")
-    with pytest.raises(EmitError, match="name must be 'release-notes'"):
+    with pytest.raises(EmitError, match="name must equal 'release-notes'"):
         load(world, root=root)
 
 

@@ -201,6 +201,13 @@ def test_sidebar_refuses_to_run_outside_zellij(monkeypatch, capsys):
     assert sidebar.main(["--spawn-request", "../etc"]) == 2
 
 
+def test_sidebar_usage_errors_exit_1(capsys):
+    with pytest.raises(SystemExit) as raised:
+        sidebar.main(["--bogus"])
+    assert raised.value.code == 1
+    assert "usage: tongs-agents sidebar" in capsys.readouterr().err
+
+
 @pytest.fixture(autouse=True)
 def _no_desktop_notifications(monkeypatch):
     monkeypatch.setattr(agents_panel.shutil, "which", lambda name: None)
@@ -289,6 +296,78 @@ async def test_selecting_a_hook_row_uses_focus_session(monkeypatch):
         assert done.wait(5)
         assert called == ["sid-hooked-repo"]
         assert mux.focused == []
+
+
+class TmuxMux(FakeMux):
+    name = "tmux"
+
+
+def _tmux_hook_row(launch_id):
+    hook = hook_record(launch_id, session=None)
+    hook.update(terminal="tmux", terminal_env={"TMUX": "/tmp/tmux-1/default,1,0",
+                                               "TMUX_PANE": "%7"}, pid="4242",
+                process_start="1")
+    return hook
+
+
+def _tmux_record(launch_id, pane_id="%7"):
+    return LaunchRecord(
+        launch_id=launch_id, profile="hooked", harness="claude", multiplexer="tmux",
+        session=SESSION, created=NOW - 30, socket_dir=None, pane_id=pane_id, pid=4242,
+        process_start="1", state="running", replaces=None,
+    )
+
+
+def test_tmux_hook_row_focuses_through_its_launch_pane():
+    launch_id = "f" * 32
+    mux = TmuxMux(panes=[PaneInfo(PaneRef("tmux", SESSION, "%7", None), "a", "cmd",
+                                  False, False)])
+    workspace_feed = WorkspaceFeed(
+        SESSION, mux, lambda: [_tmux_hook_row(launch_id)],
+        launch_reader=lambda session: [_tmux_record(launch_id)], clock=lambda: NOW,
+    )
+    row, = workspace_feed.snapshot()
+    assert row.source != LAUNCH_SOURCE and row.launch_id == launch_id
+    result = sidebar.focus_launched_row(mux, workspace_feed, row)
+    assert mux.focused == [PaneRef("tmux", SESSION, "%7", None)]
+    assert result.selection.succeeded
+    mux.panes.clear()
+    assert sidebar.focus_launched_row(mux, workspace_feed, row).state == "not-found"
+    gone = WorkspaceFeed(SESSION, mux, lambda: [], launch_reader=lambda session: [])
+    assert sidebar.focus_launched_row(mux, gone, row).state == "not-found"
+    assert len(mux.focused) == 1
+
+
+@pytest.mark.asyncio
+async def test_enter_on_a_tmux_hook_row_never_uses_the_terminal_api(monkeypatch):
+    launch_id = "f" * 32
+    monkeypatch.setattr(agents_panel, "focus_session", lambda identity: pytest.fail(
+        "a tmux row must not go through focus_session"))
+    mux = TmuxMux(panes=[PaneInfo(PaneRef("tmux", SESSION, "%7", None), "a", "cmd",
+                                  False, False)])
+    done = threading.Event()
+    original = mux.focus
+
+    def focus(ref):
+        try:
+            return original(ref)
+        finally:
+            done.set()
+
+    mux.focus = focus
+    workspace_feed = WorkspaceFeed(
+        SESSION, mux, lambda: [_tmux_hook_row(launch_id)],
+        launch_reader=lambda session: [_tmux_record(launch_id)],
+    )
+    app = sidebar.SidebarApp(mux, SESSION, feed=workspace_feed, refresh_interval=60)
+    async with app.run_test(size=(40, 20)) as pilot:
+        await _settle(app, pilot)
+        assert [row.launch_id for row in app.agents_panel.sessions] == [launch_id]
+        app.agents_panel.table.focus()
+        await pilot.press("enter")
+        assert done.wait(5)
+        await pilot.pause()
+        assert mux.focused == [PaneRef("tmux", SESSION, "%7", None)]
 
 
 @pytest.mark.asyncio

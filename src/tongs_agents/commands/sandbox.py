@@ -65,6 +65,7 @@ from tongs_agents.sandbox.launcher import READY_PHASE, sandbox_name
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
     PROFILE_LABEL,
+    SANDBOX_DOCS_URL,
     OpenShell,
     OpenShellError,
     SandboxInfo,
@@ -724,7 +725,7 @@ def _policy_check(args) -> int:
     prover = shutil.which(PROVER)
     if prover is None:
         print(f"tongs-agents: {PROVER} is not on PATH, so the change was not proved "
-              "(optional; see docs/sandbox.md)", file=sys.stderr)
+              f"(optional; see {SANDBOX_DOCS_URL})", file=sys.stderr)
         return 0
     with tempfile.TemporaryDirectory(prefix="tongs-agents-policy-") as temporary:
         if args.boundary is not None:
@@ -994,7 +995,7 @@ def doctor_checks():
             "openshell", "error",
             f"openshell CLI not on PATH; sandboxed profiles cannot launch: "
             f"{', '.join(sorted(profiles))}",
-            "Install the OpenShell CLI yourself (see docs/sandbox.md); "
+            f"Install the OpenShell CLI yourself (see {SANDBOX_DOCS_URL}); "
             "tongs-agents never installs it",
         )]
     checks, _text = sandbox_setup.version_checks(OpenShell(executable),

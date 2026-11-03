@@ -114,8 +114,9 @@ def add_arguments(parser):
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
         "--print-command", action="store_true",
-        help="Prepare the workspace and print the zellij or tmux command instead "
-             "of running it",
+        help="Print the zellij or tmux command instead of running it. Not a dry "
+             "run: Zellij writes a new session's one-shot spawn request, and tmux "
+             "creates a missing session detached and starts its agents right away",
     )
     output.add_argument(
         "--print-alias", action="store_true",

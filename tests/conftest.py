@@ -39,9 +39,9 @@ def settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")
     monkeypatch.setattr(cli, "CODEX_HOOKS_FILE", tmp_path / "codex" / "hooks.json")
     monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", tmp_path / ".claude.json")
-    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_install_claude_mcp", lambda *args: True)
     monkeypatch.setattr(cli, "_uninstall_claude_mcp", lambda *args: None)
-    monkeypatch.setattr(cli, "_install_codex_mcp", lambda *args: None)
+    monkeypatch.setattr(cli, "_install_codex_mcp", lambda *args: True)
     monkeypatch.setattr(cli, "_uninstall_codex_mcp", lambda *args: None)
     return f
 

@@ -123,3 +123,11 @@ def test_no_verb_runs_the_chat_pane(monkeypatch):
     monkeypatch.setattr(chat.ChatApp, "run", lambda app: started.append(app))
     assert run() == 0
     assert isinstance(started[0], chat.ChatApp)
+
+
+@pytest.mark.parametrize("argv", [["--bogus"], ["post"], ["nosuchverb"]])
+def test_the_pane_entry_point_exits_1_on_a_usage_error(argv, capsys):
+    with pytest.raises(SystemExit) as raised:
+        chat.main(argv)
+    assert raised.value.code == 1
+    assert "usage: tongs-agents chat" in capsys.readouterr().err

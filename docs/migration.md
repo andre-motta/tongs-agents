@@ -15,7 +15,7 @@ nothing in them is carried over.
 | Commands | `claude-fleet`, `claude-fleet-hook` | `tongs-agents`, `tongs-agents-hook` |
 | Session records | `~/.claude/fleet/` (`FLEET_DIR`) | `$XDG_STATE_HOME/tongs-agents/sessions/` (`~/.local/state/tongs-agents/sessions/`; `TONGS_AGENTS_STATE_DIR` overrides the state directory). `FLEET_DIR` is not read |
 | Claude Code MCP | `mcpServers.fleet` in `~/.claude/settings.json` (Claude Code does not load user MCP servers from there) | `tongs-agents`, registered with `claude mcp add --scope user` |
-| Codex MCP | `fleet` via `codex mcp add` | `tongs-agents` via `codex mcp add` |
+| Codex MCP | `fleet` via `codex mcp add` | `tongs-agents`, written as `[mcp_servers.tongs-agents]` in `config.toml` by tongs-agents itself ([install](install.md#codex-configtoml)) |
 | Pi config and marker | `claude-fleet-monitor.json`, owner `claude-fleet-monitor` | `tongs-agents.json`, owner `tongs-agents` |
 | Pi runtime symbol and package | `claude-fleet-monitor.pi.runtime.v1`, `claude-fleet-monitor-pi` | `tongs-agents.pi.runtime.v1`, `tongs-agents-pi` |
 | tongs entry point | `fleet-monitor` (`[plugins.fleet-monitor]`) | `agents` (`[plugins.agents]`) |

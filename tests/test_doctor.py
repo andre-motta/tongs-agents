@@ -109,7 +109,7 @@ def test_config_dir_option_validates(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["tongs-agents", "doctor", "--config-dir", "zsh=/x"])
     with pytest.raises(SystemExit) as raised:
         cli.main()
-    assert raised.value.code == 2
+    assert raised.value.code == 1
     assert "KIND=DIR" in capsys.readouterr().err
 
 
@@ -273,13 +273,12 @@ def test_profile_homes_are_checked(installed, monkeypatch, capsys):
     assert code == 2
     error = _find(checks, "error", "hooks", "(profile claude-alt)")[0]
     assert error["remediation"] == "tongs-agents install"
-    assert _find(checks, "warn", "profiles", "example")
+    assert _find(checks, "info", "profiles", "example")
 
     _run(monkeypatch, "install")
     _trust(installed.home / ".codex")
     code, checks = _doctor(monkeypatch, capsys)
-    assert code == 1
-    assert not _find(checks, "error")
+    assert code == 0, [check for check in checks if check["level"] in ("warn", "error")]
 
 
 def test_pi_profile_without_extension_is_an_error(installed, monkeypatch, capsys):
@@ -287,7 +286,46 @@ def test_pi_profile_without_extension_is_an_error(installed, monkeypatch, capsys
     code, checks = _doctor(monkeypatch, capsys)
     assert code == 2
     error = _find(checks, "error", "hooks", "Pi extension")[0]
-    assert error["remediation"] == "tongs-agents install"
+    assert error["remediation"] == "tongs-agents install (needs Pi 0.84.4 or newer)"
+
+
+@pytest.mark.parametrize("version, remediation", [
+    ((0, 80, 1), "Upgrade Pi to 0.84.4 or newer (found 0.80.1), then run tongs-agents install"),
+    ((0, 84, 4), "tongs-agents install (needs Pi 0.84.4 or newer)"),
+])
+def test_pi_too_old_leads_with_the_upgrade(installed, monkeypatch, capsys, version,
+                                           remediation):
+    monkeypatch.setattr(doctor.pi_install, "detect_pi_version", lambda command: version)
+    _write_profiles('[profiles.pi-local]\ncommand = ["pi"]\n')
+    code, checks = _doctor(monkeypatch, capsys)
+    assert code == 2
+    error = _find(checks, "error", "hooks", "Pi extension")[0]
+    assert error["remediation"] == remediation
+
+
+def test_pi_profile_without_pi_is_a_warning_with_a_real_fix(installed, monkeypatch, capsys):
+    tools = {"tongs-agents-hook": installed.hook}
+    monkeypatch.setattr(cli.shutil, "which", lambda name: tools.get(name))
+    _write_profiles('[profiles.pi-local]\ncommand = ["pi"]\n')
+    _run(monkeypatch, "install")
+    code, checks = _doctor(monkeypatch, capsys)
+    assert code == 1
+    assert not _find(checks, "error", "hooks")
+    warning = _find(checks, "warn", "hooks", "Pi extension")[0]
+    assert warning["remediation"] == (
+        "Install Pi 0.84.4 or newer and tongs-agents-hook, then run tongs-agents install "
+        "(or remove the Pi profile)"
+    )
+
+
+def test_requested_pi_home_without_pi_stays_an_error(installed, monkeypatch, capsys):
+    tools = {"tongs-agents-hook": installed.hook}
+    monkeypatch.setattr(cli.shutil, "which", lambda name: tools.get(name))
+    pi_dir = installed.root / "pi-alt"
+    code, checks = _doctor(monkeypatch, capsys, "--config-dir", f"pi={pi_dir}")
+    assert code == 2
+    error = _find(checks, "error", "hooks", "Pi extension")[0]
+    assert error["remediation"].startswith("Install Pi 0.84.4 or newer")
 
 
 def test_invalid_profiles_are_an_error(installed, monkeypatch, capsys):

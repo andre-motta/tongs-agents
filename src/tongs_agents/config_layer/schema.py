@@ -194,10 +194,14 @@ def profiles_for(profiles: Mapping[str, Profile], target: ProfileTarget) -> tupl
     """The names in ``profiles`` whose harness config home is ``target``.
 
     Homes are normalized the way the engine resolves its targets, so a
-    profile matches exactly the target the engine plans for it.
+    profile matches exactly the target the engine plans for it. A profile with
+    a ``sandbox`` table runs inside OpenShell, never in a host home, so it
+    matches no target and items narrowed to it are not emitted on the host.
     """
     names = []
     for profile in profiles.values():
+        if profile.sandbox is not None:
+            continue
         harness, directory, problem = cli.profile_home(profile)
         if harness != target.harness or problem is not None:
             continue

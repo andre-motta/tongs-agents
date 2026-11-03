@@ -3,6 +3,15 @@
 [![Tests](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/andre-motta/tongs-agents/actions/workflows/test.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/andre-motta/tongs-agents/blob/main/LICENSE)
 
+> [!WARNING]
+> **v0.10.0 is an experimental release.** Some features have not yet been
+> validated against real harnesses: OpenShell sandboxes, Codex `PreToolUse`
+> handling and Pi chat delivery, each harness refreshing its tool list when
+> a chat grant changes, and `claude mcp add` and `pi mcp add` against the
+> real CLIs. Expect rough edges, check the
+> [support matrix](https://github.com/andre-motta/tongs-agents/blob/main/docs/support-matrix.md) for what is live, and report problems at
+> [github.com/andre-motta/tongs-agents/issues](https://github.com/andre-motta/tongs-agents/issues).
+
 tongs-agents is one workspace for the AI coding agents you run side by side.
 It starts Claude Code, Codex, Pi or any other command as real panes of a
 Zellij (or tmux) session, puts a sidebar next to them that shows which agent
@@ -23,17 +32,22 @@ Formerly `claude-fleet-monitor`; see
 
 ## Quick start
 
-You need Python 3.11 or newer and git. The workspace needs Zellij 0.44.2 or
-newer on Linux (tongs-agents can download a pinned build for you) or tmux 3.2
-or newer.
+You need Python 3.11 or newer. The workspace needs Zellij 0.44.2 or newer on
+Linux (tongs-agents can download a pinned build for you) or tmux 3.2 or newer.
+
+Install tongs-agents from PyPI as a tool:
 
 ```bash
-git clone https://github.com/andre-motta/tongs-agents.git
-cd tongs-agents
-python3 -m venv .venv
-. .venv/bin/activate
-pip install -e .                 # or: pip install -e ".[tongs]" for the tongs plugin
+pipx install tongs-agents        # or: uv tool install tongs-agents
 ```
+
+`pip install tongs-agents` into a virtual environment works too. For the
+Agents screen in tongs, install the `[tongs]` extra into the environment tongs
+runs from (`pip install "tongs-agents[tongs]"`, or `pipx inject tongs
+tongs-agents` when tongs came from pipx). The hooks and MCP registrations that
+`tongs-agents install` writes point at the environment you installed into, so
+run `tongs-agents install` again if you move or recreate it. Contributors
+install from a clone instead; see [Contributing](#contributing).
 
 Describe the agents you want as profiles in
 `~/.config/tongs-agents/config.toml`:
@@ -121,8 +135,8 @@ what you want to do.
 ## MCP tools
 
 `tongs-agents install` registers the `tongs-agents` MCP server with Claude
-Code (`claude mcp add --scope user`) and Codex (`codex mcp add`) when those
-CLIs are on `PATH`. These read-only tools are always available:
+Code (`claude mcp add --scope user`) and Codex (a `[mcp_servers.tongs-agents]`
+table in its `config.toml`) when those CLIs are on `PATH`. These read-only tools are always available:
 
 | Tool | Description |
 | --- | --- |
@@ -152,7 +166,7 @@ command to remove it. Old session records are not migrated. See the
 tongs-agents uninstall              # hooks, MCP entries and session records
 tongs-agents uninstall --keep-data  # keep the sessions directory
 tongs-agents uninstall --agent pi   # only the Pi extension
-pip uninstall tongs-agents
+pipx uninstall tongs-agents         # or uv tool uninstall, or pip uninstall, matching how you installed it
 ```
 
 Session records are kept while the Pi extension is still installed. The
@@ -161,7 +175,18 @@ Session records are kept while the Pi extension is still installed. The
 
 ## Contributing
 
-See [CONTRIBUTING.md](https://github.com/andre-motta/tongs-agents/blob/main/CONTRIBUTING.md)
+To work on tongs-agents, install it editable from a clone:
+
+```bash
+git clone https://github.com/andre-motta/tongs-agents.git
+cd tongs-agents
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -e ".[dev]"          # add ,tongs for the tongs plugin tests
+```
+
+Hooks installed from this checkout point at its `.venv`. See
+[CONTRIBUTING.md](https://github.com/andre-motta/tongs-agents/blob/main/CONTRIBUTING.md)
 for development setup and the PR process. Harness contributors should follow
 the [adapter author guide](https://github.com/andre-motta/tongs-agents/blob/main/docs/harness-adapters.md).
 Agent-led initiatives follow the [SDLC profile](https://github.com/andre-motta/tongs-agents/blob/main/docs/SDLC.md).

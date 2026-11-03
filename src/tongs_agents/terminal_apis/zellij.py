@@ -111,6 +111,21 @@ def _run(
     return result
 
 
+def _binary() -> str:
+    """The zellij CLI the multiplexer layer runs, so focus reaches a session
+    started by the managed build that ``doctor --fix zellij`` installs off PATH.
+
+    A binary that is the PATH one keeps its bare name.
+    """
+    # Function-level import: multiplexers.zellij_binary imports _run from here.
+    from tongs_agents.multiplexers import zellij_binary
+
+    binary = zellij_binary.zellij_binary()
+    if binary is None or binary == zellij_binary.path_binary():
+        return "zellij"
+    return binary
+
+
 def _absolute_dir(value) -> str | None:
     if not isinstance(value, str) or "\0" in value or not os.path.isabs(value):
         return None
@@ -366,7 +381,7 @@ class ZellijAPI(TerminalAPI):
         if os.path.basename(server.argv[2]) != session:
             raise LookupError(RENAMED)
         clients = _list_clients(
-            ["zellij", "--session", session, "action"],
+            [_binary(), "--session", session, "action"],
             "zellij list-clients failed: CLI missing, timed out, unknown session "
             "or unsupported version",
             _cli_env(_socket_dir(server, terminal_env)),
@@ -396,7 +411,7 @@ class ZellijAPI(TerminalAPI):
         if target is None:
             return False
         session, pane = target
-        command = ["zellij", "--session", session, "action"]
+        command = [_binary(), "--session", session, "action"]
         expected = f"terminal_{pane}"
         env = self._cli_env(terminal_env)
         before = _list_clients(

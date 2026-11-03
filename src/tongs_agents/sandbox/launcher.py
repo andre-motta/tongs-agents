@@ -47,6 +47,7 @@ from tongs_agents.sandbox import state
 from tongs_agents.sandbox.openshell import (
     LAUNCH_LABEL,
     PROFILE_LABEL,
+    SANDBOX_DOCS_URL,
     OpenShell,
     OpenShellError,
     SandboxInfo,
@@ -66,7 +67,7 @@ NAME_PREFIX = "tongs-"
 ATTACH_CAVEAT = (
     "attach mode: OpenShell takes Ctrl-D as detach and holds Ctrl-P for its Ctrl-P Ctrl-Q "
     "detach, which Zellij binds by default (Ctrl p pane mode, Ctrl q quit); "
-    "see docs/sandbox.md"
+    f"see {SANDBOX_DOCS_URL}"
 )
 
 

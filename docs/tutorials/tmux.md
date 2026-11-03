@@ -47,11 +47,12 @@ Agent panes split the window side by side, and a pane opens in a new window
 when there is no room left. Panes are named after their profile in the tmux
 pane option `@tongs_agents_name`.
 
-On tmux the sidebar lists the panes the launcher started, with their pane
-state (`RUNNING`, `EXITED 0`). Hook status (`RUNNING`, `IDLE`, `WAITING` for
-an agent) shows in `tongs-agents monitor` and `tongs-agents agent-status`,
-which work on any multiplexer. The palette's `New agent: <profile>` starts a
-profile in the current tmux session.
+On tmux the sidebar lists the panes the launcher started. A pane whose agent
+reports through hooks or `tongs-agents notify` shows that status (`RUNNING`,
+`IDLE`, `WAITING`), joined through its launch id, so `n` jumps to an agent
+that needs you and the sidebar notifies as on Zellij. A pane with no reported
+status shows its pane state (`RUNNING`, `STARTING`). The palette's
+`New agent: <profile>` starts a profile in the current tmux session.
 
 ## 4. Drive panes
 
@@ -87,8 +88,8 @@ socket directory is yours and private before it uses it.
 
 - `--multiplexer tmux`, or `[workspace] multiplexer = "tmux"`, runs the same
   workspace on tmux.
-- The sidebar shows pane state on tmux; `monitor` and `agent-status` show
-  hook status.
+- The sidebar shows hook and `notify` status on tmux, joined by launch id,
+  and the pane state for panes that report none.
 - Resurrect, the tongs tab, chat wake and web watching stay with Zellij.
 
 Reference: [agent workspace on tmux](../workspace.md#tmux).

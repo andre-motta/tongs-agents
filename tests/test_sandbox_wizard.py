@@ -185,6 +185,41 @@ def test_invalid_answers_stay_on_the_step(fake, tmp_path):  # noqa: F811
     asyncio.run(journey())
 
 
+def test_the_wizard_never_offers_or_accepts_the_home_folder(fake, tmp_path,  # noqa: F811
+                                                           monkeypatch):
+    home = tmp_path / "home"
+    project = home / "project"
+    project.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.chdir(home)
+
+    async def journey():
+        app = SandboxWizardApp(setup.default_plan("claude"))
+        async with app.run_test(size=SIZE) as pilot:
+            await settle(app, pilot)
+            screen = app.wizard
+            await next_step(app, pilot)
+            folder = screen.query_one("#folder", Input)
+            assert folder.value == ""
+            await next_step(app, pilot)
+            assert screen.step == "step-plan"
+            assert "name the project folder" in text_of(screen, "#wizard-error")
+            for refused, message in ((home, "is your home folder"),
+                                     (tmp_path, "holds your home folder"),
+                                     (Path("/"), "is the filesystem root")):
+                folder.value = str(refused)
+                await next_step(app, pilot)
+                assert screen.step == "step-plan"
+                assert message in text_of(screen, "#wizard-error")
+            folder.value = str(project)
+            await next_step(app, pilot)
+            assert screen.step == "step-network"
+
+    asyncio.run(journey())
+    assert created(fake) == []
+
+
 def test_a_policy_changed_after_review_cannot_be_probed(fake, tmp_path):  # noqa: F811
     async def journey():
         app = SandboxWizardApp(plan_for(tmp_path))

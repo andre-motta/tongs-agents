@@ -135,13 +135,17 @@ def _same_dir(left: str, right: str | None) -> bool:
 
 
 class WorkspaceFeed(SessionFeed):
-    """The sessions of one Zellij session: its hook sessions and launched panes.
+    """The sessions of one workspace session: its hook sessions and launched panes.
 
     The sidebar is per-session; ``tongs-agents monitor`` stays fleet-wide.
-    A hook session is kept only when its captured ``ZELLIJ_SESSION_NAME`` is
+    A hook session is kept when its captured ``ZELLIJ_SESSION_NAME`` is
     ``session`` and, when it captured a socket dir, that dir is
-    ``socket_dir``. A launch record joins its hook session, or the session
-    ``tongs-agents notify`` reports for it, through the launch id. Records
+    ``socket_dir``. A hook session that captured no Zellij session (every
+    tmux pane) is kept when its launch id names a claimed launch record of
+    this session, multiplexer and socket whose process it is or runs under
+    (``launches.claims_session``, as ``control`` joins them). A launch record
+    joins its hook session, or the session ``tongs-agents notify`` reports
+    for it, through the launch id. Records
     with no such session show their pane state from the multiplexer:
     running, starting (launcher not claimed yet) or exited with its status.
     A claimed record whose process is gone while its pane id runs something
@@ -177,10 +181,20 @@ class WorkspaceFeed(SessionFeed):
             self._spawned[launch_id] = ref
 
     def snapshot(self) -> list[FleetSession]:
+        records = self._launch_records()
+        claimed = {
+            record.launch_id: record for record in records
+            if record.state == "running"
+            and (
+                not record.socket_dir or not self.socket_dir
+                or _same_dir(record.socket_dir, self.socket_dir)
+            )
+        }
         sessions = [
-            session for session in super().snapshot() if self.in_session(session)
+            session for session in super().snapshot()
+            if self.in_session(session) or self._launched_here(session, claimed)
         ]
-        return sessions + self.launch_rows(sessions)
+        return sessions + self.launch_rows(sessions, records)
 
     def in_session(self, session: FleetSession) -> bool:
         """True when a hook session's captured Zellij identity is this session."""
@@ -192,19 +206,58 @@ class WorkspaceFeed(SessionFeed):
             return True
         return _same_dir(captured, self.socket_dir)
 
+    def _launched_here(
+        self, session: FleetSession, claimed: dict[str, LaunchRecord]
+    ) -> bool:
+        record = claimed.get(session.launch_id) if session.launch_id else None
+        if record is None:
+            return False
+        env = session.terminal_env if isinstance(session.terminal_env, dict) else {}
+        if env.get("ZELLIJ_SESSION_NAME") is not None:
+            return False
+        return launches.claims_session(
+            record, {"pid": session.pid, "process_start": session.process_start}
+        )
+
+    def _launch_records(self) -> list[LaunchRecord]:
+        reader = self._launch_reader or launches.list_records
+        return [
+            record for record in reader(self.session)
+            if record.session == self.session
+            and record.multiplexer == self.multiplexer.name
+        ]
+
+    def launch_pane(self, launch_id: str) -> PaneRef | None:
+        """The pane of this session's running launch ``launch_id``, or None."""
+        for record in self._launch_records():
+            if record.launch_id != launch_id or record.state != "running":
+                continue
+            if not record.pane_id:
+                return None
+            if (
+                record.socket_dir and self.socket_dir
+                and not _same_dir(record.socket_dir, self.socket_dir)
+            ):
+                return None
+            return PaneRef(
+                self.multiplexer.name, self.session, record.pane_id,
+                record.socket_dir or self.socket_dir,
+            )
+        return None
+
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":
             return record.pane_id
         ref = spawned.get(record.launch_id)
         return ref.pane_id if ref is not None else None
 
-    def launch_rows(self, sessions: Iterable[FleetSession]) -> list[FleetSession]:
-        reader = self._launch_reader or launches.list_records
-        records = [
-            record for record in reader(self.session)
-            if record.session == self.session
-            and record.multiplexer == self.multiplexer.name
-        ]
+    def launch_rows(
+        self,
+        sessions: Iterable[FleetSession],
+        records: list[LaunchRecord] | None = None,
+    ) -> list[FleetSession]:
+        if records is None:
+            records = self._launch_records()
         hooked = {session.launch_id for session in sessions if session.launch_id}
         replaced = {record.replaces for record in records if record.replaces}
         with self._lock:

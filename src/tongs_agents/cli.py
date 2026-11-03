@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import commands, legacy, owned, paths, session_store
+from tongs_agents import commands, legacy, owned, paths, session_store, toml_tables
 from tongs_agents.pi_install import (
     PI_CONFIG_NAME,
     install_pi,
@@ -34,6 +34,24 @@ HOOK_COMMAND = "tongs-agents-hook"
 MCP_MODULE = "tongs_agents.mcp_server"
 MCP_NAME = "tongs-agents"
 MCP_NAMES = (MCP_NAME, legacy.LEGACY_MCP_NAME)
+# Codex starts a stdio MCP server with only HOME, LANG, PATH, TMPDIR and USER
+# plus the names in its env_vars (docs/work/emitter-strategy.md), so the
+# tongs-agents server lists everything its chat and control identity, and its
+# state, config and runtime dirs, are read from.
+CODEX_MCP_ENV_VARS = (
+    "TONGS_AGENTS_LAUNCH_ID",
+    "TONGS_AGENTS_PROFILE",
+    "ZELLIJ_SESSION_NAME",
+    "ZELLIJ_SOCKET_DIR",
+    "TMUX",
+    "TMUX_PANE",
+    "XDG_STATE_HOME",
+    paths.STATE_DIR_ENV,
+    "XDG_CONFIG_HOME",
+    paths.CONFIG_DIR_ENV,
+    "XDG_RUNTIME_DIR",
+)
+HARNESS_NAMES = {"claude": "Claude Code", "codex": "Codex", "pi": "Pi"}
 FLEET_FILE_PATTERNS = (
     "fleet-v*-*.json",
     ".fleet-v*-*.lock",
@@ -363,8 +381,16 @@ def profile_home(profile):
 
 
 def profile_targets(profiles, harnesses=KINDS):
+    """Host config homes of ``profiles``; a sandboxed profile has none.
+
+    A profile with a sandbox table runs its agent inside OpenShell, whose
+    image carries its own spool hooks (docs/sandbox.md), so its host default
+    home is not one of its targets.
+    """
     targets = []
     for profile in profiles.values():
+        if profile.sandbox is not None:
+            continue
         harness, directory, problem = profile_home(profile)
         if harness is None or harness not in harnesses or problem is not None:
             continue
@@ -480,14 +506,6 @@ def _claude_environment(directory=None):
     return environment
 
 
-def _codex_environment(directory=None):
-    environment = os.environ.copy()
-    environment.pop("CODEX_HOME", None)
-    if directory is not None:
-        environment["CODEX_HOME"] = str(directory)
-    return environment
-
-
 def _claude_user_servers(config=None):
     """User-scope MCP servers, read without editing Claude's own file."""
     config = CLAUDE_USER_CONFIG if config is None else config
@@ -544,6 +562,7 @@ def _restore_claude_mcp(claude_cmd, previous, directory=None):
 
 
 def _install_claude_mcp(claude_cmd, directory=None):
+    """Register our Claude Code MCP server; True only when our entry is in place."""
     servers = _claude_servers_for(directory)
     if _is_owned_mcp(servers.get(legacy.LEGACY_MCP_NAME)):
         _run_claude_mcp(
@@ -554,13 +573,13 @@ def _install_claude_mcp(claude_cmd, directory=None):
     if existing is not None:
         if not _is_owned_mcp(existing):
             print(f"  Kept existing Claude Code MCP server named {MCP_NAME}")
-            return
+            return False
         if _is_current_mcp(existing):
-            return
+            return True
         if not _run_claude_mcp(
             claude_cmd, ["remove", "--scope", "user", MCP_NAME], "replace", directory
         ):
-            return
+            return False
     added = _run_claude_mcp(
         claude_cmd,
         ["add", "--scope", "user", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
@@ -569,6 +588,7 @@ def _install_claude_mcp(claude_cmd, directory=None):
     )
     if not added and existing is not None:
         _restore_claude_mcp(claude_cmd, existing, directory)
+    return added
 
 
 def _uninstall_claude_mcp(claude_cmd, directory=None):
@@ -580,91 +600,92 @@ def _uninstall_claude_mcp(claude_cmd, directory=None):
             )
 
 
-def _get_codex_mcp(codex_cmd, name, directory=None):
+def codex_mcp_table():
+    """The ``[mcp_servers.tongs-agents]`` table install and ``config apply`` write."""
+    return {
+        "command": sys.executable,
+        "args": ["-m", MCP_MODULE],
+        "env_vars": list(CODEX_MCP_ENV_VARS),
+    }
+
+
+def codex_config_file(directory=None):
+    return Target("codex", directory).codex_home / "config.toml"
+
+
+def _without_enabled(value):
+    if isinstance(value, dict) and value.get("enabled") is False:
+        return {key: item for key, item in value.items() if key != "enabled"}, True
+    return value, False
+
+
+def _codex_install_changes(text, kept):
+    """Table changes that register our server; a foreign table is kept and reported."""
+    tables = toml_tables.read_tables(text)
+    changes = {}
+    if _is_owned_mcp(tables.get(legacy.LEGACY_MCP_NAME)):
+        changes[legacy.LEGACY_MCP_NAME] = None
+    existing = tables.get(MCP_NAME)
+    if existing is not None and not _is_owned_mcp(existing):
+        kept.append(MCP_NAME)
+        return changes
+    current, disabled = _without_enabled(existing)
+    wanted = codex_mcp_table()
+    if current != wanted:
+        changes[MCP_NAME] = {**wanted, "enabled": False} if disabled else wanted
+    return changes
+
+
+def _codex_uninstall_changes(text):
+    tables = toml_tables.read_tables(text)
+    return {name: None for name in MCP_NAMES if _is_owned_mcp(tables.get(name))}
+
+
+def _edit_codex_config(path, plan, action):
+    """Apply ``plan(text)`` table changes to ``path`` with the owned-table writer.
+
+    The first edit of an existing file keeps ``<name>.tongs-agents.bak``. Every
+    other byte of the file, user comments included, is kept. Returns False and
+    prints why when the file cannot be edited exactly.
+    """
+    def mutate(text):
+        changes = plan(text)
+        return toml_tables.render_tables(text, changes) if changes else text
+
+    changes = owned.ChangeSet()
     try:
-        result = subprocess.run(
-            [codex_cmd, "mcp", "get", name, "--json"],
-            capture_output=True, text=True, timeout=10,
-            env=_codex_environment(directory),
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return {}
-    if result.returncode != 0:
-        return None
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError:
-        return {}
+        change = changes.edit_text_entries(path, mutate)
+        changes.commit()
+    except (owned.OwnedFileError, toml_tables.TomlTableError) as error:
+        detail = str(error)
+        if not detail.startswith(str(path)):
+            detail = f"{path}: {detail}"
+        print(f"  Could not {action} the Codex MCP server: {detail}")
+        return False
+    if change.kind != "unchanged":
+        print(f"  Updated {path}")
+    return True
 
 
-def _run_codex_mcp(codex_cmd, arguments, action, directory=None):
-    return _run_mcp_cli(
-        "Codex", [codex_cmd, "mcp", *arguments], action, _codex_environment(directory)
-    )
+def _install_codex_mcp(directory=None):
+    """Register our Codex MCP table; True only when our table is in place.
+
+    A foreign table, an unparseable or symlinked config.toml and any write error
+    return False.
+    """
+    path = codex_config_file(directory)
+    kept = []
+    done = _edit_codex_config(path, lambda text: _codex_install_changes(text, kept), "register")
+    if kept:
+        print(f"  Kept existing Codex MCP server named {MCP_NAME}")
+    return done and not kept
 
 
-def _remove_legacy_codex_mcp(codex_cmd, directory=None):
-    existing = _get_codex_mcp(codex_cmd, legacy.LEGACY_MCP_NAME, directory)
-    if existing is not None and _is_owned_mcp(existing):
-        _run_codex_mcp(codex_cmd, ["remove", legacy.LEGACY_MCP_NAME], "remove", directory)
-
-
-def _codex_add_arguments(command, args, env=None):
-    flags = [part for key, value in (env or {}).items() for part in ("--env", f"{key}={value}")]
-    return ["add", MCP_NAME, *flags, "--", command, *args]
-
-
-def _restore_codex_mcp(codex_cmd, previous, directory=None):
-    """Re-add a replaced entry after a failed add, and say what to rerun."""
-    rerun = Target("codex", directory).install_command()
-    transport = previous.get("transport", previous)
-    env = transport.get("env")
-    if not isinstance(env, dict) or not all(
-        isinstance(key, str) and isinstance(value, str) for key, value in env.items()
-    ):
-        env = None
-    restored = _run_codex_mcp(
-        codex_cmd,
-        _codex_add_arguments(transport["command"], transport["args"], env),
-        "restore",
-        directory,
-    )
-    if restored:
-        print(f"  Restored the previous Codex MCP server {MCP_NAME}; "
-              f"run '{rerun}' to retry the update")
-    else:
-        print(f"  The previous Codex MCP server {MCP_NAME} was removed and could not be "
-              f"restored; run '{rerun}' to register it again")
-
-
-def _install_codex_mcp(codex_cmd, directory=None):
-    _remove_legacy_codex_mcp(codex_cmd, directory)
-    existing = _get_codex_mcp(codex_cmd, MCP_NAME, directory)
-    replaced = None
-    if existing is not None:
-        if not _is_owned_mcp(existing):
-            print(f"  Kept existing Codex MCP server named {MCP_NAME}")
-            return
-        if _is_current_mcp(existing):
-            return
-        if not _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "replace", directory):
-            return
-        replaced = existing
-    added = _run_codex_mcp(
-        codex_cmd,
-        _codex_add_arguments(sys.executable, ["-m", MCP_MODULE]),
-        "add",
-        directory,
-    )
-    if not added and replaced is not None:
-        _restore_codex_mcp(codex_cmd, replaced, directory)
-
-
-def _uninstall_codex_mcp(codex_cmd, directory=None):
-    _remove_legacy_codex_mcp(codex_cmd, directory)
-    existing = _get_codex_mcp(codex_cmd, MCP_NAME, directory)
-    if existing is not None and _is_owned_mcp(existing):
-        _run_codex_mcp(codex_cmd, ["remove", MCP_NAME], "remove", directory)
+def _uninstall_codex_mcp(directory=None):
+    path = codex_config_file(directory)
+    if not os.path.lexists(path):
+        return True
+    return _edit_codex_config(path, _codex_uninstall_changes, "remove")
 
 
 def has_owned_hooks(path):
@@ -779,8 +800,7 @@ def _uninstall_edit(target):
 
 
 def cmd_install(args):
-    agent = getattr(args, "agent", None)
-    targets, explicit = _plan(args)
+    targets, _ = _plan(args)
     installs = load_installs()
     hook_cmd = shutil.which("tongs-agents-hook") or "tongs-agents-hook"
     hook_targets = [target for target in targets if target.harness != "pi"]
@@ -799,23 +819,26 @@ def cmd_install(args):
             raise ConfigError(f"cannot use the session directory: {error}") from None
     changes.commit()
     commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
+    installed = set()
+    with_mcp = set()
+    mcp_failed = set()
     skipped = set()
     for target in hook_targets:
         _record(installs, target, True)
+        installed.add(target.harness)
         print(f"  Updated {target.config_file}{_describe_sources(target)}")
         command = commands_found[target.harness]
+        if not command:
+            if target.harness not in skipped:
+                skipped.add(target.harness)
+                name = HARNESS_NAMES[target.harness]
+                print(f"  {name} CLI not found; skipped {name} MCP registration")
+            continue
         if target.harness == "claude":
-            if command:
-                _install_claude_mcp(command, target.directory)
-            elif "claude" not in skipped:
-                skipped.add("claude")
-                print("  Claude Code CLI not found; skipped Claude Code MCP registration")
+            registered = _install_claude_mcp(command, target.directory)
         else:
-            if command:
-                _install_codex_mcp(command, target.directory)
-            elif "codex" not in skipped:
-                skipped.add("codex")
-                print("  Codex CLI not found; skipped Codex MCP registration")
+            registered = _install_codex_mcp(target.directory)
+        (with_mcp if registered else mcp_failed).add(target.harness)
 
     pi_failed = False
     if pi_targets:
@@ -836,36 +859,56 @@ def cmd_install(args):
                 )
                 if install_pi(pi_cmd, hook_cmd, environment):
                     _record(installs, target, True)
+                    installed.add("pi")
                 else:
                     pi_failed = True
     save_installs(installs)
     if pi_failed:
         raise SystemExit(1)
+    _print_install_summary(installed, with_mcp, mcp_failed)
 
-    harnesses = {target.harness for target in targets}
+
+def _names(harnesses):
+    names = [HARNESS_NAMES[kind] for kind in KINDS if kind in harnesses]
+    if len(names) < 2:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def _print_install_summary(installed, with_mcp, mcp_failed=frozenset()):
+    """What install actually set up, from the harnesses it wrote, and what to run next.
+
+    ``with_mcp`` holds harnesses whose MCP server is registered, ``mcp_failed``
+    those where registration was attempted and did not leave our entry in place.
+    """
     print()
-    if agent is None and not explicit:
-        print("Tongs Agents installed for Claude Code and Codex!")
-    else:
-        names = ", ".join(name.title() for name in sorted(harnesses))
-        print(f"Tongs Agents installed for {names}!")
+    if not installed:
+        print("Tongs Agents installed nothing: no agent integration could be set up.")
+        return
+    print(f"Tongs Agents installed for {_names(installed)}!")
+    with_mcp = set(with_mcp) - set(mcp_failed)
+    hooks_only = {kind for kind in installed if kind != "pi"} - with_mcp - set(mcp_failed)
+    if hooks_only:
+        print(f"  Hooks only for {_names(hooks_only)} (CLI not found; no MCP server "
+              "registered)")
+    if mcp_failed:
+        print(f"  Hooks only for {_names(mcp_failed)} (MCP server not registered; "
+              "see the messages above)")
     print()
-    print("Usage:")
+    print("Next:")
+    print("  tongs-agents doctor           # Check the installation")
+    print("  tongs-agents workspace        # Start the agent workspace")
     print("  tongs-agents monitor          # TUI dashboard")
-    print("  tongs-agents focus <repo>     # Focus terminal tab")
-    if hook_targets:
-        print("  (MCP tools available in Claude Code and Codex sessions)")
+    if with_mcp:
+        print(f"  (MCP tools available in {_names(with_mcp)} sessions)")
     if os.path.lexists(legacy.legacy_sessions_dir()):
         print()
         print(f"{legacy.legacy_sessions_dir()} is no longer used; "
               "see 'tongs-agents doctor' to remove it.")
     print()
-    if agent is None and not explicit:
-        print("Restart agent sessions to activate hooks. In Codex, review them with /hooks.")
-    else:
-        print("Restart selected agent sessions to activate monitoring.")
-        if "codex" in harnesses:
-            print("In Codex, review installed hooks with /hooks.")
+    print("Restart agent sessions to activate monitoring.")
+    if "codex" in installed:
+        print("In Codex, review the installed hooks with /hooks.")
 
 
 def _legacy_mcp_registrations():
@@ -921,16 +964,15 @@ def cmd_uninstall(args):
         )
     changes.commit()
 
-    commands_found = {name: shutil.which(name) for name in ("claude", "codex")}
+    claude_cmd = shutil.which("claude")
     for target in hook_targets:
         if target in edited:
             print(f"  Updated {target.config_file}{_describe_sources(target)}")
         _record(installs, target, False)
-        command = commands_found[target.harness]
-        if command and target.harness == "claude":
-            _uninstall_claude_mcp(command, target.directory)
-        elif command:
-            _uninstall_codex_mcp(command, target.directory)
+        if target.harness == "codex":
+            _uninstall_codex_mcp(target.directory)
+        elif claude_cmd:
+            _uninstall_claude_mcp(claude_cmd, target.directory)
         if target.directory is None and target.harness == "claude":
             _remove_legacy_claude_files()
 
@@ -955,11 +997,7 @@ def cmd_uninstall(args):
 
     harnesses = {target.harness for target in targets}
     print()
-    if agent is None and not explicit:
-        print("Tongs Agents uninstalled from Claude Code and Codex.")
-    else:
-        names = ", ".join(name.title() for name in sorted(harnesses))
-        print(f"Tongs Agents uninstalled from {names}.")
+    print(f"Tongs Agents uninstalled from {_names(harnesses)}.")
     if "pi" in harnesses:
         print("Restart running Pi sessions to finish removing monitoring.")
 
@@ -1087,7 +1125,7 @@ def build_parser(modules=None):
     Returns the parser and the handler for each verb. A command module whose
     name collides with a built-in verb or another module raises.
     """
-    parser = argparse.ArgumentParser(
+    parser = commands.CommandParser(
         prog="tongs-agents",
         description="Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions",
     )
@@ -1099,8 +1137,11 @@ def build_parser(modules=None):
             "Install agent monitoring. Without --agent or config dir options this covers "
             "Claude Code, Codex and the config home of every profile. A pi profile is "
             "skipped with a warning, not an error, when pi or tongs-agents-hook is not "
-            "installed; --agent pi or --pi-agent-dir still fail in that case. Before it "
-            "first changes an existing settings.json or hooks.json, install keeps a copy "
+            "installed; --agent pi or --pi-agent-dir still fail in that case. A profile "
+            "with a sandbox table is skipped: its agent runs inside OpenShell. The Codex "
+            "MCP server is written as one [mcp_servers.tongs-agents] table in config.toml; "
+            "every other byte, comments included, is kept. Before it first changes an "
+            "existing settings.json, hooks.json or config.toml, install keeps a copy "
             f"of it next to the file as <name>{owned.BACKUP_SUFFIX}. That copy is taken "
             "only once: later installs never refresh it and uninstall keeps it. Every hook "
             "file is written as one unit before any MCP server is registered."
@@ -1119,7 +1160,8 @@ def build_parser(modules=None):
             "default or --agent all selection, or when a config directory option is given, "
             "unless --keep-data. The "
             f"<name>{owned.BACKUP_SUFFIX} copies install kept before its first "
-            "edit of settings.json or hooks.json are left in place; delete them yourself "
+            "edit of settings.json, hooks.json or config.toml are left in place; delete "
+            "them yourself "
             "once you no longer need them."
         ),
     )

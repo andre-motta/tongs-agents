@@ -1,6 +1,104 @@
 # Changelog
 
-## Unreleased (v0.10.0)
+## 0.10.0 (experimental)
+
+The first release of tongs-agents on PyPI, published as an experimental
+release: OpenShell sandboxes, Codex `PreToolUse` handling, Pi chat delivery,
+harness tool-list refresh on chat grants, and `claude mcp add` and
+`pi mcp add` against the real CLIs are not yet validated against real
+harnesses. Report problems at
+<https://github.com/andre-motta/tongs-agents/issues>. It replaces claude-fleet-monitor
+0.9.x and ships milestones M0 to M7 of the
+[agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md)
+together. Upgrading from claude-fleet-monitor? Read
+[Upgrading from claude-fleet-monitor](https://github.com/andre-motta/tongs-agents/blob/main/docs/migration.md)
+first: the package, commands, MCP key, state directory and tongs entry point
+are all renamed, and nothing is migrated automatically.
+
+Install it with `pipx install tongs-agents` (or `pip install tongs-agents`),
+then run `tongs-agents install`.
+
+### Changed (breaking)
+
+- The project is renamed from claude-fleet-monitor to tongs-agents. The
+  distribution is `tongs-agents`, the Python module is `tongs_agents`, and the
+  commands are `tongs-agents` and `tongs-agents-hook` (before: `claude-fleet`
+  and `claude-fleet-hook`).
+- Python 3.11 or newer is required (before: 3.10).
+- textual must be 4.x to 8.x (`textual>=4,<9`; before: `textual>=1.0`).
+- The tongs plugin entry point is renamed from `fleet-monitor` to `agents`.
+  Move `[plugins.fleet-monitor]` settings in your tongs config to
+  `[plugins.agents]`; the old section is ignored.
+- The MCP server key is `tongs-agents` (before: `fleet`). Claude Code gets it
+  through `claude mcp add --scope user` instead of `mcpServers` in
+  `settings.json`, which Claude Code does not load. The `fleet_*` tool names
+  are unchanged.
+- Session records move from `~/.claude/fleet/` to
+  `$XDG_STATE_HOME/tongs-agents/sessions/` (by default
+  `~/.local/state/tongs-agents/sessions/`, a private 0700 directory).
+  `TONGS_AGENTS_STATE_DIR` moves the whole state directory; `FLEET_DIR` is no
+  longer read. Old records are not migrated.
+- Pi runtime names change with the rest: config `tongs-agents.json` with
+  owner `tongs-agents`, runtime symbol `tongs-agents.pi.runtime.v1` and
+  package `tongs-agents-pi`.
+- `tongs-agents install` and `uninstall` remove claude-fleet-monitor hook
+  commands, its `fleet` MCP entries (only the forms it wrote) and its Pi
+  extension, and keep everything else. `~/.claude/fleet/` is never deleted;
+  `doctor` reports it with the command to remove it.
+
+### Added
+
+- M0, release safety: install adopts and cleans up claude-fleet-monitor
+  0.9.x installs, and the PyPI publish workflow runs only after every test and
+  validation gate passes on a tag that is on `main`, with hash-pinned build
+  tools and a strict `twine check`.
+- M1, the agent workspace:
+  - agent profiles in `~/.config/tongs-agents/config.toml`: any argv command
+    with its own config dir, cwd, env and model arguments (`profiles`);
+  - `workspace` opens a Zellij session with one pane per profile and a status
+    sidebar (`sidebar`); Enter on a row focuses that pane, `n` jumps to the
+    next agent that needs you. A rerun inside the session adds panes instead
+    of nesting. An unused spawn request expires after 24 hours (#66);
+  - `install` covers every profile's config dir, and `doctor` reports what is
+    missing with its fix (`--json`, `--config-dir`);
+  - `notify` reports status from scripts and agents without hooks;
+  - launch identity in hook records, so each status row is tied to the pane
+    and process that tongs-agents started;
+  - the tongs "Open agent workspace" action, with the `[tongs]` extra.
+- M2, config layer and app shell:
+  - `config status`, `config apply` and `config capture` emit one dotfiles
+    directory of instructions, skills and MCP servers into every Claude Code,
+    Codex and Pi config home. Edits go through an owned-file writer that keeps
+    a one-time `<name>.tongs-agents.bak` copy and rolls back on failure;
+  - `[workspace]`, `[ui]` and `[dotfiles]` app settings, a command palette
+    (`Ctrl+P`) and a theme shared by `monitor` and the sidebar;
+  - a pinned, checksum-verified Zellij download for Linux x86_64:
+    `doctor --fix zellij` and `zellij install`. These, and `zellij install
+    --web`, are the only commands that open a network connection.
+- M3, multiplexers and agent control:
+  - tmux 3.2 or newer as a second workspace backend;
+  - `send`, `read`, `wait` and `agent-status` drive launched agent panes from
+    a script, refusing unverified or stale panes;
+  - opt-in MCP agent control (`agents_spawn`, `agents_send`, `agents_status`,
+    `agents_wait`), off unless `[control] mcp_enabled = true` and the profile
+    sets `mcp_control = true`.
+- M4, session store: readers never write; one maintainer (`cleanup`, the
+  `fleet_cleanup` MCP tool) removes ended, exited and stale records.
+- M5, chat and web watching:
+  - `chat`: a chat between you and the agent panes you grant, one pane at a
+    time, with mentions delivered through hooks and wake, and three MCP chat
+    tools that exist only for granted sessions;
+  - `web`: read-only watching of the workspace from a browser or phone through
+    the pinned Zellij web build, off until `web enable` and bound to
+    127.0.0.1 only.
+- M7, sandboxed agents (instrumented against a fake OpenShell CLI; the live
+  gateway run is pending): a profile `sandbox` table runs its agent in an
+  NVIDIA OpenShell sandbox as a normal pane; `sandbox` commands (setup wizard,
+  list, pull, policy, rules); access requests approved or rejected one at a
+  time in the sidebar.
+- Documentation: a new README, a documentation index, tutorials, how-to
+  guides, reference pages and a support matrix that labels each claim live,
+  instrumented, mocked or inspected.
 
 ### Changed
 
@@ -9,12 +107,14 @@
   larger values were accepted (#94).
 - `tongs-agents --help` lists the module commands sorted by command name, not
   by the name of the module file that defines them (#90).
-- A spawn request that was never used (a `workspace --print-command` output
-  that was never run, or the tongs "Open agent workspace" modal opened outside
-  Zellij and closed) now expires after 24 hours. The next workspace that
-  writes a request removes the expired ones with their layouts and the
-  pending launches they name (#66).
 - The tongs "Open agent workspace" modal says the command is already
   prepared ("Prepared; run this command in a terminal:"). Inside Zellij, the
   result is shown as a notification also when the modal was closed before it
   finished (#66).
+
+### Removed
+
+- Python 3.10 support.
+- The `claude-fleet` and `claude-fleet-hook` commands and the
+  `claude_fleet_monitor` module.
+- The `FLEET_DIR` environment variable and the `fleet` MCP key.

@@ -23,6 +23,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
+try:
+    import pwd
+except ImportError:  # Windows has no pwd module
+    pwd = None
+
 from tongs_agents import paths
 
 CONFIG_FILE_NAME = "config.toml"
@@ -348,6 +353,63 @@ def parse_profile(name: str, table) -> Profile:
     )
 
 
+def _home() -> Path | None:
+    try:
+        return Path.home()
+    except (RuntimeError, KeyError):
+        return None
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path
+
+
+def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
+    """Why ``folder`` must not be uploaded into a sandbox, or None when it may be.
+
+    The upload skips only .gitignore'd files, and a home folder is rarely a git
+    repository, so uploading ``/``, the home folder or a folder holding it would
+    copy SSH keys and harness credentials where the agent can read them.
+    """
+    explicit = home is not None
+    home = _home() if home is None else home
+    if home is not None and not home.is_absolute():
+        home = None
+    folders = {Path(folder), _resolved(Path(folder))}
+    homes = {home, _resolved(home)} if home is not None else set()
+    if not explicit:
+        # $HOME can be unset, empty or pointed elsewhere; the account's own home
+        # directory is protected either way.
+        account = _account_home()
+        if account is not None:
+            homes |= {account, _resolved(account)}
+    for candidate in folders:
+        if candidate.anchor and candidate == Path(candidate.anchor):
+            return f"{folder} is the filesystem root"
+        for place in homes:
+            if candidate == place:
+                return f"{folder} is your home folder"
+            if candidate in place.parents:
+                return f"{folder} holds your home folder"
+            if candidate.parent == place and candidate.name.startswith("."):
+                return f"{folder} is a hidden folder in your home, where credentials live"
+    return None
+
+
+def _account_home() -> Path | None:
+    if pwd is None:
+        return None
+    try:
+        directory = pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, OSError):
+        return None
+    path = Path(directory)
+    return path if path.is_absolute() else None
+
+
 def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,
                      mcp_control: bool) -> None:
     """Profile keys that cannot apply inside a sandbox are errors, not ignored."""
@@ -365,6 +427,13 @@ def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,
         raise ProfileError(f"{where}.mcp_control: not available inside a sandbox")
     if sandbox.upload and cwd is None:
         raise ProfileError(f"{where}.cwd: needed to upload the workspace into the sandbox")
+    if sandbox.upload:
+        unsafe = unsafe_folder(cwd)
+        if unsafe is not None:
+            raise ProfileError(
+                f"{where}.cwd: {unsafe}; the sandbox upload would include its "
+                "credentials (pick a project folder)"
+            )
 
 
 def load_profiles(path: Path | None = None) -> dict[str, Profile]:

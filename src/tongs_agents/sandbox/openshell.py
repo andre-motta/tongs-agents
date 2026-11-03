@@ -43,6 +43,8 @@ OWNED_LABELS = (PROFILE_LABEL, LAUNCH_LABEL)
 LIST_LIMIT = 1000
 STATUS_TIMEOUT = 5.0
 POLICY_ADVISOR_KEY = "agent_policy_proposals_enabled"
+# Absolute: a wheel install ships no docs/ folder.
+SANDBOX_DOCS_URL = "https://github.com/andre-motta/tongs-agents/blob/main/docs/sandbox.md"
 SANDBOX_ENV_NAMES = frozenset({
     "TONGS_AGENTS_LAUNCH_ID",
     "TONGS_AGENTS_PROFILE",
@@ -268,7 +270,7 @@ class OpenShell:
                  base_env: Mapping[str, str] | None = None) -> None:
         found = executable or shutil.which(EXECUTABLE)
         if not found:
-            raise OpenShellError("openshell CLI not found on PATH (see docs/sandbox.md)")
+            raise OpenShellError(f"openshell CLI not found on PATH (see {SANDBOX_DOCS_URL})")
         # Absolute, because create runs with the profile cwd as its cwd.
         self.executable = os.path.abspath(found)
         self.gateway = gateway

@@ -263,7 +263,7 @@ def test_enable_refuses_bad_ports(linux, web_build, monkeypatch, capsys, port):
 
     code, _, _ = _cli(monkeypatch, capsys, "web", "enable", "--port", port)
 
-    assert code == 2
+    assert code == 1
 
 
 # tokens, disable and status
@@ -313,7 +313,7 @@ def test_revoke_needs_exactly_one_safe_target(linux, web_build, monkeypatch, cap
 
     code, _, _ = _cli(monkeypatch, capsys, *argv)
 
-    assert code == 2
+    assert code == 1
     assert fake.calls == []
 
 

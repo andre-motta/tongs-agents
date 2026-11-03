@@ -214,7 +214,10 @@ runtimes into the hook path.
 
 The [CLI installer](../src/tongs_agents/cli.py) owns Claude Code and
 Codex hook configuration and the `tongs-agents` MCP registration, made through
-`claude mcp add --scope user` and `codex mcp add`. It also removes the
+`claude mcp add --scope user` for Claude Code and, for Codex, by writing the
+`[mcp_servers.tongs-agents]` table in `config.toml` with the owned-table
+writer (`codex mcp add` drops user comments; see
+[Codex config.toml](install.md#codex-configtoml)). It also removes the
 claude-fleet-monitor 0.9.x hooks and `fleet` MCP entries it recognizes (see
 [legacy.py](../src/tongs_agents/legacy.py) and the
 [migration guide](migration.md)). The default command

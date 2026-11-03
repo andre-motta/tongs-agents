@@ -68,7 +68,14 @@ you to run.
    error and no `openshell` command runs.
 2. **Folder and harness.** The project folder that is uploaded, the harness
    (`claude`, `codex` or `pi`), the profile name (default `<harness>-boxed`)
-   and an optional image.
+   and an optional image. The upload skips only what `.gitignore` lists, so
+   the folder is refused when it is `/`, your home folder or a folder that
+   holds it (also through a symlink): uploading it would copy `~/.ssh`,
+   cloud credentials and harness logins where the agent can read them. The
+   folder defaults to the current directory unless it is one of those; then
+   the field starts empty and `--print` needs `--folder`. When the folder
+   holds `.ssh`, `.aws`, `.gnupg`, `.kube`, `.docker`, `.env`, `.netrc` or
+   `.git-credentials`, the final notes say so.
 3. **Network and credentials.** Network presets for the generated policy;
    everything else stays denied and goes through
    [access requests](#access-requests). The harness's model API is checked
@@ -160,7 +167,9 @@ policy = "~/policies/claude.yaml"                   # --policy (a host file)
 Unknown keys are errors. A sandboxed profile also refuses `env`, `config_dir`
 (the harness config is the one tongs-agents uploads) and `mcp_control` (MCP
 control and the fleet tools are not available inside a sandbox). `cwd` is
-required while `upload` is true. `workdir` is an absolute path inside the
+required while `upload` is true, and, as in the wizard, it may not be `/`,
+your home folder or a folder that holds it (a profile written by hand with
+`cwd = "~"` fails to load). `workdir` is an absolute path inside the
 sandbox and the agent's working directory: the contents of `cwd` land
 directly in it. `policy` is a file on the host.
 
@@ -415,17 +424,17 @@ and a poll whose worker was cancelled is dropped, so older results never
 replace newer ones. A row whose sandbox has pending rules reads as
 waiting, so it counts as needing you, `n` jumps to it and the usual desktop
 notification fires; its detail says how many requests wait. Each new request
-also raises a notice in the sidebar naming the sandbox and endpoint, marked
-when OpenShell attached security notes. Then:
+also raises a notice in the sidebar naming the sandbox and the proposal's
+`Rule:` line, marked when the proposal has `Security:` notes. Then:
 
 - `a` (or the palette's **Review access requests**) opens the requests of the
   selected row's sandbox (or the first sandbox with requests), with each
   proposal's full text: rule, binary, confidence, rationale, `Security:`,
   `Prover:`, endpoints, binaries and hits;
 - `a` in that view opens **Approve this network access?** with the full text
-  again, `Security:` and `Prover:` lines first, in a scrollable body whose
-  height is capped so the Yes and No buttons stay on screen at any terminal
-  size. Only the **Yes, approve** button approves (a click, or Tab to it and
+  again in printed order, after a note naming any `Security:`, `Prover:` or
+  `Application:` lines to read, in a scrollable body whose height is capped
+  so the Yes and No buttons stay on screen at any terminal size. Only the **Yes, approve** button approves (a click, or Tab to it and
   Enter); no single key does, so a stray key never approves text still
   scrolled out of view. `n` or Escape cancels;
 - `d` asks for a reason, which is required, and rejects.
@@ -435,6 +444,18 @@ longer pending is refused, and an approval is refused when the proposal
 changed since it was shown (a growing hit count does not count as a change).
 A failed `rule get` (gateway unreachable, not logged in) shows a warning and
 does not mark the row.
+
+**What you can trust.** OpenShell prints the agent's rationale as it is, so a
+rationale with line breaks can add lines that look like the fields printed
+after it (`Security:`, `Prover:`, `Application:`, `Candidate:`,
+`Endpoints:`, `Binaries:`, `Hits:`). Only the lines before `Rationale:`
+(chunk, status, rule, binary and confidence) are certainly OpenShell's. Every
+view, the CLI included, therefore shows the `Rationale:` line and all lines
+after it under the heading "From Rationale on, any line may be the agent's
+text", each prefixed with `> `, and never moves them up; the notices name the
+`Rule:` line. A rationale that repeats a label OpenShell also printed fails
+the parse (see below), so it can add lines but never replace OpenShell's.
+Check the `Rule:` line against the endpoints before you approve.
 
 **CLI.** `sandbox rules list NAME` prints the proposals. `sandbox rules
 approve NAME CHUNK` prints the proposal and asks; it refuses to run off a

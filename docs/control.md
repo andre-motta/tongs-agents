@@ -7,7 +7,10 @@ description: "Paste prompts into agent panes, read their screens and wait for th
 script drive agents, but only in panes that tongs-agents spawned and can verify
 right now. A pane is named by its launch id: the 32-character hex id of its
 launch record, shown by `tongs-agents agent-status` and set as
-`TONGS_AGENTS_LAUNCH_ID` inside the pane.
+`TONGS_AGENTS_LAUNCH_ID` inside the pane. Sent text has your full user
+authority in the target, as if you typed it there, including `!` shell
+escapes and slash commands, whoever runs `send` (see
+[what a sender can do](mcp-control.md)).
 
 Control works with Zellij and tmux panes started by `tongs-agents workspace`
 or the sidebar (on tmux see [tmux](workspace.md#tmux) for how pastes and
@@ -31,6 +34,9 @@ tongs-agents agent-status LAUNCH_ID --json
   one prompt. With `-` the text is read from standard input (CRLF becomes LF
   and one trailing newline is dropped). Text is at most 64 KiB and may hold
   tabs and newlines but no other control characters (no escape sequences).
+  Zellij takes pasted text only as a command argument, so on Zellij the text
+  is briefly visible to other local users in the process list; do not send
+  secrets on a shared host (see [limits](workspace.md#limits)).
 - `read` prints the last 1 to 200 lines (default 200) of the pane's screen and
   scrollback.
 - `wait` polls until the agent reaches `--until`: `done` (default),
@@ -49,12 +55,17 @@ tongs-agents agent-status LAUNCH_ID --json
 | Code | Meaning |
 | --- | --- |
 | 0 | ok (for `wait`: the state was reached) |
-| 1 | error (bad arguments, text refused, multiplexer call failed) |
+| 1 | error (usage errors and bad arguments, text refused, multiplexer call failed) |
 | 2 | timeout (`wait`) |
 | 3 | blocked: the agent needs you (`wait --until done`) |
 | 4 | the agent exited |
 | 5 | refused: not a pane tongs-agents spawned and verified |
 | 6 | the launch's multiplexer has no pane control |
+
+A usage error, such as an unknown option, a missing launch id or an invalid
+`--until` value, prints the usage line and exits 1, never 2, so 2 always
+means a `wait` timeout. Every `tongs-agents` verb follows this rule: no verb
+uses argparse's usual exit 2 for usage errors.
 
 ## What is verified
 

@@ -21,6 +21,12 @@ submits. This module is the only place tongs-agents runs ``openshell rule``
 
 Gateway text is untrusted (an agent writes proposal rationales), so escape
 sequences and control characters are removed before parsing or display.
+Newlines stay, and OpenShell prints the rationale as it is, so a rationale can
+add lines that parse as later labels (``Security``, ``Prover``, ``Endpoints``
+and so on) when OpenShell printed no such line itself. Only the lines before
+``Rationale`` are OpenShell's for certain: ``summary`` uses the Rule line, and
+``Proposal.text`` quotes the Rationale line and every line after it under
+``UNVERIFIED_HEADING`` so no screen shows them as OpenShell's own fields.
 """
 
 from __future__ import annotations
@@ -64,6 +70,9 @@ FIELDS = (
 LABEL_ORDER = {label: index for index, (label, _name) in enumerate(FIELDS)}
 LABEL_FIELD = dict(FIELDS)
 REQUIRED = ("Chunk", "Status", "Rule", "Confidence", "Rationale")
+UNVERIFIED_HEADING = ("From Rationale on, any line may be the agent's text "
+                      "(it can imitate OpenShell's fields):")
+QUOTE = "> "
 
 
 class ParseError(ValueError):
@@ -81,7 +90,14 @@ def clean(text: str) -> str:
 
 @dataclass(frozen=True)
 class Proposal:
-    """One drafted network rule as ``rule get`` prints it."""
+    """One drafted network rule as ``rule get`` prints it.
+
+    The fields after ``rationale`` (``security`` to ``hits``) may be the
+    agent's text (see the module notes); a spoofed one can only add to them,
+    since a label OpenShell also printed repeats and fails the parse. ``text``
+    is the proposal for review: the lines before Rationale as printed, then
+    ``UNVERIFIED_HEADING`` and the rest, each line prefixed with ``QUOTE``.
+    """
 
     chunk_id: str
     status: str
@@ -100,7 +116,7 @@ class Proposal:
 
     @property
     def flagged(self) -> bool:
-        """OpenShell attached security notes (shown first in the review)."""
+        """OpenShell (or the agent's rationale) attached Security notes; marks the notice."""
         return bool(self.security)
 
     def fingerprint(self) -> tuple:
@@ -110,7 +126,14 @@ class Proposal:
                 self.candidate, self.endpoints, self.binaries)
 
     def summary(self) -> str:
-        return self.endpoints or self.rule
+        """The Rule line, printed before Rationale, so the agent cannot replace it."""
+        return self.rule
+
+    @property
+    def unverified_fields(self) -> tuple[str, ...]:
+        """Labels after Rationale that hold a value, possibly written by the agent."""
+        return tuple(label for label, name in FIELDS[LABEL_ORDER["Rationale"] + 1:]
+                     if getattr(self, name) and label != "Validation")
 
 
 @dataclass(frozen=True)
@@ -168,7 +191,17 @@ def _parse_block(lines: list[str], status: str | None) -> Proposal:
         raise ParseError(f"unrecognised confidence {values['confidence'][:40]!r}")
     if "hits" in values and not HITS_RE.fullmatch(values["hits"]):
         raise ParseError(f"unrecognised hits {values['hits'][:80]!r}")
-    return Proposal(**values, text="\n".join(line[2:] for line in lines))
+    return Proposal(**values, text=_review_text(lines))
+
+
+def _review_text(lines: list[str]) -> str:
+    """The block for review, quoting the Rationale line and every line after it."""
+    split = next(index for index, line in enumerate(lines)
+                 if LINE_RE.fullmatch(line).group(1) == "Rationale")
+    shown = [line[2:] for line in lines[:split]]
+    shown.append(UNVERIFIED_HEADING)
+    shown.extend(QUOTE + line[2:] for line in lines[split:])
+    return "\n".join(shown)
 
 
 def parse_rules(text: str, *, sandbox: str | None = None,

@@ -14,8 +14,9 @@ claimed process, so a leaked or copied variable names nobody. On top of
   unless ``[control].mcp_any_target`` is true;
 - at most ``[control].mcp_rate_per_minute`` sends, and as many spawns, per
   caller in any 60 s;
-- spawns go only into a running workspace session: the server's
-  ``ZELLIJ_SESSION_NAME``, else ``[workspace].session``.
+- spawns go only into the running session the caller's verified launch
+  runs in, through that launch's multiplexer and socket; neither the
+  server's environment nor ``[workspace]`` picks another one.
 
 No tool takes argv, env or cwd: a spawn names a profile and nothing else.
 Actions run through ``control.py`` with actor ``mcp:<caller launch id>``, and
@@ -40,8 +41,6 @@ from tongs_agents.multiplexers.base import MultiplexerError, Unsupported
 from tongs_agents.profiles import PROFILE_NAME_RE, Profile, ProfileError
 
 ACTOR = "mcp"
-SESSION_ENV = "ZELLIJ_SESSION_NAME"
-SOCKET_DIR_ENV = "ZELLIJ_SOCKET_DIR"
 RATE_DIR = "mcp-rate"
 RATE_WINDOW = 60.0
 MAX_RATE_BYTES = 16 * 1024
@@ -273,17 +272,13 @@ class McpControl:
             "status": result.status.to_json(),
         }
 
-    def _session(self, config: AppConfig) -> tuple[str, str | None]:
-        session = self.env.get(SESSION_ENV)
-        if session:
-            socket_dir = self.env.get(SOCKET_DIR_ENV) or None
-            if socket_dir is not None and not os.path.isabs(socket_dir):
-                socket_dir = None
-        else:
-            session, socket_dir = config.workspace.session, None
+    @staticmethod
+    def _session(caller: LaunchRecord) -> tuple[str, str, str | None]:
+        """The multiplexer, session and socket of the caller's verified launch."""
+        session = caller.session
         if not app_config.SESSION_RE.match(session):
             raise control.Refused(f"workspace session {session!r:.80} is not a valid name")
-        return session, socket_dir
+        return caller.multiplexer, session, caller.socket_dir
 
     def _await_claim(self, launch_id: str) -> LaunchRecord | None:
         deadline = time.monotonic() + self.claim_timeout
@@ -310,9 +305,9 @@ class McpControl:
                     "[control].mcp_nested_spawn = true"
                 )
             profile = self._opted(loaded, profile_name, "spawn")
-            session, socket_dir = self._session(config)
+            multiplexer, session, socket_dir = self._session(caller)
             try:
-                mux = get_multiplexer(config.workspace.multiplexer, socket_dir=socket_dir)
+                mux = get_multiplexer(multiplexer, socket_dir=socket_dir)
                 state = mux.session_state(session)
             except Unsupported as error:
                 raise control.ControlUnsupported(error.detail) from None

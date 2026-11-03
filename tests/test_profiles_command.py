@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 
 import pytest
@@ -90,6 +91,24 @@ def test_show(config, monkeypatch, capsys):
     assert json.loads(out)["command"] == ["claude"]
 
 
+def test_show_includes_the_sandbox_table(config, monkeypatch, capsys):
+    config.write_text(
+        '[profiles.boxed]\ncommand = ["claude"]\ncwd = "/srv/project"\n'
+        '[profiles.boxed.sandbox]\nproviders = ["anthropic"]\nmemory = "4Gi"\n'
+    )
+    code, out, _ = _run(monkeypatch, capsys, "show", "boxed")
+    assert code == 0
+    assert "config_home: inside the OpenShell sandbox" in out
+    assert ("sandbox: mode=exec, upload=True, workdir=/sandbox/workspace, providers=anthropic, "
+            "memory=4Gi") in out
+    code, out, _ = _run(monkeypatch, capsys, "show", "boxed", "--json")
+    info = json.loads(out)
+    assert info["sandbox"]["providers"] == ["anthropic"]
+    assert info["sandbox"]["upload"] is True
+    code, out, _ = _run(monkeypatch, capsys)
+    assert "inside the OpenShell sandbox" in out
+
+
 def test_show_unknown(config, monkeypatch, capsys):
     code, _, err = _run(monkeypatch, capsys, "show", "missing")
     assert code == 1
@@ -120,7 +139,7 @@ def test_profiles_command_never_writes(config, monkeypatch, capsys):
 def test_doctor_checks(config):
     checks = {(check.level, check.message.split()[1]) for check in profiles_command.doctor_checks()}
     assert ("warn", "claude-sandbox") in checks
-    assert ("warn", "example-agent") in checks
+    assert ("info", "example-agent") in checks
     assert ("warn", "rel") in checks
     assert not any(name in ("claude-alt", "codex-review") for _, name in checks)
 
@@ -130,6 +149,43 @@ def test_doctor_checks_report_invalid_config(config):
     [check] = profiles_command.doctor_checks()
     assert check.level == "error"
     assert "invalid TOML" in check.message
+
+
+def test_other_harness_points_at_notify(config):
+    config.write_text('[profiles.tests]\ncommand = ["sh", "-c", "make test"]\n')
+    [check] = profiles_command.doctor_checks()
+    assert check.level == "info"
+    assert "tongs-agents notify" in check.message
+    assert check.remediation.startswith("Report status with tongs-agents notify")
+
+
+def test_missing_cwd_is_a_warning(config, tmp_path):
+    missing = tmp_path / "not-there"
+    config.write_text(
+        f'[profiles.a]\ncommand = ["claude"]\ncwd = "{missing}"\n'
+        f'[profiles.b]\ncommand = ["claude"]\ncwd = "{tmp_path}"\n'
+    )
+    [check] = profiles_command.doctor_checks()
+    assert check.level == "warn"
+    assert check.message.startswith(f"Profile a has cwd {missing}")
+    assert check.remediation == "Create that directory or change cwd in [profiles.a]"
+
+
+def test_untraversable_cwd_is_a_warning_not_a_crash(config, tmp_path, monkeypatch):
+    blocked = tmp_path / "blocked"
+    project = blocked / "project"
+    config.write_text(f'[profiles.a]\ncommand = ["claude"]\ncwd = "{project}"\n')
+    real_stat = os.stat
+
+    def stat(path, *args, **kwargs):
+        if os.fspath(path).startswith(str(blocked)):
+            raise PermissionError(13, "Permission denied", os.fspath(path))
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat)
+    [check] = profiles_command.doctor_checks()
+    assert check.level == "warn"
+    assert check.message.startswith(f"Profile a has cwd {project}")
 
 
 def test_codex_wrapper_without_home_is_info(config):

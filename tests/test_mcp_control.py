@@ -355,10 +355,48 @@ def test_spawn_starts_the_launcher_in_the_running_session(world):
     )
 
 
-def test_spawn_falls_back_to_the_workspace_session(world):
-    env = {control.CALLER_ENV: world.caller.launch_id}
-    world.mux.states = {"agents": SESSION_RUNNING}
-    assert world.tools(env).spawn("worker")["session"] == "agents"
+def test_spawn_uses_the_callers_session_not_the_server_env(world):
+    env = {**world.env, "ZELLIJ_SESSION_NAME": "elsewhere", "ZELLIJ_SOCKET_DIR": "/x"}
+    world.mux.states = {SESSION: SESSION_RUNNING, "elsewhere": SESSION_RUNNING}
+    assert world.tools(env).spawn("worker")["session"] == SESSION
+    assert [session for session, *_ in world.mux.spawned] == [SESSION]
+
+
+def test_spawn_uses_the_callers_multiplexer_session_and_socket(world, monkeypatch):
+    """A lead in a tmux workspace with no [workspace] config spawns into tmux."""
+    tmux_socket = "/tmp/tmux-1000/work"
+    mux = FakeMux()
+    mux.name = "tmux"
+    mux.states = {"work": SESSION_RUNNING}
+    mux.panes["%1"] = PaneInfo(
+        ref=PaneRef("tmux", "work", "%1", tmux_socket),
+        title="agent", command="python", exited=False, focused=False,
+    )
+    asked = []
+
+    def get_multiplexer(name="zellij", *, socket_dir=None):
+        asked.append((name, socket_dir))
+        if name == "tmux":
+            return mux
+        return world.mux
+
+    monkeypatch.setattr(control, "get_multiplexer", get_multiplexer)
+    monkeypatch.setattr(mcp_control, "get_multiplexer", get_multiplexer)
+    pending = launches.create_pending(Profile("lead", "other", ("fake",)), "work", "tmux")
+    lead = launches.claim(
+        pending.launch_id, 7000, START, PaneRef("tmux", "work", "%1", tmux_socket)
+    )
+    world.processes[7000] = FakeProcess(7000, START)
+    world.processes[7100] = FakeProcess(7100, "9", ppid=7000)
+    env = {control.CALLER_ENV: lead.launch_id, "TMUX": f"{tmux_socket},1,0"}
+
+    result = world.tools(env, pid=7100).spawn("worker")
+
+    assert result["session"] == "work"
+    assert [session for session, *_ in mux.spawned] == ["work"]
+    assert world.mux.spawned == []
+    assert set(asked) == {("tmux", tmux_socket)}
+    assert launches.get(result["launch_id"]).multiplexer == "tmux"
 
 
 def test_spawn_refuses_a_session_that_is_not_running(world):
