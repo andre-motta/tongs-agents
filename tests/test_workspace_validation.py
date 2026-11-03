@@ -14,6 +14,7 @@ import pytest
 from tongs_agents import cli, hook
 from tongs_agents.discovery import read_stored_sessions
 from tongs_agents.profiles import load_profiles
+from tests.test_launch_identity import write_claim
 
 ROOT = Path(__file__).parents[1]
 VALIDATION = ROOT / "validation"
@@ -241,6 +242,7 @@ def test_pi_fixture_payloads_are_accepted_by_the_hook(tmp_path, monkeypatch):
     monkeypatch.setenv("TONGS_AGENTS_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setenv("TONGS_AGENTS_LAUNCH_ID", "a" * 32)
     monkeypatch.setenv("TONGS_AGENTS_PROFILE", "f1")
+    write_claim("a" * 32, os.getpid(), None, harness="pi", profile="f1")
 
     for payload in fake_agent.pi_payloads(os.getpid(), "fixture-x", str(tmp_path)):
         monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(payload)))

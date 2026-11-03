@@ -27,9 +27,10 @@ START = "4242"
 
 
 class FakeProcess:
-    def __init__(self, pid, start_token):
+    def __init__(self, pid, start_token, ppid=None):
         self.pid = pid
         self.start_token = start_token
+        self.ppid = ppid
 
 
 class FakeMux:
@@ -133,7 +134,7 @@ def audit_lines():
 
 
 def hook_record(record, status="idle", *, pane=None, session=SESSION, ts=None,
-                arrival=1, session_id="s1", socket_dir=None):
+                arrival=1, session_id="s1", socket_dir=None, pid=None, start=None):
     env = {"ZELLIJ_SESSION_NAME": session, "ZELLIJ_PANE_ID": pane or record.pane_id}
     if socket_dir:
         env["ZELLIJ_SOCKET_DIR"] = socket_dir
@@ -147,6 +148,8 @@ def hook_record(record, status="idle", *, pane=None, session=SESSION, ts=None,
         "arrival_sequence": arrival,
         "terminal": "zellij",
         "terminal_env": env,
+        "pid": str(record.pid if pid is None else pid),
+        "process_start": record.process_start if start is None else start,
         "launch": {"launch_id": record.launch_id, "profile_id": record.profile},
     }
 
@@ -166,6 +169,26 @@ def test_a_hook_record_naming_no_pane_does_not_refuse(world):
     entry["terminal_env"] = {}
     world.hooks.append(entry)
     assert control.verify(world.record.launch_id).pane_id == "3"
+
+
+def test_a_hook_record_from_another_process_carries_no_launch(world):
+    """A daemon-hosted session with this launch's env is ignored (#74)."""
+    world.processes[4242] = FakeProcess(4242, "900", ppid=1)
+    world.hooks.append(hook_record(world.record, "waiting", pane="7", pid=4242, start="900"))
+    world.hooks.append(hook_record(world.record, "error", session_id="s2", start="9999"))
+
+    assert control.verify(world.record.launch_id).pane_id == "3"
+    assert control.status(world.record.launch_id).state == "quiet"
+
+
+def test_a_hook_record_under_the_claimed_process_counts(world):
+    world.processes[5000] = FakeProcess(5000, "77", ppid=4000)
+    world.hooks.append(hook_record(world.record, "waiting", pid=5000, start="77"))
+    assert control.status(world.record.launch_id).state == "needs-you"
+
+    world.hooks[:] = [hook_record(world.record, pane="7", pid=5000, start="77")]
+    with pytest.raises(control.Refused, match="names another pane"):
+        control.verify(world.record.launch_id)
 
 
 def _pending(world):

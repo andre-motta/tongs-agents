@@ -1,14 +1,15 @@
-"""Optional launch identity carried in hook records (issue #10)."""
+"""Optional launch identity carried in hook records (issues #10 and #74)."""
 
 import io
 import json
 import os
 import subprocess
 import sys
+import time
 
 import pytest
 
-from tongs_agents import _envcheck, discovery, hook, mcp_server
+from tongs_agents import _envcheck, discovery, hook, launches, mcp_server, paths
 from tongs_agents.discovery import ProcessInfo, read_session_records
 from tongs_agents.hook import handle
 from tongs_agents.models import (
@@ -65,6 +66,38 @@ def set_launch(monkeypatch, launch_id=LAUNCH_ID, profile="reviewer"):
     monkeypatch.setenv(PROFILE_ID_ENV, profile)
 
 
+HOOK_PID = 12345
+HOOK_START = "100"
+
+
+def write_claim(launch_id=LAUNCH_ID, pid=HOOK_PID, start=HOOK_START, *,
+                harness="claude", profile="reviewer", state="running"):
+    """A launch record for ``launch_id`` claimed by ``pid`` (the launcher)."""
+    if start is None and state == "running":
+        info = discovery.get_process_info(pid)
+        start = info.start_token if info is not None else None
+    record = launches.LaunchRecord(
+        launch_id=launch_id,
+        profile=profile,
+        harness=harness,
+        multiplexer="zellij",
+        session="agents",
+        created=int(time.time()),
+        pane_id="1" if state == "running" else None,
+        pid=pid if state == "running" else None,
+        process_start=start if state == "running" else None,
+        state=state,
+    )
+    return launches._write(record)
+
+
+@pytest.fixture
+def claimed(fleet_dir):
+    """Both test launch ids claimed by the process ``run_hook`` resolves."""
+    write_claim(LAUNCH_ID)
+    write_claim(OTHER_LAUNCH_ID, profile="other")
+
+
 def run_pi(monkeypatch, sequence, status="started", event="session-start"):
     process = ProcessInfo(303, 1, "node", "node", ("node",), "/tmp/repo", "40")
     monkeypatch.setattr(
@@ -97,7 +130,7 @@ def write_raw_record(fleet_dir, record):
 
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
-def test_native_session_start_captures_launch(fleet_dir, monkeypatch, agent):
+def test_native_session_start_captures_launch(fleet_dir, claimed, monkeypatch, agent):
     set_launch(monkeypatch)
     assert run_hook(monkeypatch, "session-start", PAYLOAD, agent=agent)
     record = read_new_record(fleet_dir)
@@ -107,7 +140,7 @@ def test_native_session_start_captures_launch(fleet_dir, monkeypatch, agent):
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
 def test_native_first_event_without_start_captures_launch(
-    fleet_dir, monkeypatch, agent
+    fleet_dir, claimed, monkeypatch, agent
 ):
     set_launch(monkeypatch)
     assert run_hook(monkeypatch, "prompt-submit", PAYLOAD, agent=agent)
@@ -115,6 +148,8 @@ def test_native_first_event_without_start_captures_launch(
 
 
 def test_pi_fleet_event_captures_and_carries_launch(fleet_dir, monkeypatch):
+    write_claim(LAUNCH_ID, 303, "40", harness="pi", profile="pi-local")
+    write_claim(OTHER_LAUNCH_ID, 303, "40", harness="pi", profile="other")
     set_launch(monkeypatch, profile="pi-local")
     assert run_pi(monkeypatch, 1)
     assert read_new_record(fleet_dir)["launch"] == {
@@ -126,7 +161,7 @@ def test_pi_fleet_event_captures_and_carries_launch(fleet_dir, monkeypatch):
 
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
-def test_launch_is_carried_forward_on_later_events(fleet_dir, monkeypatch, agent):
+def test_launch_is_carried_forward_on_later_events(fleet_dir, claimed, monkeypatch, agent):
     set_launch(monkeypatch)
     assert run_hook(monkeypatch, "session-start", PAYLOAD, agent=agent)
     monkeypatch.delenv(LAUNCH_ID_ENV)
@@ -139,7 +174,7 @@ def test_launch_is_carried_forward_on_later_events(fleet_dir, monkeypatch, agent
     assert record["launch"] == {"launch_id": LAUNCH_ID, "profile_id": "reviewer"}
 
 
-def test_session_start_recaptures_launch(fleet_dir, monkeypatch):
+def test_session_start_recaptures_launch(fleet_dir, claimed, monkeypatch):
     set_launch(monkeypatch)
     assert run_hook(monkeypatch, "session-start", PAYLOAD)
     set_launch(monkeypatch, OTHER_LAUNCH_ID, "other")
@@ -170,7 +205,7 @@ def test_bad_launch_id_is_omitted_and_event_kept(fleet_dir, monkeypatch, bad):
 
 
 @pytest.mark.parametrize("bad", BAD_PROFILES)
-def test_bad_profile_is_omitted_and_event_kept(fleet_dir, monkeypatch, bad):
+def test_bad_profile_is_omitted_and_event_kept(fleet_dir, claimed, monkeypatch, bad):
     set_launch(monkeypatch, LAUNCH_ID, bad)
     assert run_hook(monkeypatch, "session-start", PAYLOAD)
     assert read_new_record(fleet_dir)["launch"] == {"launch_id": LAUNCH_ID}
@@ -312,7 +347,7 @@ def v010_record_errors(record):
 
 @pytest.mark.parametrize("agent", ["claude", "codex"])
 def test_v010_style_validator_accepts_records_with_launch(
-    fleet_dir, monkeypatch, agent
+    fleet_dir, claimed, monkeypatch, agent
 ):
     set_launch(monkeypatch)
     assert run_hook(monkeypatch, "session-start", PAYLOAD, agent=agent)
@@ -322,6 +357,275 @@ def test_v010_style_validator_accepts_records_with_launch(
     without = {key: value for key, value in written.items() if key != "launch"}
     assert discovery._validate_record(without) is not None
     assert discovery._validate_record(written)["launch"] == written["launch"]
+
+
+# Launch identity is verified against the claimed process (#74)
+
+FIRST_TUI = ProcessInfo(5151, 77, "codex", "codex", ("codex",), "/tmp/repo", "950")
+LATER_TUI = ProcessInfo(6161, 88, "codex", "codex", ("codex",), "/tmp/repo", "960")
+DAEMON = ProcessInfo(
+    4242, 1, "codex", "codex", ("codex", "app-server", "--listen"), "/tmp/repo", "900"
+)
+
+
+def codex_start(monkeypatch, session_id, process):
+    monkeypatch.setattr(
+        "tongs_agents.hook.resolve_process_identity", lambda harness, pid=None: process
+    )
+    monkeypatch.setattr(
+        "tongs_agents.terminal_apis.capture_terminal_info",
+        lambda: {"terminal": "test", "terminal_env": {}},
+    )
+    payload = {"session_id": session_id, "cwd": "/tmp/repo"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    return handle("session-start", "codex")
+
+
+def stored_launches():
+    return {
+        record["session_id"]: record.get("launch")
+        for record in read_session_records()
+    }
+
+
+def test_daemon_hosted_second_tui_with_first_launch_env_records_no_launch(
+    fleet_dir, monkeypatch
+):
+    write_claim(LAUNCH_ID, FIRST_TUI.pid, FIRST_TUI.start_token, harness="codex")
+    write_claim(OTHER_LAUNCH_ID, LATER_TUI.pid, LATER_TUI.start_token,
+                harness="codex", profile="other")
+    # The daemon hosts both TUIs' sessions and always carries the first
+    # daemon-attached launch's environment.
+    set_launch(monkeypatch)
+    assert codex_start(monkeypatch, "first", DAEMON)
+    assert codex_start(monkeypatch, "later", DAEMON)
+    # A --no-daemon TUI runs its hooks under its own, claimed, process.
+    set_launch(monkeypatch, OTHER_LAUNCH_ID, "other")
+    assert codex_start(monkeypatch, "in-process", LATER_TUI)
+
+    assert stored_launches() == {
+        "first": None,
+        "later": None,
+        "in-process": {"launch_id": OTHER_LAUNCH_ID, "profile_id": "other"},
+    }
+
+
+def test_a_session_under_the_claimed_process_keeps_its_launch(fleet_dir, monkeypatch):
+    wrapper = ProcessInfo(700, 1, "claude-alt", "bash", ("claude-alt",), None, "7")
+    shell = ProcessInfo(701, 700, "bash", "bash", ("bash",), None, "8")
+    agent = ProcessInfo(HOOK_PID, 701, "claude", "claude", ("claude",), None, HOOK_START)
+    table = {process.pid: process for process in (wrapper, shell)}
+    monkeypatch.setattr(discovery, "get_process_info", table.get)
+    monkeypatch.setattr(
+        "tongs_agents.hook.resolve_process_identity", lambda harness, pid=None: agent
+    )
+    write_claim(LAUNCH_ID, wrapper.pid, wrapper.start_token)
+    set_launch(monkeypatch)
+    assert run_hook_resolved(monkeypatch, agent)
+    assert read_new_record(fleet_dir)["launch"]["launch_id"] == LAUNCH_ID
+
+
+def run_hook_resolved(monkeypatch, process):
+    monkeypatch.setattr(
+        "tongs_agents.hook.resolve_process_identity", lambda harness, pid=None: process
+    )
+    monkeypatch.setattr(
+        "tongs_agents.terminal_apis.capture_terminal_info",
+        lambda: {"terminal": "test", "terminal_env": {}},
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(PAYLOAD)))
+    return handle("session-start", "claude")
+
+
+def _symlinked(launch_id):
+    target = write_claim(OTHER_LAUNCH_ID)
+    path = paths.launches_dir() / f"{launch_id}.json"
+    path.symlink_to(paths.launches_dir() / f"{target.launch_id}.json")
+
+
+def _misnamed(launch_id):
+    write_claim(OTHER_LAUNCH_ID)
+    os.replace(
+        paths.launches_dir() / f"{OTHER_LAUNCH_ID}.json",
+        paths.launches_dir() / f"{launch_id}.json",
+    )
+
+
+def _raw(text):
+    def write(launch_id):
+        paths.launches_dir(create=True)
+        (paths.launches_dir() / f"{launch_id}.json").write_text(text)
+    return write
+
+
+def _claim_payload(**changes):
+    data = {
+        "schema_version": 1, "launch_id": LAUNCH_ID, "profile": "reviewer",
+        "harness": "claude", "multiplexer": "zellij", "session": "agents",
+        "created": 1, "pid": HOOK_PID, "process_start": HOOK_START,
+        "state": "running",
+    }
+    data.update(changes)
+    return json.dumps(data)
+
+
+UNVERIFIED = {
+    "no launch record": lambda launch_id: None,
+    "pending, not claimed": lambda launch_id: write_claim(launch_id, state="pending"),
+    "pid reused (other start token)": lambda launch_id: write_claim(
+        launch_id, HOOK_PID, "999"
+    ),
+    "claimed by another process": lambda launch_id: write_claim(launch_id, 999),
+    "record is a symlink": _symlinked,
+    "record names another id": _misnamed,
+    "record is not JSON": _raw("{"),
+    "record is oversized": _raw(" " * (64 * 1024) + _claim_payload()),
+    "record has another schema": _raw(_claim_payload(schema_version=2)),
+    "record pid is not an integer": _raw(_claim_payload(pid="12345")),
+    "record pid is a bool": _raw(_claim_payload(pid=True)),
+    "record start token is empty": _raw(_claim_payload(process_start="")),
+}
+
+
+@pytest.mark.parametrize("case", sorted(UNVERIFIED))
+def test_an_unverified_env_launch_records_no_identity(fleet_dir, monkeypatch, case):
+    UNVERIFIED[case](LAUNCH_ID)
+    set_launch(monkeypatch)
+    assert run_hook(monkeypatch, "session-start", PAYLOAD)
+    record = read_new_record(fleet_dir)
+    assert record["status"] == "started"
+    assert "launch" not in record
+
+
+def test_a_valid_raw_claim_is_read_like_launches_reads_it(fleet_dir):
+    _raw(_claim_payload())(LAUNCH_ID)
+    assert hook._launch_claim(LAUNCH_ID) == (HOOK_PID, HOOK_START)
+    assert launches.get(LAUNCH_ID).pid == HOOK_PID
+    _raw(_claim_payload(process_start=None))(LAUNCH_ID)
+    assert hook._launch_claim(LAUNCH_ID) == (HOOK_PID, None)
+
+
+def test_an_unresolved_process_records_no_launch(fleet_dir, monkeypatch, claimed):
+    set_launch(monkeypatch)
+    assert run_hook(monkeypatch, "session-start", PAYLOAD, resolved=False)
+    record = read_new_record(fleet_dir)
+    assert record["process_identity"] == "unresolved"
+    assert "launch" not in record
+
+
+def test_a_profile_without_a_launch_id_is_kept_unverified(fleet_dir, monkeypatch):
+    set_launch(monkeypatch, "not-a-launch")
+    assert run_hook(monkeypatch, "session-start", PAYLOAD)
+    assert read_new_record(fleet_dir)["launch"] == {"profile_id": "reviewer"}
+
+
+def test_hook_claim_reader_mirrors_the_launch_record_format():
+    assert hook._LAUNCH_SCHEMA_VERSION == launches.SCHEMA_VERSION
+    assert hook._MAX_LAUNCH_RECORD_BYTES == launches.MAX_RECORD_BYTES
+
+
+def test_hook_claim_reader_never_raises_on_an_unusable_state_dir(monkeypatch):
+    def broken(create=False):
+        raise paths.UnsafePathError("refused")
+
+    monkeypatch.setattr(paths, "launches_dir", broken)
+    assert hook._launch_claim(LAUNCH_ID) is None
+
+
+def lineage(*processes):
+    table = {process.pid: process for process in processes}
+    return table.get
+
+
+def test_lineage_walk_matches_the_process_or_an_ancestor():
+    root = ProcessInfo(10, 1, "launcher", "python", (), None, "a")
+    child = ProcessInfo(11, 10, "sh", "sh", (), None, "b")
+    leaf = ProcessInfo(12, 11, "claude", "claude", (), None, "c")
+    lookup = lineage(root, child)
+    assert hook.process_descends_from(leaf, 12, "c", lookup)
+    assert hook.process_descends_from(leaf, 10, "a", lookup)
+    assert hook.process_descends_from(leaf, 10, None, lookup)
+    assert not hook.process_descends_from(leaf, 10, "reused", lookup)
+    assert not hook.process_descends_from(leaf, 99, "a", lookup)
+    assert not hook.process_descends_from(None, 10, "a", lookup)
+    assert not hook.process_descends_from(leaf, True, "a", lookup)
+    assert not hook.process_descends_from(leaf, 0, "a", lookup)
+
+
+def test_lineage_walk_stops_on_a_cycle_and_after_its_step_limit():
+    first = ProcessInfo(20, 21, "a", "a", (), None, "x")
+    second = ProcessInfo(21, 20, "b", "b", (), None, "y")
+    assert not hook.process_descends_from(first, 99, "z", lineage(first, second))
+
+    chain = [
+        ProcessInfo(1000 + step, 1000 + step + 1, "p", "p", (), None, str(step))
+        for step in range(hook.MAX_LINEAGE_STEPS + 1)
+    ]
+    calls = []
+    table = lineage(*chain)
+
+    def lookup(pid):
+        calls.append(pid)
+        return table(pid)
+
+    top = chain[-1]
+    assert not hook.process_descends_from(chain[0], top.pid, top.start_token, lookup)
+    assert len(calls) == hook.MAX_LINEAGE_STEPS - 1
+    within = chain[hook.MAX_LINEAGE_STEPS - 1]
+    assert hook.process_descends_from(chain[0], within.pid, within.start_token, table)
+
+
+# Reader-side check: launches.claims_session
+
+
+def claimed_record(pid=500, start="50", state="running"):
+    return launches.LaunchRecord(
+        launch_id=LAUNCH_ID, profile="reviewer", harness="codex",
+        multiplexer="zellij", session="agents", created=1, pane_id="1",
+        pid=pid if state == "running" else None,
+        process_start=start if state == "running" else None, state=state,
+    )
+
+
+def test_claims_session_matches_the_exact_process_without_a_lookup(monkeypatch):
+    monkeypatch.setattr(discovery, "get_process_info", lambda pid: pytest.fail("looked up"))
+    record = claimed_record()
+    assert launches.claims_session(record, {"pid": "500", "process_start": "50"})
+    assert not launches.claims_session(record, {"pid": "500", "process_start": "51"})
+    assert not launches.claims_session(record, {"pid": "500", "process_start": ""})
+    no_token = claimed_record(start=None)
+    assert launches.claims_session(no_token, {"pid": "500", "process_start": ""})
+
+
+def test_claims_session_walks_a_live_descendant(monkeypatch):
+    launcher = ProcessInfo(500, 1, "launcher", "python", (), None, "50")
+    agent = ProcessInfo(600, 500, "codex", "codex", (), None, "60")
+    monkeypatch.setattr(discovery, "get_process_info", lineage(launcher, agent))
+    record = claimed_record()
+    assert launches.claims_session(record, {"pid": "600", "process_start": "60"})
+    assert not launches.claims_session(record, {"pid": "600", "process_start": "61"})
+    assert not launches.claims_session(record, {"pid": "700", "process_start": "60"})
+
+
+def test_claims_session_rejects_the_daemon(monkeypatch):
+    daemon = ProcessInfo(4242, 1, "codex", "codex", (), None, "900")
+    monkeypatch.setattr(discovery, "get_process_info", lineage(daemon))
+    data = {"pid": "4242", "process_start": "900"}
+    assert not launches.claims_session(claimed_record(), data)
+
+
+@pytest.mark.parametrize(
+    "data",
+    [{}, {"pid": ""}, {"pid": 500}, {"pid": "+500"}, {"pid": "\u0665\u0660\u0660"},
+     {"pid": "500", "process_start": 50}, "500"],
+)
+def test_claims_session_rejects_malformed_session_records(data):
+    assert not launches.claims_session(claimed_record(), data)
+
+
+def test_claims_session_rejects_an_unclaimed_record():
+    pending = claimed_record(state="pending")
+    assert not launches.claims_session(pending, {"pid": "500", "process_start": "50"})
 
 
 def hook_subprocess(tmp_path, extra_env):
@@ -360,14 +664,80 @@ def test_hook_exits_zero_with_malformed_env(fleet_dir, tmp_path, launch_id, prof
     assert "launch" not in records[0]
 
 
-def test_hook_subprocess_records_launch(fleet_dir, tmp_path):
-    result = hook_subprocess(
-        tmp_path, {LAUNCH_ID_ENV: LAUNCH_ID, PROFILE_ID_ENV: "reviewer"}
+CLAIMING_AGENT = """
+import os, subprocess, sys
+from tongs_agents import discovery, launches
+from tongs_agents.profiles import Profile
+
+claimant = int(sys.argv[1]) or os.getpid()
+pending = launches.create_pending(
+    Profile("reviewer", "claude", ("claude",)), "agents", "zellij"
+)
+info = discovery.get_process_info(claimant)
+record = launches.claim(pending.launch_id, claimant, info.start_token, None)
+env = dict(os.environ, TONGS_AGENTS_LAUNCH_ID=record.launch_id,
+           TONGS_AGENTS_PROFILE="reviewer")
+result = subprocess.run(
+    [os.path.realpath(sys.executable), "-m", "tongs_agents.hook",
+     "session-start", "--agent", "claude"],
+    input=sys.stdin.buffer.read(), env=env, timeout=30,
+)
+print(record.launch_id)
+sys.exit(result.returncode)
+"""
+
+
+def run_claiming_agent(tmp_path, claimant=0):
+    """A process named ``claude`` claims a launch, then runs the real hook.
+
+    ``claimant`` 0 claims the agent itself; another pid stands for the first
+    daemon-attached launch whose environment a later session inherits.
+    """
+    agent = tmp_path / "bin" / "claude"
+    agent.parent.mkdir()
+    agent.symlink_to(os.path.realpath(sys.executable))
+    environment = {
+        key: value for key, value in os.environ.items()
+        if key not in (LAUNCH_ID_ENV, PROFILE_ID_ENV)
+    }
+    environment["HOME"] = str(tmp_path / "home")
+    environment["PYTHONPATH"] = os.path.dirname(os.path.dirname(hook.__file__))
+    result = subprocess.run(
+        [str(agent), "-c", CLAIMING_AGENT, str(claimant)],
+        input=json.dumps({"session_id": "subprocess", "cwd": str(tmp_path)}).encode(),
+        env=environment,
+        capture_output=True,
+        timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    assert read_session_records()[0]["launch"] == {
-        "launch_id": LAUNCH_ID, "profile_id": "reviewer",
-    }
+    return result.stdout.decode().strip()
+
+
+linux_only = pytest.mark.skipif(
+    sys.platform != "linux", reason="process names come from /proc comm"
+)
+
+
+@linux_only
+def test_hook_subprocess_records_a_launch_its_agent_claimed(fleet_dir, tmp_path):
+    launch_id = run_claiming_agent(tmp_path)
+    [record] = read_session_records()
+    assert record["launch"] == {"launch_id": launch_id, "profile_id": "reviewer"}
+    assert record["pid"] == str(launches.get(launch_id).pid)
+
+
+@linux_only
+def test_hook_subprocess_drops_a_launch_another_process_claimed(fleet_dir, tmp_path):
+    other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        launch_id = run_claiming_agent(tmp_path, other.pid)
+    finally:
+        other.kill()
+        other.wait()
+    assert launches.get(launch_id).pid == other.pid
+    [record] = read_session_records()
+    assert record["status"] == "started" and record["pid"]
+    assert "launch" not in record
 
 
 def test_launch_capture_and_terminal_capture_share_one_env_check(monkeypatch):

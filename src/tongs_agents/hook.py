@@ -2,10 +2,12 @@
 
 import json
 import os
+import stat
 import sys
 import time
 import uuid
 
+from tongs_agents import discovery, paths
 from tongs_agents._envcheck import bounded_env_value
 from tongs_agents.discovery import (
     MAX_DETAIL_LENGTH,
@@ -33,6 +35,11 @@ from tongs_agents.models import (
 )
 
 _CREATING_EVENTS = frozenset({"session-start", "prompt-submit", "fleet-event"})
+# Mirrors launches.SCHEMA_VERSION and MAX_RECORD_BYTES; the hook never imports
+# launches (its import surface is pinned by tests).
+_LAUNCH_SCHEMA_VERSION = 1
+_MAX_LAUNCH_RECORD_BYTES = 64 * 1024
+MAX_LINEAGE_STEPS = 64
 
 
 def _find_agent_pid(agent):
@@ -115,19 +122,106 @@ def _capture_launch():
     return launch or None
 
 
-def _record_launch(event, existing):
+def process_descends_from(process, pid, start_token, lookup=None):
+    """True when ``process`` is, or runs under, ``pid`` started at ``start_token``.
+
+    Compares ``process`` and at most ``MAX_LINEAGE_STEPS - 1`` ancestors,
+    stopping at pid 1 and on a cycle. A process found with ``pid`` but another
+    start token is a reused pid and fails. Without a start token the pid
+    alone is compared.
+    """
+    if process is None or type(pid) is not int or pid <= 0:
+        return False
+    lookup = lookup or discovery.get_process_info
+    seen = set()
+    current = process
+    while True:
+        if current.pid == pid:
+            return not start_token or current.start_token == start_token
+        seen.add(current.pid)
+        parent = current.ppid
+        if len(seen) >= MAX_LINEAGE_STEPS or not parent or parent <= 1 or parent in seen:
+            return False
+        current = lookup(parent)
+        if current is None:
+            return False
+
+
+def _launch_claim(launch_id):
+    """The claimed ``(pid, process_start)`` of a launch record, or None.
+
+    A dependency-free reader for the two claim fields with the checks
+    ``launches`` applies: no symlink, a regular file owned by this user, at
+    most 64 KiB, schema 1, named for its own id and claimed. Never raises.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(paths.launches_dir() / f"{launch_id}.json", flags)
+    except (OSError, ValueError):
+        return None
+    try:
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return None
+            if os.name != "nt" and info.st_uid != os.getuid():
+                return None
+            raw = stream.read(_MAX_LAUNCH_RECORD_BYTES + 1)
+    except OSError:
+        return None
+    if len(raw) > _MAX_LAUNCH_RECORD_BYTES:
+        return None
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError, RecursionError):
+        return None
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") != _LAUNCH_SCHEMA_VERSION
+        or data.get("launch_id") != launch_id
+        or data.get("state") != "running"
+    ):
+        return None
+    pid = data.get("pid")
+    start = data.get("process_start")
+    if type(pid) is not int or pid <= 0:
+        return None
+    if start is not None and not (isinstance(start, str) and start):
+        return None
+    return pid, start
+
+
+def _verified_launch(launch, process):
+    """``launch`` when its launch record claims ``process`` or an ancestor.
+
+    A shared Codex daemon runs a later session's hooks with the first
+    daemon-attached launch's environment (#74), so an env launch id is kept
+    only when its claimed pid and start token are the hook's resolved process
+    or one of its ancestors. A mismatch, or a missing or unclaimed record,
+    drops the whole identity, profile included.
+    """
+    if launch is None or "launch_id" not in launch:
+        return launch
+    claim = _launch_claim(launch["launch_id"])
+    if claim is None or not process_descends_from(process, *claim):
+        return None
+    return launch
+
+
+def _record_launch(event, existing, process):
     """The launch identity the record written for ``event`` carries.
 
     The environment is read only when the event starts the session or creates
-    its record. Every other event, including ``session-end``, keeps the stored
-    identity: a shared Codex daemon runs a later session's late SessionEnd with
-    the first launch's environment, so that environment never names the
-    session being ended.
+    its record, and kept only when its launch record claims this process.
+    Every other event, including ``session-end``, keeps the stored identity: a
+    shared Codex daemon runs a later session's late SessionEnd with the first
+    launch's environment, so that environment never names the session being
+    ended.
     """
     if event == "session-start" or (
         existing is None and event in _CREATING_EVENTS
     ):
-        return _capture_launch()
+        return _verified_launch(_capture_launch(), process)
     if existing is None:
         return None
     return validated_launch(existing.get("launch"))
@@ -289,7 +383,7 @@ def _store_event(
     terminal_info = None
     if existing is None or event == "session-start":
         terminal_info = _capture_terminal_info()
-    launch = _record_launch(event, existing)
+    launch = _record_launch(event, existing, process)
     terminal = (
         terminal_info["terminal"]
         if terminal_info is not None

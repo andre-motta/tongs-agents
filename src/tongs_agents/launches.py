@@ -20,7 +20,7 @@ import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
-from tongs_agents import discovery, paths
+from tongs_agents import discovery, hook, paths
 from tongs_agents.multiplexers.base import PaneRef
 from tongs_agents.profiles import HARNESSES, PROFILE_NAME_RE, Profile
 
@@ -247,6 +247,31 @@ def claim(launch_id: str, pid: int, process_start: str | None,
         socket_dir=None,
     )
     return _write(_claimed(fresh, pid, process_start, pane))
+
+
+def claims_session(record: LaunchRecord, data: dict) -> bool:
+    """True when ``record`` claims the process of the session record ``data``.
+
+    The reader-side check of #74: a session record names a launch only when
+    its process is the launch's claimed pid and start token, or runs under
+    that process. An exact match needs no process lookup; otherwise the
+    session's process must still be alive with its stored start token.
+    """
+    if record.state != "running" or record.pid is None or not isinstance(data, dict):
+        return False
+    pid_text = data.get("pid")
+    start = data.get("process_start") or ""
+    if not (isinstance(pid_text, str) and pid_text.isascii() and pid_text.isdecimal()):
+        return False
+    if not isinstance(start, str):
+        return False
+    pid = int(pid_text)
+    if pid == record.pid:
+        return not record.process_start or start == record.process_start
+    process = discovery.get_process_info(pid)
+    if process is None or process.start_token != start:
+        return False
+    return hook.process_descends_from(process, record.pid, record.process_start)
 
 
 def list_records(session: str | None = None) -> list[LaunchRecord]:
