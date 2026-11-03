@@ -1,0 +1,252 @@
+name: Zellij validation
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+      - 'feat/**'
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  # A fixed prefix: in a called workflow github.workflow names the caller,
+  # so gates called by publish.yml would cancel each other.
+  group: zellij-validation-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pins:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      versions: ${{ steps.read.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the Zellij pin table
+        id: read
+        run: |
+          set -euo pipefail
+          versions="$(python3 -I - src/tongs_agents/data/zellij_pins.json <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              pins = json.load(handle)["pins"]
+          versions = [
+              version for version, platforms in pins.items()
+              if platforms.get("linux-x86_64", {}).get("flavor") == "no-web"
+          ]
+          versions.sort(key=lambda text: tuple(int(part) for part in text.split(".")))
+          print(json.dumps(versions))
+          PY
+          )"
+          test "$versions" != '[]'
+          printf 'versions=%s\n' "$versions" >> "$GITHUB_OUTPUT"
+
+  zellij-validation:
+    needs: pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        zellij-version: ${{ fromJSON(needs.pins.outputs.versions) }}
+    env:
+      ZELLIJ_VERSION: ${{ matrix.zellij-version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Record checkout metadata
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/zellij-validation"
+          mkdir -p "$evidence_dir"
+          {
+            printf 'checkout_commit=%s\n' "$(git rev-parse HEAD)"
+            printf 'checkout_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
+            printf 'zellij_version=%s\n' "$ZELLIJ_VERSION"
+            printf 'pin_table=src/tongs_agents/data/zellij_pins.json\n'
+            printf 'kernel_release=%s\n' "$(uname -r)"
+            printf 'intended_zellij_process=real pinned zellij server and clients\n'
+            printf 'intended_gui_window_focus=not exercised\n'
+            printf 'observed_outcomes=evidence.json, diagnostics.txt and validator-exit-code.txt\n'
+          } > "$evidence_dir/metadata.txt"
+
+      - name: Download and verify Zellij
+        run: |
+          set -euo pipefail
+          fields="$(python3 -I - src/tongs_agents/data/zellij_pins.json "$ZELLIJ_VERSION" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              entry = json.load(handle)["pins"][sys.argv[2]]["linux-x86_64"]
+          if entry["flavor"] != "no-web":
+              sys.exit(f"unexpected flavor {entry['flavor']!r}")
+          print(entry["asset"], entry["url"], entry["sha256"], entry["size"],
+                entry["binary_sha256"])
+          PY
+          )"
+          read -r asset url expected_sha256 expected_size expected_binary_sha256 <<< "$fields"
+          download_dir="$RUNNER_TEMP/zellij-download"
+          bin_dir="$RUNNER_TEMP/zellij-bin"
+          archive_path="$download_dir/$asset"
+          mkdir -p "$download_dir"
+          mkdir "$bin_dir"
+          curl \
+            --fail \
+            --silent \
+            --show-error \
+            --location \
+            --retry 3 \
+            --retry-all-errors \
+            --connect-timeout 10 \
+            --max-time 300 \
+            --proto '=https' \
+            --tlsv1.2 \
+            --output "$archive_path" \
+            "$url"
+          test "$(stat -c %s "$archive_path")" = "$expected_size"
+          actual_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+          test "$actual_sha256" = "$expected_sha256"
+          tar -xzf "$archive_path" -C "$bin_dir" --no-same-owner zellij
+          test "$(ls -A "$bin_dir")" = 'zellij'
+          test -f "$bin_dir/zellij"
+          test ! -L "$bin_dir/zellij"
+          test -x "$bin_dir/zellij"
+          actual_binary_sha256="$(sha256sum "$bin_dir/zellij" | awk '{print $1}')"
+          test "$actual_binary_sha256" = "$expected_binary_sha256"
+          reported="$("$bin_dir/zellij" --version)"
+          test "$reported" = "zellij $ZELLIJ_VERSION"
+          printf '%s\n' "$bin_dir" >> "$GITHUB_PATH"
+          {
+            printf 'zellij_asset=%s\n' "$asset"
+            printf 'zellij_url=%s\n' "$url"
+            printf 'zellij_archive_sha256=%s\n' "$actual_sha256"
+            printf 'zellij_binary_sha256=%s\n' "$actual_binary_sha256"
+            printf 'zellij_reported_version=%s\n' "$reported"
+          } >> "$RUNNER_TEMP/zellij-validation/metadata.txt"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install project
+        run: python -m pip install -e .
+
+      - name: Probe hosted capabilities
+        id: probe
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/zellij-validation"
+          python - "$evidence_dir/capabilities.txt" "$GITHUB_OUTPUT" <<'PY'
+          import os
+          import pty
+          import sys
+
+          from tongs_agents.terminal_apis import _unix_peers
+
+
+          def pty_label():
+              try:
+                  pid, descriptor = pty.fork()
+              except OSError as error:
+                  return f"unavailable ({error})"
+              if pid == 0:
+                  os._exit(0)
+              _, status = os.waitpid(pid, 0)
+              os.close(descriptor)
+              return "available" if os.waitstatus_to_exitcode(status) == 0 else "unavailable"
+
+
+          def sock_diag_label():
+              return "unavailable" if _unix_peers.unix_sockets() is None else "available"
+
+
+          labels = {"pty": pty_label(), "sock_diag": sock_diag_label()}
+          missing = [name for name, label in labels.items() if label != "available"]
+          skip = ", ".join(f"{name} {labels[name]} on the hosted runner" for name in missing)
+          with open(sys.argv[1], "w", encoding="utf-8") as handle:
+              for name, label in labels.items():
+                  handle.write(f"{name}={label}\n")
+          with open(sys.argv[2], "a", encoding="utf-8") as handle:
+              handle.write(f"validator={'skip' if missing else 'run'}\n")
+              handle.write(f"skip_label={skip}\n")
+          PY
+          cat "$evidence_dir/capabilities.txt" >> "$evidence_dir/metadata.txt"
+
+      - name: Smoke test a headless Zellij session
+        run: |
+          set -euo pipefail
+          # Short base: zellij refuses socket paths over 107 bytes.
+          smoke="$(mktemp -d /tmp/tongs-zellij-smoke.XXXXXX)"
+          session="tongs-agents-ci-smoke"
+          trap 'zellij kill-session "$session" >/dev/null 2>&1 || true; rm -rf "$smoke"' EXIT
+          mkdir -p "$smoke/home" "$smoke/sock" "$smoke/cfg" "$smoke/cache" \
+            "$smoke/data" "$smoke/xdg" "$smoke/tmp"
+          chmod 0700 "$smoke/xdg"
+          export HOME="$smoke/home"
+          export TERM=xterm-256color
+          export ZELLIJ_SOCKET_DIR="$smoke/sock"
+          export ZELLIJ_CONFIG_DIR="$smoke/cfg"
+          export XDG_CACHE_HOME="$smoke/cache"
+          export XDG_DATA_HOME="$smoke/data"
+          export XDG_RUNTIME_DIR="$smoke/xdg"
+          export TMPDIR="$smoke/tmp"
+          zellij attach --create-background "$session"
+          zellij list-sessions --short | grep -Fx "$session"
+          zellij kill-session "$session"
+          zellij delete-session --force "$session" >/dev/null 2>&1 || true
+          if zellij list-sessions --short 2>/dev/null | grep -Fxq "$session"; then
+            echo "session $session is still listed after kill-session" >&2
+            exit 1
+          fi
+          printf 'headless_smoke=pass\n' >> "$RUNNER_TEMP/zellij-validation/metadata.txt"
+
+      - name: Run the live Zellij validator
+        env:
+          VALIDATOR_MODE: ${{ steps.probe.outputs.validator }}
+          SKIP_LABEL: ${{ steps.probe.outputs.skip_label }}
+        run: |
+          set -euo pipefail
+          evidence_dir="$RUNNER_TEMP/zellij-validation"
+          if [ "$VALIDATOR_MODE" != 'run' ]; then
+            printf 'skipped: %s\n' "$SKIP_LABEL" > "$evidence_dir/validator-skipped.txt"
+            printf 'skipped\n' > "$evidence_dir/validator-exit-code.txt"
+            printf 'validator_exit_code=skipped (%s)\n' "$SKIP_LABEL" \
+              >> "$evidence_dir/metadata.txt"
+            printf 'Zellij %s validator skipped: %s\n' "$ZELLIJ_VERSION" "$SKIP_LABEL" \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "::notice title=Zellij validator skipped::$SKIP_LABEL"
+            exit 0
+          fi
+          status=0
+          python validation/zellij.py --no-write \
+            > "$evidence_dir/evidence.json" \
+            2> "$evidence_dir/diagnostics.txt" || status=$?
+          printf '%s\n' "$status" > "$evidence_dir/validator-exit-code.txt"
+          printf 'validator_exit_code=%s\n' "$status" >> "$evidence_dir/metadata.txt"
+          printf 'Zellij %s validator exit code: %s\n' "$ZELLIJ_VERSION" "$status" \
+            >> "$GITHUB_STEP_SUMMARY"
+          test "$status" -eq 0
+
+      - name: Upload Zellij validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zellij-validation-evidence-${{ matrix.zellij-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/zellij-validation/
+          if-no-files-found: error
+          retention-days: 7
