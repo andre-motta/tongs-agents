@@ -79,7 +79,8 @@ def add_arguments(parser):
     parser.add_argument(
         "--resurrect", action="store_true",
         help="When the session is EXITED, attach to it instead of deleting it "
-             "and starting it fresh; starts no new panes",
+             "and starting it fresh; starts no new panes. Ignored when there "
+             "is nothing to resurrect",
     )
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
@@ -206,10 +207,7 @@ def _inside(mux, args, profiles) -> int:
             EXIT_USAGE,
         )
     if args.resurrect:
-        return _error(
-            "nothing to resurrect inside a running Zellij session; run without --resurrect",
-            EXIT_USAGE,
-        )
+        _notice(f"ignoring --resurrect: already inside running session {here.session!r}")
     try:
         workspace_spawn.spawn_profiles(mux, here.session, profiles)
         workspace_spawn.ensure_sidebar(mux, here.session)

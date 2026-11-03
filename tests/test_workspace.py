@@ -243,11 +243,13 @@ def test_resurrect_without_an_exited_session_changes_nothing(env, exists):
     assert ("delete_session", "agents") not in mux.calls
 
 
-def test_inside_zellij_refuses_resurrect(env, monkeypatch):
-    mux, _, _ = env
+def test_inside_zellij_ignores_resurrect_with_a_notice(env, monkeypatch, capsys):
+    mux, execs, _ = env
     _inside(monkeypatch, mux)
-    assert _run("--resurrect") == 2
-    assert mux.spawned == []
+    assert _run("--resurrect", "--profile", "alpha") == 0
+    assert "ignoring --resurrect" in capsys.readouterr().err
+    assert execs.calls == []
+    assert [call["name"] for call in mux.spawned] == ["alpha", SIDEBAR_PANE_NAME]
 
 
 def _fail(*args, **kwargs):

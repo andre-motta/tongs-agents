@@ -34,7 +34,7 @@ the profile command. Panes are named after their profile.
 
 | Where you run it | Result |
 | --- | --- |
-| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so are `--print-command` and `--resurrect`. |
+| Inside Zellij (`ZELLIJ` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never execs. A different `--session` is refused, and so is `--print-command`; `--resurrect` is ignored with a notice. |
 | Outside Zellij, session running | Spawns the profiles into that session (and a sidebar if it has none), then runs `zellij attach <session>`. |
 | Outside Zellij, no session | Writes a spawn request and a layout, then runs `zellij --session <session> --new-session-with-layout <layout>`. The sidebar in that layout spawns the profiles when it starts. |
 | Outside Zellij, session EXITED | Prints a one-line notice, runs `zellij delete-session <session>`, then creates it as above. With `--resurrect` it runs `zellij attach <session>` instead and starts nothing new. |
