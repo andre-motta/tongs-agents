@@ -20,7 +20,7 @@ from types import SimpleNamespace
 import pytest
 
 from tongs_agents import owned, pi_install, toml_tables
-from tongs_agents.config_layer import emitters
+from tongs_agents.config_layer import emitters, schema
 from tongs_agents.config_layer.emitters import (
     EMITTERS,
     EmitConfig,
@@ -32,6 +32,7 @@ from tongs_agents.config_layer.emitters import (
     pi,
 )
 from tongs_agents.config_layer.protocol import CanonicalFragment, Emitter, ProfileTarget
+from tongs_agents.profiles import parse_profile
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX stubs on PATH")
 
@@ -100,7 +101,7 @@ def world(tmp_path, monkeypatch):
     home.mkdir()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name in ("claude", "pi", "tongs-agents-hook"):
+    for name in ("claude", "codex", "pi", "tongs-agents-hook"):
         _stub(bin_dir / name)
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("PATH", str(bin_dir))
@@ -199,6 +200,22 @@ def test_plan_accepts_an_engine_object_with_root_and_document(world):
     engine_config = SimpleNamespace(root=FIXTURE, document=document, profiles=world.profiles)
     changes = EMITTERS["codex"].plan(engine_config, target(world, "codex"))
     assert {change.kind for change in changes} == {"create"}
+
+
+@pytest.mark.parametrize("harness", ["claude", "codex", "pi"])
+def test_the_engine_canonical_config_plans_like_the_document(world, harness):
+    document = tomllib.loads((FIXTURE / "agentic.toml").read_text())
+    profiles = {name: parse_profile(name, table) for name, table in world.profiles.items()}
+    canonical = schema.parse_document(document, FIXTURE, FIXTURE / "agentic.toml", profiles)
+
+    def planned(config):
+        plan = EMITTERS[harness].plan_full(config, target(world, harness))
+        changes = [(change.path, change.kind, change.content) for change in plan.changes]
+        steps = [step.argv for step in plan.commands]
+        return changes, steps, plan.notes, plan.conflicts
+
+    assert planned(canonical) == planned(load(world))
+    assert planned(canonical)[0]
 
 
 # Per-harness snapshots
@@ -812,3 +829,12 @@ def test_install_pin_refuses_a_tarball_that_does_not_match(tmp_path):
         module.load_pin("1.0.0", pins)
     with pytest.raises(SystemExit, match="not in"):
         module.load_pin("2.0.0", pins)
+
+
+def test_mcp_servers_are_read_through_a_symlinked_harness_file(tmp_path):
+    real = tmp_path / "dotfiles" / "claude.json"
+    real.parent.mkdir()
+    real.write_text('{"mcpServers": {"notes": {"command": "notes-mcp"}}}')
+    link = tmp_path / ".claude.json"
+    link.symlink_to(real)
+    assert _common.read_mcp_servers(link) == {"notes": {"command": "notes-mcp"}}

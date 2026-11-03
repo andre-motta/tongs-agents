@@ -7,13 +7,9 @@ captures harness-side edits back. The directory format is
 item lands per harness is the approved
 [emitter strategy](work/emitter-strategy.md).
 
-The engine and the verbs ship first. The per-harness emitters arrive
-separately; until they are installed, `status` and `apply` report
-"No config emitters are installed" and change nothing. Only a missing
-`config_layer.emitters` package counts as "not installed": any other import
-failure (a broken emitter module) is reported as an error and exits 1. This is
-stricter than the M2 plan, which treated every ImportError as an empty
-registry, so a broken install is never mistaken for a missing one.
+A broken emitter module is reported as an error and exits 1. Any unexpected
+failure in a verb prints one line, `tongs-agents config: internal error: ...`,
+and exits 1.
 
 ## Choosing the dotfiles directory
 
@@ -56,14 +52,69 @@ items narrowed with `harnesses = [...]` reach only those harnesses.
 
 | Command | What it does | Exit status |
 | --- | --- | --- |
-| `config status [--json]` | Lists every managed entry and its state | 0 when every entry is in sync, disabled or adopted; 3 otherwise; 1 on an error |
-| `config apply` | Writes every pending entry as one change set | 0; 3 when drifted entries were skipped; 1 on an error or a foreign path |
-| `config apply --dry-run` | Prints a unified diff of what apply would write, and the entry list; writes nothing | as `apply` |
-| `config apply --force` | Also overwrites drifted entries, keeping each previous file as `<name>.tongs-agents.drift.bak` (an existing backup with other content is never replaced; the next one gets a `.1`, `.2`, ... suffix), and clears orphans a plain apply leaves recorded (see below) | as `apply` |
+| `config status [--json]` | Lists every managed entry and its state | 0 when every entry is in sync, disabled, adopted or skipped; 3 otherwise; 1 on an error |
+| `config apply` | Writes every pending entry as one change set, then runs the harness CLI steps (below) | 0; 3 when drifted entries were skipped; 1 on an error, a foreign path or entry, or a failed CLI step |
+| `config apply --dry-run` | Prints a unified diff of what apply would write, the entry list and each CLI step it would run (`would run ...`); writes and runs nothing | as `apply` |
+| `config apply --force` | Also overwrites drifted entries, keeping each previous file as `<name>.tongs-agents.drift.bak` (an existing backup with other content is never replaced; the next one gets a `.1`, `.2`, ... suffix), and clears orphans a plain apply leaves recorded (see below). A drifted keyed entry (a Codex `config.toml` table, the `AGENTS.md` block, a Claude Code or Pi MCP server) backs up the whole file that holds it (`config.toml`, `AGENTS.md`, `.claude.json`, `mcp.json`) the same way before it is replaced | as `apply` |
 | `config capture HARNESS --into DIR [--force]` | Reads the managed entries of HARNESS (claude, codex or pi) from every target and writes a dotfiles directory into DIR | 0; 1 on an error or a non-empty DIR without `--force` |
 
-`apply` is idempotent: a second run with nothing changed writes 0 bytes and
-prints `Nothing to change.`
+`apply` is idempotent: a second run with nothing changed writes 0 bytes,
+runs no CLI step and prints `Nothing to change.` Every verb also prints the
+emitters' notes as `note: <target>: ...` lines, for example an HTTP MCP server
+a harness does not get yet.
+
+## Harness CLI steps
+
+Claude Code and Pi keep MCP servers in files they own, so those are changed
+through the harness CLI, as the [emitter strategy](work/emitter-strategy.md)
+decides:
+
+- Claude Code: `claude mcp add --scope user` and `claude mcp remove --scope
+  user`, with `CLAUDE_CONFIG_DIR` set to the target (unset for the default
+  home). A changed server is removed and added again.
+- Pi 0.99.0 or newer: `pi mcp add` and `pi mcp remove` with
+  `PI_CODING_AGENT_DIR` set to the target. `pi mcp add` replaces a server of
+  the same name in place, so a changed server is one add. With an older Pi, or
+  one whose version is not recognized, each server stays `pending` with the
+  reason (for example `Pi 0.99.0 or newer is required (found 0.90.0)`), so
+  `status` is not clean until Pi is upgraded; apply runs nothing for it.
+- Pi: the tongs-agents Pi extension is installed when it is missing or stale,
+  as `tongs-agents install` does. It is `pending` with the reason when Pi is
+  older than 0.84.4 or its version is not recognized, and `in sync` once
+  installed.
+
+The steps run only after the file change set has committed, one target at a
+time, and each prints `ran <target>: <step>`. A failed step prints the step and
+its error and makes apply exit 1. The files already written stay; the step's
+entry is not recorded as applied, so `status` keeps reporting it and the next
+`apply` retries it. Before each step runs, the value it sets is recorded as
+pending, so a step that took effect without reporting success (a CLI that
+wrote the server and then failed, or an interrupted apply) is recognised as
+tongs-agents' own by the next run instead of as foreign. No environment value
+is ever passed: stdio servers inherit the harness environment.
+
+When `claude` or `pi` is not on PATH, that target's CLI-managed entries are
+`skipped` (with a `note: ... skipped: claude not on PATH ...` line), apply runs
+no step for them, and they do not make `status` or `apply` fail, so a machine
+without that harness can be in sync. Its file entries are still applied when
+its config dir exists; when the dir does not exist either, nothing is planned
+for that target and no config home is created. Codex follows the same rule:
+without `codex` on PATH, a Codex home that does not exist is not created (a
+note says so), and one that exists is written as usual. The CLIs are looked up
+on PATH only, as `tongs-agents` itself sees it: a shell alias or function
+named `claude`, `codex` or `pi` is not seen.
+
+`status` reads each CLI-managed server back from the harness file
+(`.claude.json` for Claude Code, `mcp.json` for Pi) and reports it as an entry
+of its own, such as `.claude.json [mcpServers.issues]`: missing when it was
+removed, drifted when it was edited since the last apply (left alone unless
+`--force`), foreign when a server of that name exists that tongs-agents did not
+write (the whole apply is refused). A `.claude.json` or `mcp.json` that exists
+but cannot be read or parsed is foreign too, never read as holding no
+servers. The `tongs-agents` server an earlier
+`tongs-agents install` registered is adopted. Codex servers live in
+`config.toml` tables, written by the owned-file writer and reported the same
+way, keyed `[mcp_servers.<name>]`.
 
 Every write goes through the owned-file writer: atomic, 0600 for files
 tongs-agents owns, the previous mode kept for shared files, symlinks refused,
@@ -93,6 +144,7 @@ is set: a warning for drifted or foreign paths, a note for pending ones.
 | disabled | Disabled in the harness (for example a disabled plugin) | Keeps it disabled |
 | foreign | The path exists without the tongs-agents marker | Refuses the whole apply; nothing is written |
 | adopted | Already holds exactly what apply would write, with no record yet (for example what `tongs-agents install` wrote) | Records it, writes nothing to the harness |
+| skipped | A CLI-managed entry whose harness CLI is not on PATH | Runs nothing for it |
 | orphaned | Recorded by the last apply, no longer in the dotfiles | Removes a file tongs-agents owns when it is unchanged; leaves an edited one, or one in a shared file, until `--force` |
 
 An orphan that `apply` leaves in place stays recorded, so `status` and
@@ -125,12 +177,21 @@ foreign.
 
 An emitter implements `config_layer.protocol.Emitter` and is listed in
 `config_layer/emitters/__init__.py` as `EMITTERS` (a tuple of emitters or a
-mapping by harness). `plan(config, target)` receives a
+mapping by harness). The engine calls `plan_full(config, target, force=...)`
+when the emitter has it (the shipped ones derive from
+`emitters.base.BaseEmitter`), else the protocol's `plan(config, target)`. A
+full plan adds to the file changes: `items` (the state of keyed entries, such
+as a CLI-managed server, which become entries), `entries` (recorded in the
+owned-file manifest in the same change set, so the next plan knows what it
+wrote), `notes`, and `commands`, the CLI steps the engine runs after the
+commit through `emitter.run_step(step)`. Both receive a
 `config_layer.schema.CanonicalConfig`; `config.profiles_for(target)`,
 `config.skills_for_target(target)`, `config.mcp_servers_for_target(target)`
 and `config.instructions_for(harness)` apply the `harnesses` and `profiles`
 narrowing. Plans never write; the engine applies them. Two plans for the same
-path must agree, or the apply is refused.
+path must agree, or the apply is refused. A plan lists every path the emitter
+manages, with an `unchanged` change for a shared file that is already in sync:
+a recorded path missing from the plan is an orphan.
 
 Optional methods:
 
@@ -147,4 +208,5 @@ reports `OSError` and `ValueError` the same way.
 
 `capture(target)` returns a `CanonicalFragment` whose `data` may hold
 `instructions` (text), `skills` (`{name: {relative path: bytes or text}}`),
-`mcp_servers` (`{name: schema v1 server table}`) and `warnings` (lines).
+`mcp_servers` (`{name: schema v1 server table}`) and `warnings` (lines). The
+shipped emitters capture the MCP servers the manifest records as theirs.

@@ -34,6 +34,16 @@ nobody edited is removed. A drifted orphan, or one in a shared file, stays
 recorded until a forced apply: that backs up and removes an owned file, or
 forgets the record of a shared one and leaves the file as it is.
 
+An emitter with ``plan_full`` (the shipped ones) is planned through it: its
+file changes join the entries above; its ``items`` (keyed entries such as a
+harness-CLI MCP server, read back from the harness file) become entries of
+their own; its manifest entries are recorded in the same ChangeSet, so the
+next plan recognises what it wrote; its notes are reported. Its harness CLI
+steps run only after that ChangeSet commits, one target at a time; a failed
+step is reported and leaves its entry unrecorded, so the next apply retries
+it, and never rolls back the committed files. An emitter with only the
+protocol's ``plan`` contributes file changes alone.
+
 ``CanonicalFragment.data`` from ``Emitter.capture`` may hold ``instructions``
 (text), ``skills`` ({name: {relative path: bytes or text}}), ``mcp_servers``
 ({name: schema v1 server table}) and ``warnings`` (lines).
@@ -63,6 +73,7 @@ LEDGER_NAME = "entries.json"
 LEDGER_SCHEMA = 1
 DRIFT_BACKUP_SUFFIX = ".tongs-agents.drift.bak"
 DRIFT_BACKUP_LIMIT = 100
+HARNESS_FILE_MAX_BYTES = owned.HARNESS_FILE_MAX_BYTES
 
 IN_SYNC = "in sync"
 PENDING = "pending"
@@ -72,8 +83,9 @@ DISABLED = "disabled"
 FOREIGN = "foreign"
 ADOPTED = "adopted"
 ORPHANED = "orphaned"
-STATES = (IN_SYNC, PENDING, DRIFTED, MISSING, DISABLED, FOREIGN, ADOPTED, ORPHANED)
-CLEAN_STATES = frozenset({IN_SYNC, DISABLED, ADOPTED})
+SKIPPED = "skipped"
+STATES = (IN_SYNC, PENDING, DRIFTED, MISSING, DISABLED, FOREIGN, ADOPTED, ORPHANED, SKIPPED)
+CLEAN_STATES = frozenset({IN_SYNC, DISABLED, ADOPTED, SKIPPED})
 
 _BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+\Z")
 
@@ -126,10 +138,37 @@ class Entry:
     change: Change | None = None
     detail: str = ""
     current: bytes | None = field(default=None, repr=False, compare=False)
+    key: str | None = None
 
     @property
     def writes(self) -> bool:
         return self.change is not None and self.change.kind != "unchanged"
+
+    @property
+    def label(self) -> str:
+        """The path, plus the key of a keyed entry inside it."""
+        return str(self.path) if self.key is None else f"{self.path} [{self.key}]"
+
+
+@dataclass(frozen=True)
+class Emission:
+    """What a ``plan_full`` emitter planned for one target."""
+
+    target: ResolvedTarget
+    emitter: Any
+    plan: Any
+
+    @property
+    def entries(self) -> dict:
+        return self.plan.file_entries()
+
+
+@dataclass(frozen=True)
+class StepResult:
+    target: ResolvedTarget
+    description: str
+    ok: bool
+    detail: str = ""
 
 
 @dataclass
@@ -141,6 +180,13 @@ class Plan:
     ledger_before: dict
     ledger_after: dict
     backups: list[Change] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    emissions: list[Emission] = field(default_factory=list)
+
+    @property
+    def steps(self) -> list[tuple[ResolvedTarget, Any]]:
+        """The harness CLI steps apply runs after the file changes, in order."""
+        return [(item.target, step) for item in self.emissions for step in item.plan.commands]
 
     @property
     def foreign(self) -> list[Entry]:
@@ -164,6 +210,11 @@ class Plan:
 class ApplyResult:
     written: tuple[Change, ...]
     skipped: tuple[Entry, ...]
+    steps: tuple[StepResult, ...] = ()
+
+    @property
+    def failed(self) -> tuple[StepResult, ...]:
+        return tuple(result for result in self.steps if not result.ok)
 
 
 def load_emitters() -> Registry:
@@ -319,8 +370,8 @@ def entry_digest(emitter: Any, target: ProfileTarget, path: Path, data: bytes | 
     return owned.sha256_of(data)
 
 
-def _read(path: Path) -> bytes | None:
-    data, _ = owned._read_current(path, owned.MAX_EDIT_BYTES)
+def _read(path: Path, limit: int = owned.MAX_EDIT_BYTES) -> bytes | None:
+    data, _ = owned._read_current(path, limit)
     return data
 
 
@@ -350,7 +401,7 @@ def _drift_backup(path: Path, current: bytes) -> Change:
     base = path.name + DRIFT_BACKUP_SUFFIX
     for number in range(DRIFT_BACKUP_LIMIT):
         backup = path.with_name(base if number == 0 else f"{base}.{number}")
-        previous = _read(backup)
+        previous = _read(backup, HARNESS_FILE_MAX_BYTES)
         if previous is None:
             return Change(backup, "create", owned.sha256_of(None), after, current)
         if previous == current:
@@ -467,19 +518,59 @@ def _ledger_targets(ledger: dict) -> dict[str, ResolvedTarget]:
     return found
 
 
-def _planned_changes(config, resolved, emitter, plan) -> list[Change] | None:
+def _planned_changes(config, resolved, emitter, plan, force) -> tuple[list[Change], Any] | None:
+    """The emitter's file changes and its full plan (None for a protocol-only emitter)."""
+    full = None
     try:
-        changes = list(emitter.plan(config, resolved.target))
+        if callable(getattr(emitter, "plan_full", None)):
+            full = emitter.plan_full(config, resolved.target, force=force)
+            changes = list(full.changes)
+        else:
+            changes = list(emitter.plan(config, resolved.target))
     except (OSError, ValueError) as error:
         plan.problems.append(f"{resolved.describe()}: {error}")
         return None
-    for change in changes:
-        if not isinstance(change, Change) or not os.path.isabs(change.path):
-            plan.problems.append(
-                f"{resolved.describe()}: the {resolved.harness} emitter planned an invalid change"
-            )
-            return None
-    return changes
+    invalid = [change for change in changes
+               if not isinstance(change, Change) or not os.path.isabs(change.path)]
+    if full is not None:
+        invalid += [item for item in full.items
+                    if item.state not in STATES or not os.path.isabs(item.path)]
+    if invalid:
+        plan.problems.append(
+            f"{resolved.describe()}: the {resolved.harness} emitter planned an invalid change"
+        )
+        return None
+    return changes, full
+
+
+def _keyed_backups(resolved: ResolvedTarget, full, result: Plan) -> None:
+    """Back up each shared file whose drifted entry a forced plan replaces."""
+    staged = {backup.path for backup in result.backups}
+    for path in dict.fromkeys(Path(_key(item)) for item in full.backups):
+        try:
+            current = _read(path, HARNESS_FILE_MAX_BYTES)
+        except OSError as error:
+            result.problems.append(f"{resolved.describe()}: {error}")
+            continue
+        if current is None:
+            continue
+        backup = _drift_backup(path, current)
+        if backup.path not in staged:
+            result.backups.append(backup)
+            staged.add(backup.path)
+
+
+def _item_entries(resolved, emitter_id, full, records, entries, planned_keys, key, result):
+    """Entries for the emitter's keyed items; a path it left alone keeps its record."""
+    for item in full.items:
+        path = Path(_key(item.path))
+        name = str(path)
+        result.entries.append(Entry(
+            resolved, path, item.state, emitter_id, None, item.detail, None, item.key,
+        ))
+        if name in records and name not in entries:
+            entries[name] = records[name]
+            planned_keys.add((key, name))
 
 
 def plan(
@@ -505,12 +596,13 @@ def plan(
             continue
         key = owned.target_key(resolved.target)
         records = ledger.get(key, {}).get("entries", {})
-        changes = _planned_changes(config, resolved, emitter, result)
-        if changes is None:
+        planned = _planned_changes(config, resolved, emitter, result, force)
+        if planned is None:
             if key in ledger:
                 after[key] = ledger[key]
                 planned_keys.update((key, name) for name in records)
             continue
+        changes, full = planned
         entries: dict[str, dict] = {}
         for change in changes:
             name = _key(change.path)
@@ -537,6 +629,12 @@ def plan(
                 result.entries.append(entry)
             if record is not None:
                 entries[name] = record
+        if full is not None:
+            _item_entries(resolved, emitter.harness_id, full, records, entries, planned_keys,
+                          key, result)
+            _keyed_backups(resolved, full, result)
+            result.notes += [f"{resolved.describe()}: {note}" for note in full.notes]
+            result.emissions.append(Emission(resolved, emitter, full))
         if entries:
             after[key] = _ledger_target(resolved.target, entries)
     by_key = {owned.target_key(item.target): item for item in targets}
@@ -604,11 +702,48 @@ def _manifest_updates(plan: Plan) -> list[tuple[ProfileTarget, list[str]]]:
     return updates
 
 
+def _record_emitter_entries(changes: owned.ChangeSet, plan: Plan) -> None:
+    current = owned.load_manifest_entries()
+    for emission in plan.emissions:
+        target = emission.target.target
+        if current.get(owned.target_key(target), {}) != emission.entries:
+            changes.record_entries(target, emission.entries)
+
+
+def _settle(target: ProfileTarget, recorded: dict, entries: dict) -> dict:
+    """Commit ``entries`` for ``target`` when they differ from ``recorded``."""
+    if entries != recorded:
+        changes = owned.ChangeSet()
+        changes.record_entries(target, entries)
+        changes.commit()
+    return entries
+
+
+def _run_steps(plan: Plan) -> tuple[StepResult, ...]:
+    """Run each target's CLI steps, recording each step's entry before and after it.
+
+    The entry a step sets is recorded as pending before it runs, so a step
+    that took effect without reporting success is adopted by the next plan.
+    """
+    results = []
+    for emission in plan.emissions:
+        target = emission.target.target
+        entries = emission.entries
+        for step in emission.plan.commands:
+            emitter = emission.emitter
+            entries = _settle(target, entries, emitter.step_entries(entries, step, None))
+            ok, detail = emitter.run_step(step)
+            results.append(StepResult(emission.target, step.description, ok, detail))
+            entries = _settle(target, entries, emitter.step_entries(entries, step, ok))
+    return tuple(results)
+
+
 def apply(plan: Plan) -> ApplyResult:
     """Write every staged change, the ledger and the manifest as one ChangeSet.
 
     Refuses everything when the plan has problems or foreign entries. Drifted
-    entries the plan did not force are skipped and returned.
+    entries the plan did not force are skipped and returned. The emitters'
+    CLI steps run after the commit; their results are returned, never raised.
     """
     if plan.problems:
         raise EngineError("; ".join(plan.problems))
@@ -630,13 +765,13 @@ def apply(plan: Plan) -> ApplyResult:
             )
     for target, managed in _manifest_updates(plan):
         changes.record_managed_paths(target, managed)
+    _record_emitter_entries(changes, plan)
     skipped = tuple(plan.skipped)
     written = tuple(change for change in changes.changes if change.kind != "unchanged")
-    if not written:
-        return ApplyResult((), skipped)
-    paths.ensure_private_dir(paths.state_dir(create=True) / "emit")
-    changes.commit()
-    return ApplyResult(written, skipped)
+    if written:
+        paths.ensure_private_dir(paths.state_dir(create=True) / "emit")
+        changes.commit()
+    return ApplyResult(written, skipped, _run_steps(plan))
 
 
 # Capture

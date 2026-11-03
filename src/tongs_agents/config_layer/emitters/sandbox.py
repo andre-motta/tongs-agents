@@ -93,7 +93,7 @@ def _selected(config: Any, harness: str, profile: str | None):
     canonical = _common.coerce_config(config)
     skills = [
         (skill.name, skill.source) for skill in canonical.skills
-        if _common.applies(skill.scope, harness, names)
+        if skill.scope.applies(harness, names)
     ]
     return skills, _common.render_instructions(canonical, harness)
 

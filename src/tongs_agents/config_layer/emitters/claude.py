@@ -89,6 +89,9 @@ class ClaudeEmitter(BaseEmitter):
     ) -> _common.EmitPlan:
         canonical, plan, previous = self._start(config, target)
         directory = _common.config_dir(target)
+        claude = shutil.which("claude")
+        if claude is None and _common.skip_absent_home(plan, "claude", directory):
+            return plan
 
         files: dict[Path, tuple[str, Any]] = {}
         skills = _common.selected_skills(canonical, target)
@@ -109,7 +112,7 @@ class ClaudeEmitter(BaseEmitter):
             _common.plan_import_line(plan, claude_md, IMPORT_LINE, body is not None)
 
         self._plan_hooks(plan, directory, target)
-        self._plan_mcp(plan, canonical, target, directory, previous, force)
+        self._plan_mcp(plan, canonical, target, directory, previous, force, claude)
         return plan
 
     def _plan_hooks(self, plan: _common.EmitPlan, directory: Path, target: ProfileTarget):
@@ -121,10 +124,9 @@ class ClaudeEmitter(BaseEmitter):
                 ownership=cli.HOOK_OWNERSHIP,
             )
         except owned.OwnedFileError as error:
-            plan.conflicts.append(str(error))
+            plan.conflict(directory / "settings.json", str(error))
             return
-        if change.kind != "unchanged":
-            plan.changes.append(change)
+        plan.changes.append(change)
 
     def _desired_servers(
         self, plan: _common.EmitPlan, canonical: _common.EmitConfig, target: ProfileTarget
@@ -153,26 +155,38 @@ class ClaudeEmitter(BaseEmitter):
             }
         return desired
 
-    def _plan_mcp(self, plan, canonical, target, directory, previous, force):
+    def _plan_mcp(self, plan, canonical, target, directory, previous, force, claude):
         desired = self._desired_servers(plan, canonical, target)
-        current_raw = cli._claude_user_servers(user_config(target))
         names = sorted(set(desired) | self._managed_names(previous, "mcp-cli"))
-        claude = shutil.which("claude")
+        path = user_config(target)
+        if claude is None:
+            _common.skip_cli_entries(plan, "claude", path, names)
+            return
+        try:
+            current_raw = _common.read_mcp_servers(path)
+        except owned.OwnedFileError as error:
+            plan.conflict(path, f"{error}; MCP servers not changed")
+            plan.entries.update(
+                (key, dict(value)) for key, value in previous.items()
+                if value.get("kind") == "mcp-cli"
+            )
+            return
         env = {"CLAUDE_CONFIG_DIR": None if target.config_dir is None else str(directory)}
-        missing_cli = False
         for name in names:
             entry_id = f"mcp:{name}"
             recorded = previous.get(entry_id)
             raw = current_raw.get(name)
             current = None if name not in current_raw else normalize(raw)
             want = desired.get(name)
-            action = _common.server_action(
-                want, current, recorded.get("sha256") if recorded else None,
+            action = _common.decide_server(
+                plan, path, want, current, recorded,
                 adoptable=name == _common.RESERVED_SERVER and cli._is_owned_mcp(raw),
                 force=force,
             )
             label = f"Claude Code MCP server {name}"
-            _common.report_action(plan, label, action)
+            _common.report_action(plan, label, action, path=path,
+                                  key=f"mcpServers.{name}",
+                                  recorded=_common.is_recorded(recorded))
             entry = None if want is None else {
                 "kind": "mcp-cli", "key": name, "sha256": _common.digest_value(want),
             }
@@ -183,11 +197,6 @@ class ClaudeEmitter(BaseEmitter):
                 plan.entries[entry_id] = dict(recorded)
                 continue
             if action not in ("add", "replace", "adopt-replace", "remove"):
-                continue
-            if claude is None:
-                missing_cli = True
-                if recorded is not None:
-                    plan.entries[entry_id] = dict(recorded)
                 continue
             base = (claude, "mcp")
             if action in ("replace", "adopt-replace", "remove"):
@@ -208,8 +217,6 @@ class ClaudeEmitter(BaseEmitter):
                     entry=entry,
                 ))
                 plan.entries[entry_id] = entry
-        if missing_cli:
-            plan.notes.append("Claude Code CLI not found; skipped MCP registration")
 
     def capture(
         self, target: ProfileTarget, *, include_unmanaged: bool = False
@@ -223,7 +230,12 @@ class ClaudeEmitter(BaseEmitter):
         )
         managed = self._managed_names(previous, "mcp-cli")
         servers = {}
-        for name, entry in sorted(cli._claude_user_servers(user_config(target)).items()):
+        try:
+            current_servers = _common.read_mcp_servers(user_config(target))
+        except owned.OwnedFileError as error:
+            warnings.append(f"{error}; MCP servers not captured")
+            current_servers = {}
+        for name, entry in sorted(current_servers.items()):
             if name == _common.RESERVED_SERVER or not isinstance(entry, dict):
                 continue
             if name not in managed and not include_unmanaged:

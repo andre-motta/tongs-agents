@@ -155,6 +155,27 @@ def test_capture_reads_profiles_from_the_source(tmp_path, dotfiles, homes, regis
     assert (into / "instructions" / "claude.md").read_text() == "From alt.\n"
 
 
+@pytest.mark.parametrize("verb, patched", [
+    (("status",), "plan"),
+    (("apply",), "plan"),
+    (("apply", "--dry-run"), "plan"),
+    (("capture", "claude", "--into", "OUT"), "capture"),
+])
+def test_an_unexpected_error_exits_1_with_one_line(
+    tmp_path, dotfiles, homes, registry, monkeypatch, capsys, verb, patched,
+):
+    def broken(*args, **kwargs):
+        raise TypeError("cannot emit from a CanonicalConfig")
+
+    monkeypatch.setattr(engine, patched, broken)
+    argv = [str(tmp_path / "out") if item == "OUT" else item for item in verb]
+    assert run(*argv, "--source", str(dotfiles)) == config_command.EXIT_ERROR
+    err = capsys.readouterr().err
+    assert err == (
+        "tongs-agents config: internal error: TypeError: cannot emit from a CanonicalConfig\n"
+    )
+
+
 def test_capture_rejects_unknown_harness(tmp_path, registry):
     with pytest.raises(SystemExit):
         run("capture", "vim", "--into", str(tmp_path / "out"))

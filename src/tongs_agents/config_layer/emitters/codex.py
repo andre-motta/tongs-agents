@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,7 +21,7 @@ from tongs_agents import cli, owned, paths, toml_tables
 from tongs_agents.config_layer.emitters import _common
 from tongs_agents.config_layer.emitters.base import BaseEmitter
 from tongs_agents.config_layer.emitters.claude import skill_tree_files
-from tongs_agents.config_layer.protocol import CanonicalFragment, ProfileTarget
+from tongs_agents.config_layer.protocol import CanonicalFragment, Change, ProfileTarget
 
 STATE_ENV = ("XDG_STATE_HOME", paths.STATE_DIR_ENV)
 
@@ -43,6 +44,8 @@ class CodexEmitter(BaseEmitter):
     ) -> _common.EmitPlan:
         canonical, plan, previous = self._start(config, target)
         directory = _common.config_dir(target)
+        if shutil.which("codex") is None and _common.skip_absent_home(plan, "codex", directory):
+            return plan
 
         skills = _common.selected_skills(canonical, target)
         files = skill_tree_files(skills_dir(directory), skills)
@@ -65,10 +68,9 @@ class CodexEmitter(BaseEmitter):
                 ownership=cli.HOOK_OWNERSHIP,
             )
         except owned.OwnedFileError as error:
-            plan.conflicts.append(str(error))
+            plan.conflict(directory / "hooks.json", str(error))
         else:
-            if change.kind != "unchanged":
-                plan.changes.append(change)
+            plan.changes.append(change)
 
         self._plan_mcp(plan, canonical, target, directory / "config.toml", previous, force)
         return plan
@@ -104,7 +106,7 @@ class CodexEmitter(BaseEmitter):
             text = owned.read_text(path) or ""
             current_tables = toml_tables.read_tables(text)
         except (owned.OwnedFileError, toml_tables.TomlTableError) as error:
-            plan.conflicts.append(f"{path}: {error}; MCP servers not changed")
+            plan.conflict(path, f"{path}: {error}; MCP servers not changed")
             self._keep_recorded(plan, previous)
             return
         names = sorted(set(desired) | self._managed_names(previous, "toml-table"))
@@ -115,13 +117,15 @@ class CodexEmitter(BaseEmitter):
             raw = current_tables.get(name)
             current, disabled = _without_enabled(raw)
             want = desired.get(name)
-            action = _common.server_action(
-                want, current if name in current_tables else None,
-                recorded.get("sha256") if recorded else None,
+            action = _common.decide_server(
+                plan, path, want, current if name in current_tables else None, recorded,
                 adoptable=name == _common.RESERVED_SERVER and cli._is_owned_mcp(raw),
                 force=force,
             )
-            _common.report_action(plan, f"Codex MCP server {name} in {path}", action)
+            _common.report_action(
+                plan, f"Codex MCP server {name} in {path}", action, path=path,
+                key=f"mcp_servers.{name}", recorded=_common.is_recorded(recorded),
+            )
             entry = None if want is None else {
                 "kind": "toml-table", "path": str(path), "key": name,
                 "sha256": _common.digest_value(want),
@@ -136,13 +140,15 @@ class CodexEmitter(BaseEmitter):
             elif action == "remove":
                 table_changes[name] = None
         if not table_changes:
+            if any(key.startswith("toml-table:") for key in plan.entries):
+                plan.changes.append(Change(path, "unchanged"))
             return
         try:
             change = owned.plan_text_edit(
                 path, lambda current: toml_tables.render_tables(current, table_changes)
             )
         except (owned.OwnedFileError, toml_tables.TomlTableError) as error:
-            plan.conflicts.append(f"{path}: {error}; MCP servers not changed")
+            plan.conflict(path, f"{path}: {error}; MCP servers not changed")
             for name in table_changes:
                 plan.entries.pop(f"toml-table:{name}", None)
             self._keep_recorded(plan, previous)

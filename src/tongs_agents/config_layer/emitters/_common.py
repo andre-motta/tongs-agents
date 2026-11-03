@@ -36,8 +36,9 @@ from types import MappingProxyType
 from typing import Any
 
 from tongs_agents import owned
+from tongs_agents.config_layer import schema
 from tongs_agents.config_layer.protocol import CanonicalFragment, Change, ProfileTarget
-from tongs_agents.profiles import CONFIG_DIR_ENV_BY_HARNESS, Profile, ProfileError, parse_profile
+from tongs_agents.profiles import Profile, ProfileError, parse_profile
 
 OWNER = owned.OWNER
 SCHEMA_VERSION = 1
@@ -67,30 +68,15 @@ class EmitError(ValueError):
     """The canonical config cannot be emitted; the message names the item."""
 
 
-@dataclass(frozen=True)
-class Scope:
-    """``harnesses`` and ``profiles`` narrowing; None means every one."""
-
-    harnesses: tuple[str, ...] | None = None
-    profiles: tuple[str, ...] | None = None
+# The schema's types, so a loaded CanonicalConfig needs no translation.
+Scope = schema.Scope
+McpServer = schema.McpServer
 
 
 @dataclass(frozen=True)
 class Skill:
     name: str
     source: Path
-    scope: Scope = Scope()
-
-
-@dataclass(frozen=True)
-class McpServer:
-    name: str
-    command: tuple[str, ...] | None = None
-    cwd: str | None = None
-    env: tuple[str, ...] = ()
-    url: str | None = None
-    bearer_token_env: str | None = None
-    enabled: bool = True
     scope: Scope = Scope()
 
 
@@ -123,6 +109,24 @@ class EmitConfig:
         """
         return _from_document(document, Path(root), profiles)
 
+    @classmethod
+    def from_canonical(cls, config: schema.CanonicalConfig) -> EmitConfig:
+        """The view of a config the schema loader already validated."""
+        root = Path(config.root)
+        harness = config.instructions.harness
+        return cls(
+            root=root,
+            instructions=tuple(root / item.path for item in config.instructions.files),
+            harness_instructions=MappingProxyType({
+                name: tuple(root / item.path for item in files) for name, files in harness.items()
+            }),
+            skills=tuple(
+                Skill(skill.name, skill.path, skill.scope) for skill in config.skills.values()
+            ),
+            mcp_servers=tuple(config.mcp_servers.values()),
+            profiles=config.profiles,
+        )
+
 
 @dataclass(frozen=True)
 class CommandStep:
@@ -143,6 +147,40 @@ class CommandStep:
     timeout: float = 60.0
 
 
+# Engine entry states (config_layer.engine) an Item may carry.
+IN_SYNC = "in sync"
+PENDING = "pending"
+DRIFTED = "drifted"
+MISSING = "missing"
+FOREIGN = "foreign"
+ADOPTED = "adopted"
+ORPHANED = "orphaned"
+SKIPPED = "skipped"
+# A record written before its CLI step runs: ``sha256`` is the wanted value,
+# ``previous_sha256`` what was recorded before (absent when nothing was).
+PENDING_KEY = "pending"
+PREVIOUS_KEY = "previous_sha256"
+_ACTION_STATES = {
+    "keep": IN_SYNC, "adopt": ADOPTED, "replace": PENDING, "adopt-replace": PENDING,
+    "remove": ORPHANED, "forget": ORPHANED, "drifted": DRIFTED, "foreign": FOREIGN,
+}
+
+
+@dataclass(frozen=True)
+class Item:
+    """The state of one keyed entry the engine cannot see as a whole file.
+
+    A harness-CLI MCP server (``path`` is the file the harness keeps it in),
+    an MCP table in a shared TOML file, a Markdown block, or a file the
+    emitter left alone. ``key`` names the entry inside ``path``.
+    """
+
+    path: Path
+    key: str | None
+    state: str
+    detail: str = ""
+
+
 @dataclass
 class EmitPlan:
     """Everything one emitter plans for one target."""
@@ -154,6 +192,21 @@ class EmitPlan:
     previous_entries: dict[str, dict[str, str]] = field(default_factory=dict)
     notes: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
+    items: list[Item] = field(default_factory=list)
+    # Shared files to back up before a forced replacement of a drifted entry.
+    backups: list[Path] = field(default_factory=list)
+
+    def conflict(self, path: Path, message: str, key: str | None = None) -> None:
+        """Report something tongs-agents does not own at ``path``; it is never changed."""
+        self.conflicts.append(message)
+        self.items.append(Item(Path(path), key, FOREIGN, message))
+
+    def entries_after(self, succeeded: Iterable[CommandStep]) -> dict[str, dict[str, str]]:
+        """The entries to record once the ``succeeded`` CLI steps ran."""
+        entries = self.file_entries()
+        for step in succeeded:
+            entries = step_entries(entries, step, True)
+        return entries
 
     @property
     def managed_paths(self) -> list[str]:
@@ -172,18 +225,82 @@ class EmitPlan:
         return result
 
 
+def step_entries(
+    entries: Mapping[str, Mapping[str, str]], step: CommandStep, ok: bool | None,
+) -> dict[str, dict[str, str]]:
+    """``entries`` before (``ok`` None) or after one CLI step.
+
+    Before a step that sets an entry, the entry is recorded as pending with
+    the wanted digest, so a step that took effect but was not reported (a
+    non-zero exit after the write, an interruption) is recognised as ours by
+    the next plan. A failed step leaves the entries as they are.
+    """
+    result = {key: dict(value) for key, value in entries.items()}
+    if step.entry_id is None or ok is False:
+        return result
+    if ok:
+        if step.entry is None:
+            result.pop(step.entry_id, None)
+        else:
+            result[step.entry_id] = dict(step.entry)
+        return result
+    if step.entry is None:
+        return result
+    previous = result.get(step.entry_id)
+    pending = {**step.entry, PENDING_KEY: "1"}
+    if previous is not None:
+        before = previous.get(PREVIOUS_KEY) if PENDING_KEY in previous else previous.get("sha256")
+        if before:
+            pending[PREVIOUS_KEY] = before
+    result[step.entry_id] = pending
+    return result
+
+
+def not_on_path(cli_name: str) -> str:
+    return (f"{cli_name} not on PATH (looked up on PATH only; shell aliases and functions "
+            "are not seen)")
+
+
+def skip_absent_home(plan: EmitPlan, cli_name: str, directory: Path) -> bool:
+    """True, with a note, when neither the harness CLI nor its config dir exists.
+
+    Nothing is planned for such a target and its recorded entries are kept,
+    so a machine without that harness gets no new config home.
+    """
+    if directory.is_dir():
+        return False
+    plan.notes.append(f"skipped: {not_on_path(cli_name)}, and {directory} does not exist")
+    plan.entries.update((key, dict(value)) for key, value in plan.previous_entries.items())
+    return True
+
+
+def skip_cli_entries(
+    plan: EmitPlan, cli_name: str, path: Path, names: Iterable[str],
+) -> None:
+    """Report the CLI-managed MCP servers of a target whose CLI is not on PATH."""
+    detail = not_on_path(cli_name)
+    plan.notes.append(f"skipped: {detail}")
+    for name in sorted(names):
+        plan.items.append(Item(Path(path), f"mcpServers.{name}", SKIPPED, detail))
+        recorded = plan.previous_entries.get(f"mcp:{name}")
+        if recorded is not None:
+            plan.entries[f"mcp:{name}"] = dict(recorded)
+
+
 # Canonical config
 
 
 def coerce_config(config: Any) -> EmitConfig:
     """An EmitConfig from what the engine passes.
 
-    Accepted: an EmitConfig; an object with ``to_emit_config()``; or an
-    object with ``root`` (or ``source``) and ``document`` (or ``data``),
-    optionally with ``profiles``.
+    Accepted: an EmitConfig; the engine's ``schema.CanonicalConfig``; an
+    object with ``to_emit_config()``; or an object with ``root`` (or
+    ``source``) and ``document`` (or ``data``), optionally with ``profiles``.
     """
     if isinstance(config, EmitConfig):
         return config
+    if isinstance(config, schema.CanonicalConfig):
+        return EmitConfig.from_canonical(config)
     convert = getattr(config, "to_emit_config", None)
     if callable(convert):
         result = convert()
@@ -438,47 +555,8 @@ def config_dir(target: ProfileTarget) -> Path:
     return Path(os.path.abspath(Path(target.config_dir).expanduser()))
 
 
-def _normal_key(harness: str, directory: Path | None) -> tuple[str, Path | None]:
-    if directory is None:
-        return harness, None
-    directory = Path(os.path.abspath(Path(directory).expanduser()))
-    # Claude keeps .claude.json beside its default dir, so an explicit
-    # ~/.claude is a different home; Codex and Pi have one file layout.
-    if harness != "claude" and directory == default_dir(harness):
-        return harness, None
-    return harness, directory
-
-
-def profile_target(profile: Profile) -> ProfileTarget | None:
-    """The target a profile's harness uses, or None (harness other, bad env)."""
-    variable = CONFIG_DIR_ENV_BY_HARNESS.get(profile.harness)
-    if variable is None:
-        return None
-    directory = profile.config_dir
-    if directory is None:
-        value = profile.env.get(variable)
-        if value is not None:
-            if not os.path.isabs(value):
-                return None
-            directory = Path(value)
-    return ProfileTarget(*_normal_key(profile.harness, directory))
-
-
 def profiles_for(config: EmitConfig, target: ProfileTarget) -> tuple[str, ...]:
-    wanted = _normal_key(target.harness, target.config_dir)
-    return tuple(sorted(
-        name for name, profile in config.profiles.items()
-        if (found := profile_target(profile)) is not None
-        and (found.harness, found.config_dir) == wanted
-    ))
-
-
-def applies(scope: Scope, harness: str, profile_names: Iterable[str]) -> bool:
-    if scope.harnesses is not None and harness not in scope.harnesses:
-        return False
-    if scope.profiles is not None and not set(scope.profiles) & set(profile_names):
-        return False
-    return True
+    return schema.profiles_for(config.profiles, target)
 
 
 def expand_home(value: str) -> str:
@@ -491,13 +569,13 @@ def selected_servers(config: EmitConfig, target: ProfileTarget) -> list[McpServe
     names = profiles_for(config, target)
     return [
         server for server in config.mcp_servers
-        if server.enabled and applies(server.scope, target.harness, names)
+        if server.enabled and server.scope.applies(target.harness, names)
     ]
 
 
 def selected_skills(config: EmitConfig, target: ProfileTarget) -> list[Skill]:
     names = profiles_for(config, target)
-    return [skill for skill in config.skills if applies(skill.scope, target.harness, names)]
+    return [skill for skill in config.skills if skill.scope.applies(target.harness, names)]
 
 
 def render_instructions(config: EmitConfig, harness: str) -> str | None:
@@ -566,17 +644,59 @@ def server_action(
     return "drifted"
 
 
-def report_action(plan: EmitPlan, label: str, action: str) -> None:
+def decide_server(
+    plan: EmitPlan, path: Path, desired: Any, current: Any,
+    record: Mapping[str, str] | None, *, adoptable: bool, force: bool,
+) -> str:
+    """``server_action`` for a manifest record, adopting a matching pending value.
+
+    A forced replacement or removal of a drifted entry asks the engine to
+    back up ``path``, the file that holds it, first.
+    """
+    recorded = None if record is None else record.get("sha256")
+    if record is not None and PENDING_KEY in record:
+        pending, recorded = recorded, record.get(PREVIOUS_KEY)
+        if current is not None and digest_value(current) == pending:
+            recorded = pending
+    action = server_action(desired, current, recorded, adoptable=adoptable, force=force)
+    if (
+        action in ("replace", "remove") and current is not None and recorded is not None
+        and digest_value(current) != recorded
+    ):
+        plan.backups.append(Path(path))
+    return action
+
+
+def is_recorded(record: Mapping[str, str] | None) -> bool:
+    """True for a record of a value that was applied (not merely pending)."""
+    return record is not None and PENDING_KEY not in record
+
+
+def report_action(
+    plan: EmitPlan, label: str, action: str, *, path: Path, key: str, recorded: bool,
+) -> None:
+    """Report one keyed server entry: notes, conflicts and its Item for the engine."""
     if action == "foreign":
-        plan.conflicts.append(
-            f"{label}: exists and was not written by tongs-agents; kept it unchanged"
+        plan.conflict(
+            path, f"{label}: exists and was not written by tongs-agents; kept it unchanged", key,
         )
-    elif action == "drifted":
-        plan.notes.append(
-            f"{label}: changed since tongs-agents wrote it; left as is (use --force to replace)"
-        )
+        return
+    detail = ""
+    if action == "drifted":
+        detail = "changed since tongs-agents wrote it; left as is (use --force to replace)"
+        plan.notes.append(f"{label}: {detail}")
     elif action in ("adopt", "adopt-replace"):
         plan.notes.append(f"{label}: adopted the entry an earlier install wrote")
+    elif action == "remove":
+        detail = "no longer in the dotfiles; removed"
+    elif action == "forget":
+        detail = "no longer in the dotfiles; already removed"
+    if action == "add":
+        state = MISSING if recorded else PENDING
+    else:
+        state = _ACTION_STATES.get(action)
+    if state is not None:
+        plan.items.append(Item(Path(path), key, state, detail))
 
 
 # Owned files and shared text
@@ -598,7 +718,7 @@ def plan_owned_tree(
                 path, data, owner=OWNER, schema_version=SCHEMA_VERSION, fmt=fmt
             )
         except owned.OwnedFileError as error:
-            plan.conflicts.append(str(error))
+            plan.conflict(path, str(error))
             continue
         if change.kind == "conflict":
             plan.conflicts.append(f"{path}: exists without the tongs-agents marker; not replaced")
@@ -608,9 +728,9 @@ def plan_owned_tree(
             change.kind == "update" and recorded is not None and not force
             and recorded.get("sha256") != change.before_sha256
         ):
-            plan.notes.append(
-                f"{path}: changed since tongs-agents wrote it; left as is (use --force to replace)"
-            )
+            detail = "changed since tongs-agents wrote it; left as is (use --force to replace)"
+            plan.notes.append(f"{path}: {detail}")
+            plan.items.append(Item(path, None, DRIFTED, detail))
             plan.entries[entry_id] = dict(recorded)
             continue
         plan.changes.append(change)
@@ -686,20 +806,23 @@ def plan_markdown_block(
     try:
         text = owned.read_text(path) or ""
     except owned.OwnedFileError as error:
-        plan.conflicts.append(str(error))
+        plan.conflict(path, str(error))
         return
     found = _find_block(text)
     if isinstance(found, str):
-        plan.conflicts.append(f"{path}: {found}; not changed")
+        plan.conflict(path, f"{path}: {found}; not changed")
         return
     current = None if found is None else text[found[1]:found[2]]
-    if (
-        current is not None and recorded is not None and not force
+    drifted = (
+        current is not None and recorded is not None
         and current != body and digest_text(current) != recorded.get("sha256")
-    ):
-        plan.notes.append(
-            f"{path}: the tongs-agents block was edited; left as is (use --force to replace)"
-        )
+    )
+    if drifted and force:
+        plan.backups.append(path)
+    elif drifted:
+        detail = "the tongs-agents block was edited; left as is (use --force to replace)"
+        plan.notes.append(f"{path}: {detail}")
+        plan.items.append(Item(path, "tongs-agents block", DRIFTED, detail))
         plan.entries[entry_id] = dict(recorded)
         return
 
@@ -719,7 +842,7 @@ def plan_markdown_block(
         return f"{text[:start]}{BLOCK_BEGIN}\n{body}{BLOCK_END}\n{text[block_end:]}"
 
     change = owned.plan_text_edit(path, mutate)
-    if change.kind != "unchanged":
+    if change.kind != "unchanged" or body is not None:
         plan.changes.append(change)
     if body is not None:
         plan.entries[entry_id] = {"kind": "md-block", "path": str(path),
@@ -745,13 +868,29 @@ def plan_import_line(plan: EmitPlan, path: Path, line: str, wanted: bool) -> Non
     try:
         change = owned.plan_text_edit(path, mutate)
     except owned.OwnedFileError as error:
-        plan.conflicts.append(str(error))
+        plan.conflict(path, str(error))
         return
-    if change.kind != "unchanged":
+    if change.kind != "unchanged" or wanted:
         plan.changes.append(change)
     if wanted:
         plan.entries[entry_id] = {"kind": "md-import", "path": str(path),
                                   "sha256": digest_text(line)}
+
+
+def read_mcp_servers(path: Path) -> dict[str, Any]:
+    """The ``mcpServers`` object of a harness JSON file; {} when the file is absent.
+
+    Raises OwnedFileError for a file that cannot be read or parsed, so an
+    unreadable file is a conflict, never mistaken for one without servers.
+    """
+    # The harness CLI does the writing, so this read-only parse follows a
+    # symlinked file (dotfiles setups link .claude.json); only writes refuse links.
+    path = Path(os.path.realpath(path))
+    document = owned.read_json(path, missing={}, max_bytes=owned.HARNESS_FILE_MAX_BYTES)
+    servers = document.get("mcpServers", {}) if isinstance(document, dict) else None
+    if not isinstance(servers, dict):
+        raise owned.OwnedFileError(f"{path}: 'mcpServers' must be a JSON object")
+    return servers
 
 
 def read_block(path: Path) -> str | None:
@@ -870,18 +1009,14 @@ def apply_plan(plan: EmitPlan, runner: Callable[..., Any] = subprocess.run) -> A
     changes.record_entries(plan.target, plan.file_entries())
     committed = changes.commit()
     failures = []
-    entries = plan.file_entries()
+    succeeded = []
     for step in plan.commands:
         ok, detail = run_step(step, runner)
-        if not ok:
-            failures.append((step.description, detail))
-            continue
-        if step.entry_id is None:
-            continue
-        if step.entry is None:
-            entries.pop(step.entry_id, None)
+        if ok:
+            succeeded.append(step)
         else:
-            entries[step.entry_id] = dict(step.entry)
+            failures.append((step.description, detail))
+    entries = plan.entries_after(succeeded)
     if entries != plan.file_entries():
         follow_up = owned.ChangeSet()
         follow_up.record_entries(plan.target, entries)

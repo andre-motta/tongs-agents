@@ -52,12 +52,15 @@ def _version_text(version: tuple[int, ...]) -> str:
     return ".".join(str(part) for part in version)
 
 
-def _read_servers(path: Path) -> dict[str, Any]:
-    document = owned.read_json(path, missing={})
-    servers = document.get("mcpServers", {}) if isinstance(document, dict) else None
-    if not isinstance(servers, dict):
-        raise owned.OwnedFileError(f"{path}: 'mcpServers' must be a JSON object")
-    return servers
+def _version_problem(minimum: tuple[int, ...], version: tuple[int, ...] | None) -> str:
+    found = "an unrecognized version" if version is None else _version_text(version)
+    return f"Pi {_version_text(minimum)} or newer is required (found {found})"
+
+
+def _blocked(plan: _common.EmitPlan, path: Path, key: str, reason: str) -> None:
+    """An entry Pi cannot take yet: pending with the reason, so status is not clean."""
+    plan.notes.append(f"Pi monitoring skipped: {reason}")
+    plan.items.append(_common.Item(path, key, _common.PENDING, reason))
 
 
 class PiEmitter(BaseEmitter):
@@ -68,6 +71,9 @@ class PiEmitter(BaseEmitter):
     ) -> _common.EmitPlan:
         canonical, plan, previous = self._start(config, target)
         directory = _common.config_dir(target)
+        pi_command = shutil.which("pi")
+        if pi_command is None and _common.skip_absent_home(plan, "pi", directory):
+            return plan
 
         skills = _common.selected_skills(canonical, target)
         files = skill_tree_files(skills_dir(directory), skills)
@@ -78,7 +84,6 @@ class PiEmitter(BaseEmitter):
         if body is not None or f"md-block:{agents_md}" in previous:
             _common.plan_markdown_block(plan, agents_md, body, previous=previous, force=force)
 
-        pi_command = shutil.which("pi")
         version = None if pi_command is None else pi_install.detect_pi_version(pi_command)
         self._plan_hooks(plan, directory, pi_command, version)
         self._plan_mcp(plan, canonical, target, directory, previous, force,
@@ -87,23 +92,28 @@ class PiEmitter(BaseEmitter):
 
     def _plan_hooks(self, plan, directory: Path, pi_command, version) -> None:
         hook = _common.hook_command()
-        if pi_command is None or not Path(hook).is_absolute():
-            plan.notes.append(f"Pi monitoring skipped: {cli.PI_PREREQUISITE}")
+        config_path = directory / pi_install.PI_CONFIG_NAME
+        if pi_command is None:
+            plan.items.append(_common.Item(
+                config_path, "Pi extension", _common.SKIPPED, _common.not_on_path("pi"),
+            ))
+            return
+        if not Path(hook).is_absolute():
+            _blocked(plan, config_path, "Pi extension", cli.PI_PREREQUISITE)
             return
         if version is None or version < pi_install.MINIMUM_PI_VERSION:
-            minimum = _version_text(pi_install.MINIMUM_PI_VERSION)
-            plan.notes.append(f"Pi monitoring skipped: Pi {minimum} or newer is required")
+            _blocked(plan, config_path, "Pi extension",
+                     _version_problem(pi_install.MINIMUM_PI_VERSION, version))
             return
-        config_path = directory / pi_install.PI_CONFIG_NAME
         try:
             current = pi_install._read_owned_config(config_path)
             expected_hook = str(Path(hook).resolve(strict=True))
             extension = str(pi_install.pi_extension_path())
         except ValueError as error:
-            plan.conflicts.append(str(error))
+            plan.conflict(config_path, str(error))
             return
         except OSError as error:
-            plan.notes.append(f"Pi monitoring skipped: {error}")
+            _blocked(plan, config_path, "Pi extension", str(error))
             return
         if (
             current is not None
@@ -111,8 +121,10 @@ class PiEmitter(BaseEmitter):
             and current.get("extension_path") == extension
             and current.get("managed_paths") == [extension]
         ):
+            plan.items.append(_common.Item(config_path, "Pi extension", _common.IN_SYNC))
             return
         environment = pi_install.pi_environment(directory)
+        plan.items.append(_common.Item(config_path, "Pi extension", _common.PENDING))
         plan.commands.append(_common.CommandStep(
             description=f"install the tongs-agents Pi extension into {directory}",
             call=lambda: pi_install.install_pi(pi_command, hook, environment),
@@ -147,21 +159,25 @@ class PiEmitter(BaseEmitter):
             (entry_id, fields) for entry_id, fields in previous.items()
             if fields.get("kind") == "mcp-cli"
         ]
-        if pi_command is None or version is None or version < MCP_MINIMUM:
-            found = "not found" if pi_command is None else (
-                "unrecognized" if version is None else _version_text(version))
-            plan.notes.append(
-                f"Pi MCP servers skipped: Pi {_version_text(MCP_MINIMUM)} or newer is "
-                f"required (found {found})"
-            )
+        if pi_command is None:
+            names = set(self._desired(plan, canonical, target)) | managed
+            _common.skip_cli_entries(plan, "pi", directory / "mcp.json", names)
+            return
+        if version is None or version < MCP_MINIMUM:
+            reason = _version_problem(MCP_MINIMUM, version)
+            plan.notes.append(f"Pi MCP servers skipped: {reason}")
+            for name in sorted(set(self._desired(plan, canonical, target)) | managed):
+                plan.items.append(_common.Item(
+                    directory / "mcp.json", f"mcpServers.{name}", _common.PENDING, reason,
+                ))
             plan.entries.update((key, dict(value)) for key, value in keep_recorded)
             return
         desired = self._desired(plan, canonical, target)
         path = directory / "mcp.json"
         try:
-            current_raw = _read_servers(path)
+            current_raw = _common.read_mcp_servers(path)
         except owned.OwnedFileError as error:
-            plan.conflicts.append(f"{error}; MCP servers not changed")
+            plan.conflict(path, f"{error}; MCP servers not changed")
             plan.entries.update((key, dict(value)) for key, value in keep_recorded)
             return
         env = {"PI_CODING_AGENT_DIR": str(directory), "PI_OFFLINE": "1"}
@@ -171,12 +187,12 @@ class PiEmitter(BaseEmitter):
             raw = current_raw.get(name)
             current, disabled = normalize(raw) if name in current_raw else (None, False)
             want = desired.get(name)
-            action = _common.server_action(
-                want, current, recorded.get("sha256") if recorded else None,
-                adoptable=False, force=force,
+            action = _common.decide_server(
+                plan, path, want, current, recorded, adoptable=False, force=force,
             )
             label = f"Pi MCP server {name}"
-            _common.report_action(plan, label, action)
+            _common.report_action(plan, label, action, path=path, key=f"mcpServers.{name}",
+                                  recorded=_common.is_recorded(recorded))
             entry = None if want is None else {
                 "kind": "mcp-cli", "key": name, "sha256": _common.digest_value(want),
             }
@@ -198,6 +214,10 @@ class PiEmitter(BaseEmitter):
                     env=env, entry_id=entry_id, entry=None,
                 ))
             elif action in ("add", "replace"):
+                # `pi mcp add` replaces an existing name in place (Pi 1.5.0
+                # dist/extensions/mcp/cli.js: "Add or replace a server in mcp.json",
+                # and the live probe in docs/work/emitter-strategy.md), so a
+                # replace is one add, unlike Claude Code's remove then add.
                 cwd = ("--cwd", want["cwd"]) if "cwd" in want else ()
                 plan.commands.append(_common.CommandStep(
                     description=f"add {label}",
@@ -217,7 +237,7 @@ class PiEmitter(BaseEmitter):
         instructions = _common.read_block(directory / "AGENTS.md")
         managed = self._managed_names(previous, "mcp-cli")
         try:
-            entries = _read_servers(directory / "mcp.json")
+            entries = _common.read_mcp_servers(directory / "mcp.json")
         except owned.OwnedFileError as error:
             warnings.append(str(error))
             entries = {}
