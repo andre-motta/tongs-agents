@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 from tongs_agents.models import FocusOperation, FocusResult
+from tongs_agents.widgets import agents_panel
 
 
 def _result(state):
@@ -89,6 +90,7 @@ class _ImmediateThread:
     [
         ("tongs_agents.tui", "FleetMonitorApp"),
         ("tongs_agents.views.fleet_screen", "FleetScreen"),
+        ("tongs_agents.widgets.agents_panel", "FocusOnSelect"),
     ],
 )
 def test_focus_consumer_dispatches_worker_result_to_ui_thread(
@@ -107,10 +109,41 @@ def test_focus_consumer_dispatches_worker_result_to_ui_thread(
         call_from_thread=dispatch,
         app=SimpleNamespace(call_from_thread=dispatch),
     )
-    monkeypatch.setattr(module, "focus_session", lambda identity: expected)
-    monkeypatch.setattr(module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(agents_panel, "focus_session", lambda identity: expected)
+    monkeypatch.setattr(agents_panel.threading, "Thread", _ImmediateThread)
     session = SimpleNamespace(identity="canonical", repo="repo")
     consumer_class._do_focus(consumer, session)
     assert callbacks == [
         (consumer._notify_focus_result, ("repo", expected))
     ]
+
+
+def test_focus_failure_is_reported_not_raised(monkeypatch):
+    callbacks = []
+
+    def boom(identity):
+        raise RuntimeError("no terminal")
+
+    consumer = SimpleNamespace(
+        _notify_focus_result=lambda *args: None,
+        app=SimpleNamespace(call_from_thread=lambda cb, *args: callbacks.append(args)),
+    )
+    monkeypatch.setattr(agents_panel, "focus_session", boom)
+    monkeypatch.setattr(agents_panel.threading, "Thread", _ImmediateThread)
+    agents_panel.FocusOnSelect._do_focus(
+        consumer, SimpleNamespace(identity="canonical", repo="repo")
+    )
+    [(repo, result)] = callbacks
+    assert repo == "repo"
+    assert result.state == "failed"
+    assert result.reason == "no terminal"
+
+
+def test_selected_message_is_handled_by_the_host_mixin():
+    focused = []
+    consumer = SimpleNamespace(_do_focus=focused.append)
+    stopped = []
+    event = SimpleNamespace(session="s", stop=lambda: stopped.append(1))
+    agents_panel.FocusOnSelect.on_agents_panel_selected(consumer, event)
+    assert focused == ["s"]
+    assert stopped == [1]

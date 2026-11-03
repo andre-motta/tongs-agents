@@ -7,7 +7,14 @@ from textual.app import App, ComposeResult
 
 from tongs_agents.models import FleetSession, SessionStatus
 from tongs_agents.terminal_apis import TERMINALS
-from tongs_agents.widgets.session_table import TERMINAL_ABBREV, SessionTable
+from tongs_agents.widgets.session_table import (
+    COMPACT_FIXED_WIDTHS,
+    TERMINAL_ABBREV,
+    SessionTable,
+    compact_age,
+    compact_status_label,
+    session_name,
+)
 
 
 def _session(
@@ -166,3 +173,69 @@ async def test_age_colors_by_status():
             _session("s2", age=700, status=SessionStatus.RUNNING),
         ])
         assert table.row_count == 2
+
+
+class CompactApp(App):
+    def compose(self) -> ComposeResult:
+        yield SessionTable(id="table", compact=True)
+
+
+@dataclasses.dataclass(frozen=True)
+class ProfiledSession(FleetSession):
+    profile_id: str = ""
+
+
+def test_session_name_prefers_profile_id():
+    base = _session(repo="myrepo")
+    profiled = ProfiledSession(**{
+        f.name: getattr(base, f.name) for f in dataclasses.fields(FleetSession)
+    }, profile_id="reviewer")
+    assert session_name(base) == "myrepo"
+    assert session_name(profiled) == "reviewer"
+    assert session_name(dataclasses.replace(profiled, profile_id="")) == "myrepo"
+
+
+def test_compact_status_labels_fit_the_status_column():
+    for status in SessionStatus:
+        assert len(compact_status_label(status)) <= COMPACT_FIXED_WIDTHS["status"]
+
+
+@pytest.mark.parametrize(
+    ("seconds", "label"),
+    [(5, "5s"), (59, "59s"), (60, "1m"), (3599, "59m"), (3600, "1h"),
+     (99 * 3600, "99h"), (100 * 3600, "4d"), (9999 * 86400, "9999d")],
+)
+def test_compact_age_fits_the_age_column(seconds, label):
+    assert compact_age(seconds) == label
+    assert len(label) <= COMPACT_FIXED_WIDTHS["age"]
+
+
+@pytest.mark.asyncio
+async def test_compact_table_has_five_columns_and_no_detail():
+    async with CompactApp().run_test(size=(40, 20)) as pilot:
+        table = pilot.app.query_one("#table", SessionTable)
+        table.set_sessions([_session(detail="secret detail")])
+        await pilot.pause()
+        assert [c.key.value for c in table.ordered_columns] == [
+            "attention", "icon", "name", "status", "age",
+        ]
+        assert str(table.get_row_at(0)[2]) == "myrepo"
+        assert table.virtual_size.width <= table.size.width
+
+
+@pytest.mark.asyncio
+async def test_table_switches_layout_on_resize_and_keeps_cursor():
+    async with TableApp().run_test(size=(120, 20)) as pilot:
+        table = pilot.app.query_one("#table", SessionTable)
+        table.set_sessions([_session("s1", "alpha"), _session("s2", "beta")])
+        table.move_cursor(row=1)
+        assert len(table.columns) == 8
+        await pilot.resize_terminal(40, 20)
+        await pilot.pause()
+        assert table.compact
+        assert len(table.columns) == 5
+        assert table.row_count == 2
+        assert table.get_selected_session_id() == "s2"
+        await pilot.resize_terminal(120, 20)
+        await pilot.pause()
+        assert len(table.columns) == 8
