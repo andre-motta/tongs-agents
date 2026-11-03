@@ -55,12 +55,13 @@ every failed generated command. Candidate and hosted gates omit this option.
 ## Hosted CI gate
 
 `.github/workflows/shells.yml` runs the strict candidate validation on pull
-requests targeting `main` or `feat/**`, and on pushes to `main` or
-`feat/harnesses-desktop`. It uses the standard `ubuntu-24.04` runner, builds
-the existing `Containerfile` image with rootless Podman, and runs the checked
-out `src/` tree without `--allow-known-gaps`. The job has read-only GitHub
-contents permission, cancels superseded runs, and fails on an image build or
-inspection failure, a missing image, or any validator failure.
+requests targeting `main` or `feat/**`, on pushes to `main`, and when
+`.github/workflows/publish.yml` calls it as a release gate for a `v*` tag. It
+uses the standard `ubuntu-24.04` runner, builds the existing `Containerfile`
+image with rootless Podman, and runs the checked out `src/` tree without
+`--allow-known-gaps`. The job has read-only GitHub contents permission, cancels
+superseded runs, and fails on an image build or inspection failure, a missing
+image, or any validator failure.
 
 Each completed validator run covers nine real shells, 18 lifecycle cases, nine
 manual quoted-path controls and 108 installer-generated command checks. The
