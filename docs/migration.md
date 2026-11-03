@@ -15,7 +15,7 @@ nothing in them is carried over.
 | Codex MCP | `fleet` via `codex mcp add` | `tongs-agents` via `codex mcp add` |
 | Pi config and marker | `claude-fleet-monitor.json`, owner `claude-fleet-monitor` | `tongs-agents.json`, owner `tongs-agents` |
 | Pi runtime symbol and package | `claude-fleet-monitor.pi.runtime.v1`, `claude-fleet-monitor-pi` | `tongs-agents.pi.runtime.v1`, `tongs-agents-pi` |
-| tongs entry point | `fleet-monitor` (`[plugins.fleet-monitor]`) | `agents` (`[plugins.agents]`; known issue: the plugin still reads `[plugins.fleet-monitor]`) |
+| tongs entry point | `fleet-monitor` (`[plugins.fleet-monitor]`) | `agents` (`[plugins.agents]`) |
 | Python module | `claude_fleet_monitor` | `tongs_agents` |
 
 The MCP tool names (`fleet_status`, `fleet_focus`, ...) are unchanged.
@@ -77,6 +77,5 @@ yet. It only reads; it changes nothing.
 
 ## tongs
 
-The tongs plugin entry point is now `agents`. Known issue: the plugin still
-reads its settings from `[plugins.fleet-monitor]`, so keep that section until
-this is fixed; `[plugins.agents]` is the intended name.
+The tongs plugin entry point is now `agents`. Move any `[plugins.fleet-monitor]`
+settings in your tongs config to `[plugins.agents]`.

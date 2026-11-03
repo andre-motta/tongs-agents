@@ -28,7 +28,7 @@ except ImportError:
 
 log = logging.getLogger(__name__)
 
-PLUGIN_NAME = "fleet-monitor"
+PLUGIN_NAME = "agents"
 COMMAND_LABEL = "Agents"
 DEFAULT_REFRESH_INTERVAL = 2
 MIN_REFRESH_INTERVAL = 0.5
@@ -37,7 +37,7 @@ NOT_READY_MESSAGE = "Agents is not ready yet; try again in a moment."
 
 
 def plugin_settings(config: object) -> tuple[float, str, list[str]]:
-    """Validate the [plugins.fleet-monitor] table.
+    """Validate the [plugins.agents] table.
 
     Returns (refresh_interval, notify_level, problems); invalid values fall
     back to the defaults and are reported, never raised.

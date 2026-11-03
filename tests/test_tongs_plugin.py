@@ -128,7 +128,7 @@ class TestPluginWithTongs:
     def test_plugin_instantiation(self):
         from tongs_agents.tongs_plugin import FleetMonitorPlugin
         plugin = FleetMonitorPlugin()
-        assert plugin.name == "fleet-monitor"
+        assert plugin.name == "agents"
 
     def test_get_commands(self):
         from tongs_agents.tongs_plugin import FleetMonitorPlugin

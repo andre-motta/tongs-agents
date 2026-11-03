@@ -151,9 +151,8 @@ turns alerts off.
 
 With `pip install -e ".[tongs]"`, tongs finds the plugin under the
 `tongs.plugins` entry point `agents`. Open the command palette (Ctrl+P) and
-choose "Agents". Known issue: the plugin still reads its `refresh_interval`
-and `notify_level` settings from `[plugins.fleet-monitor]` instead of
-`[plugins.agents]`.
+choose "Agents". Its `refresh_interval` and `notify_level` settings live in
+`[plugins.agents]` in the tongs config.
 
 ## Harness support
 
@@ -177,10 +176,10 @@ From the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob
 
 - **M0, release safety foundations:** upgrade adoption, publish hardening, plan record, harness facts. Merged.
 - **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol and pinned Zellij CI merged; launch profiles, `tongs-agents workspace`, sidebar and plugin action in progress.
-- **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. In progress.
+- **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. Planned.
 - **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. Planned.
 - **M4, session store hardening:** read-only readers and one cleanup owner. Planned.
-- **M5, agent chat:** off by default, granted per session. In progress.
+- **M5, agent chat:** off by default, granted per session. Planned.
 - **M6, release v0.10.0 and sunset:** first PyPI release with M0 to M5, then the claude-fleet-monitor sunset. Planned.
 - **M7, sandboxed agents with OpenShell:** sandboxed profiles, policies and approvals in the sidebar. Later.
 
