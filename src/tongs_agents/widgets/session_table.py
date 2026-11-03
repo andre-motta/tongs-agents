@@ -6,6 +6,7 @@ from rich.text import Text
 from textual.widgets import DataTable
 
 from tongs_agents.models import FleetSession, SessionStatus, format_age
+from tongs_agents.sessions_feed import LAUNCH_SOURCE
 
 FULL_MIN_WIDTH = 80
 COMPACT_FIXED_WIDTHS = {"attention": 1, "icon": 2, "status": 9, "age": 5}
@@ -68,6 +69,13 @@ def session_name(session: FleetSession) -> str:
 
 def compact_status_label(status: SessionStatus) -> str:
     return COMPACT_STATUS_LABELS.get(status, status.value.upper())
+
+
+def status_label(session: FleetSession) -> str:
+    """The status column text; hookless launch rows show their pane state."""
+    if session.source == LAUNCH_SOURCE and session.detail:
+        return session.detail.upper()[:COMPACT_FIXED_WIDTHS["status"]]
+    return session.status.value.upper()
 
 
 def compact_age(seconds: int) -> str:
@@ -153,7 +161,11 @@ class SessionTable(DataTable):
                 attention,
                 icon,
                 Text(session_name(s), style="bold", no_wrap=True, overflow="ellipsis"),
-                Text(compact_status_label(s.status), style=style),
+                Text(
+                    status_label(s) if s.source == LAUNCH_SOURCE
+                    else compact_status_label(s.status),
+                    style=style,
+                ),
                 Text(compact_age(s.age_seconds), style=_age_style(s)),
             )
         detail = s.detail.replace("\n", " ").replace("\r", "")
@@ -165,7 +177,7 @@ class SessionTable(DataTable):
             icon,
             Text(s.agent[:6], style="dim"),
             Text(s.repo[:23], style="bold"),
-            Text(s.status.value.upper(), style=style),
+            Text(status_label(s), style=style),
             Text(term, style="dim"),
             Text(detail),
             Text(format_age(s.age_seconds), style=_age_style(s)),

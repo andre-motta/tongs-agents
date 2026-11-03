@@ -2,15 +2,32 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from collections.abc import Callable, Iterable
 
-from tongs_agents import discovery
-from tongs_agents.models import SORT_KEYS, FleetSession, parse_session
+from tongs_agents import discovery, launches
+from tongs_agents.launches import LaunchRecord
+from tongs_agents.models import (
+    SORT_KEYS,
+    FleetSession,
+    SessionStatus,
+    parse_session,
+)
 from tongs_agents.models import sort_sessions as _sort_sessions
+from tongs_agents.multiplexers.base import (
+    Multiplexer,
+    MultiplexerError,
+    PaneInfo,
+    PaneRef,
+)
 
 __all__ = [
+    "LAUNCH_SOURCE",
     "SORT_KEYS",
     "SessionFeed",
+    "WorkspaceFeed",
+    "launch_session",
     "attention_rows",
     "filter_sessions",
     "next_sort_key",
@@ -20,6 +37,10 @@ __all__ = [
 ]
 
 Reader = Callable[[], Iterable[dict]]
+LaunchReader = Callable[[str], Iterable[LaunchRecord]]
+
+LAUNCH_SOURCE = "launch"
+LAUNCH_ID_PREFIX = "launch:"
 
 
 class SessionFeed:
@@ -35,6 +56,144 @@ class SessionFeed:
     def snapshot(self) -> list[FleetSession]:
         reader = self._reader or discovery.read_sessions
         return [parse_session(record) for record in reader()]
+
+
+def _pane_state(pane: PaneInfo, pending: bool) -> tuple[str, SessionStatus]:
+    if pane.exited:
+        if pane.exit_status is None:
+            return "exited", SessionStatus.ERROR
+        status = SessionStatus.ENDED if pane.exit_status == 0 else SessionStatus.ERROR
+        return f"exited {pane.exit_status}", status
+    return ("starting" if pending else "running"), SessionStatus.DISCOVERED
+
+
+def launch_session(record: LaunchRecord, pane: PaneInfo, now: float) -> FleetSession:
+    """A row for a launched pane that no hook record names: profile and pane state."""
+    detail, status = _pane_state(pane, record.state == "pending")
+    terminal_env = {
+        "ZELLIJ_SESSION_NAME": pane.ref.session,
+        "ZELLIJ_PANE_ID": pane.ref.pane_id,
+    }
+    if pane.ref.socket_dir:
+        terminal_env["ZELLIJ_SOCKET_DIR"] = pane.ref.socket_dir
+    return FleetSession(
+        session_id=record.launch_id,
+        repo=record.profile,
+        cwd="",
+        status=status,
+        detail=detail,
+        ts=record.created,
+        started=record.created,
+        pid=str(record.pid or ""),
+        terminal=pane.ref.multiplexer,
+        terminal_env=terminal_env,
+        source=LAUNCH_SOURCE,
+        tool="",
+        age_seconds=max(0, int(now) - record.created),
+        agent=record.harness,
+        canonical_id=f"{LAUNCH_ID_PREFIX}{record.launch_id}",
+        process_start=record.process_start or "",
+        launch_id=record.launch_id,
+        profile_id=record.profile,
+    )
+
+
+def _alive(record: LaunchRecord) -> bool:
+    if record.pid is None:
+        return False
+    info = discovery.get_process_info(record.pid)
+    if info is None:
+        return False
+    return record.process_start is None or info.start_token == record.process_start
+
+
+class WorkspaceFeed(SessionFeed):
+    """Hook sessions plus one row per launched pane in ``session`` without one.
+
+    A launch record joins its hook session through the launch id. Records
+    with no hook session show their pane state from the multiplexer:
+    running, starting (launcher not claimed yet) or exited with its status.
+    A claimed record whose process is gone while its pane id runs something
+    else belongs to an earlier session of the same name and is skipped, as
+    are records replaced by a later claim.
+    """
+
+    def __init__(
+        self,
+        session: str,
+        multiplexer: Multiplexer,
+        reader: Reader | None = None,
+        *,
+        launch_reader: LaunchReader | None = None,
+        alive: Callable[[LaunchRecord], bool] = _alive,
+        clock: Callable[[], float] = time.time,
+    ) -> None:
+        super().__init__(reader)
+        self.session = session
+        self.multiplexer = multiplexer
+        self._launch_reader = launch_reader
+        self._alive = alive
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._spawned: dict[str, PaneRef] = {}
+
+    def note_spawned(self, launch_id: str, ref: PaneRef) -> None:
+        """Remember the pane of a launch this process spawned before it is claimed."""
+        with self._lock:
+            self._spawned[launch_id] = ref
+
+    def snapshot(self) -> list[FleetSession]:
+        sessions = super().snapshot()
+        return sessions + self.launch_rows(sessions)
+
+    def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
+        if record.state == "running":
+            return record.pane_id
+        ref = spawned.get(record.launch_id)
+        return ref.pane_id if ref is not None else None
+
+    def launch_rows(self, sessions: Iterable[FleetSession]) -> list[FleetSession]:
+        reader = self._launch_reader or launches.list_records
+        records = [
+            record for record in reader(self.session)
+            if record.session == self.session
+            and record.multiplexer == self.multiplexer.name
+        ]
+        hooked = {session.launch_id for session in sessions if session.launch_id}
+        replaced = {record.replaces for record in records if record.replaces}
+        with self._lock:
+            spawned = dict(self._spawned)
+        candidates = []
+        for record in records:
+            if record.launch_id in hooked or record.launch_id in replaced:
+                continue
+            pane_id = self._pane_id(record, spawned)
+            if pane_id is not None:
+                candidates.append((record, pane_id))
+        if not candidates:
+            return []
+        try:
+            panes = {
+                pane.ref.pane_id: pane
+                for pane in self.multiplexer.list_panes(self.session)
+            }
+        except MultiplexerError:
+            return []
+        now = self._clock()
+        rows = []
+        for record, pane_id in candidates:
+            pane = panes.get(pane_id)
+            if pane is None:
+                continue
+            if (
+                record.socket_dir and pane.ref.socket_dir
+                and record.socket_dir != pane.ref.socket_dir
+            ):
+                continue
+            if record.state == "running" and not pane.exited and not self._alive(record):
+                continue
+            rows.append(launch_session(record, pane, now))
+        return rows
 
 
 def filter_sessions(

@@ -147,12 +147,14 @@ def _pane_info(entry, session: str, socket_dir: str | None) -> PaneInfo | None:
             )
         if command is None and value:
             command = value
+    exit_status = entry.get("exit_status")
     return PaneInfo(
         ref=PaneRef(NAME, session, str(entry["id"]), socket_dir),
         title=entry["title"],
         command=command,
         exited=entry["exited"],
         focused=entry["is_focused"],
+        exit_status=exit_status if _int(exit_status) else None,
     )
 
 
