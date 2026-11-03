@@ -267,13 +267,47 @@ def test_spawn_unknown_session_exit_zero_is_refused(fake):
         _mux().spawn("nope", ["claude"])
 
 
-def test_spawn_failure_exit_is_an_error(fake):
+def test_spawn_failure_exit_is_an_error_and_not_retried(fake):
     fake.responses["new-pane"] = (2, "", "error: unexpected argument")
     with pytest.raises(MultiplexerError, match="new-pane failed"):
         _mux().spawn("agents", ["claude"])
+    assert len(fake.calls) == 1
     fake.responses["new-pane"] = subprocess.TimeoutExpired("zellij", 5)
     with pytest.raises(MultiplexerError, match="new-pane failed"):
         _mux().spawn("agents", ["claude"])
+    assert len(fake.calls) == 2
+
+
+def test_spawn_asks_again_after_a_transient_no_active_session(fake, monkeypatch):
+    # zellij 0.44.2's socket probe can briefly deny a running session (#107).
+    sleeps = []
+    monkeypatch.setattr(mux_zellij.time, "sleep", sleeps.append)
+    fake.responses["new-pane"] = _sequence(
+        (1, "", "There is no active session!\n"),
+        (1, "", "There is no active session!\n"),
+        (0, "terminal_9\n", ""),
+    )
+    ref = _mux().spawn("agents", ["claude"], cwd="/work/example", name="claude")
+    assert ref == PaneRef("zellij", "agents", "9", SOCKET_DIR)
+    assert len(fake.calls) == 3
+    assert all(call[0] == fake.calls[0][0] for call in fake.calls)
+    assert sleeps == [mux_zellij.READBACK_INTERVAL] * 2
+
+
+def test_spawn_gives_up_on_no_active_session_after_bounded_attempts(fake):
+    fake.responses["new-pane"] = (1, "", "There is no active session!")
+    with pytest.raises(MultiplexerError, match="no active session"):
+        _mux().spawn("agents", ["claude"])
+    assert len(fake.calls) == mux_zellij.READBACK_ATTEMPTS
+
+
+def test_spawn_does_not_retry_an_unknown_session(fake):
+    fake.responses["new-pane"] = (
+        0, "agents [Created 2m ago]\n", "Session 'nope' not found."
+    )
+    with pytest.raises(MultiplexerError, match="pane id"):
+        _mux().spawn("nope", ["claude"])
+    assert len(fake.calls) == 1
 
 
 @pytest.mark.parametrize(
