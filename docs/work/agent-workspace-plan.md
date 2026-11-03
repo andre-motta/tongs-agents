@@ -1,6 +1,6 @@
 # Agent workspace plan
 
-Approved by the maintainer on 2026-11-02, rescoped the same day: v0.10.0 is the first release and ships M0 to M5, and the runtime rename moved early (M1-R). Tracking: parent issue #1, items #2 to #40.
+Approved by the maintainer on 2026-11-02, rescoped the same day: v0.10.0 is the first release and ships M0 to M5, and the runtime rename moved early (M1-R). Rescoped again on 2026-11-03: v0.10.0 ships M0 to M7 as one complete release, so M7 is built before the M6 release items. Tracking: parent issue #1, items #2 to #40.
 
 tongs-agents becomes a standalone, harness-agnostic agent workspace in the tongs
 family. It owns its own Textual sidebar app and a Zellij session in which Claude
@@ -22,7 +22,7 @@ Every gate's evidence is labelled live, instrumented, mocked or unvalidated, as
 | M3: multiplexer completeness and agent control | #23 send, paste, capture and supervisor verbs, #24 tmux adapter, #25 opt-in audited MCP control | One multi-line send yields exactly one prompt on Zellij and tmux; unverified or stale panes refused; MCP control absent unless opted in | Live validators on both multiplexers |
 | M4: session store hardening | #27 read-only readers and one cleanup owner (#26 and #28 superseded by #40) | Readers never write; cleanup loses no records under concurrent hook writes | Mocked stress test |
 | M5: agent chat | #29 chat design gate, #30 read-only web watching, #31 chat store, tools, pane and grants, #32 mention delivery | Chat is off by default and granted per session by the maintainer; ungranted sessions see no chat tools; two granted agents hold a thread; mentions reach granted agents | Live validator with fake agents |
-| M6: release v0.10.0 and sunset | #6 full pre-release review, v0.10.0 with M0 to M5, then claude-fleet-monitor v0.9.2; #33 archive and legacy retirement | Tag and archive authorized; end-of-support dates documented; no date pressure | Live clean-venv smoke test, documentation |
+| M6: release v0.10.0 and sunset | #6 full pre-release review, v0.10.0 with M0 to M7, then claude-fleet-monitor v0.9.2; #33 archive and legacy retirement | Tag and archive authorized; end-of-support dates documented; no date pressure | Live clean-venv smoke test, documentation |
 | M7: sandboxed agents with OpenShell | #34 integration investigation, #35 sandboxed profiles, #36 policy and sandbox commands, #37 approvals in the sidebar, #38 setup wizard | A sandboxed agent shows live status and cannot reach what its policy denies; access requests reach the maintainer | Live, on upstream OpenShell and the opendatahub-io midstream fork |
 
 ## Comparison
@@ -77,6 +77,6 @@ design.
 - claude-fleet-monitor v0.9.2 ships a README notice, a CLI warning and an uninstall guard.
 - Config emitters in M2; hosted Zellij jobs gate PRs and publishing; inferred screen status deferred.
 - Runtime names (M1-R): `$XDG_STATE_HOME/tongs-agents/sessions`, MCP key `tongs-agents`, entry point `agents`, pi marker `tongs-agents`; no dual-read.
-- v0.10.0 ships M0 to M5; claude-fleet-monitor v0.9.2 follows it; fast iteration (see [SDLC.md](../SDLC.md)) lasts until the tag.
+- v0.10.0 ships M0 to M7 (rescoped 2026-11-03; M7 is built before the M6 release items); claude-fleet-monitor v0.9.2 follows it; fast iteration (see [SDLC.md](../SDLC.md)) lasts until the tag.
 - Managed Zellij download: Linux x86_64 build without web in M2; web build in M5.
 - MCP control: opted-in profiles may spawn and send; per-caller rate limit; audit keeps hash and length only.

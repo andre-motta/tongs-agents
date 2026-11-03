@@ -12,8 +12,8 @@ harness-agnostic companion app in the
 tongs is optional.
 
 > **Status: pre-release.** tongs-agents is not on PyPI yet; install it from
-> source. v0.10.0 will be the first release and will ship milestones M0 to M5
-> (no date).
+> source. v0.10.0 will be the first release and will ship milestones M0 to M7
+> together (no date).
 >
 > - **Works today:** hook-based status for Claude Code, Codex and pi, the
 >   `monitor` TUI, `focus`, `status`, `doctor`, an MCP server, an optional
@@ -186,13 +186,13 @@ are in the
 From the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md):
 
 - **M0, release safety foundations:** upgrade adoption, publish hardening, plan record, harness facts. Merged.
-- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol, pinned Zellij CI, launch profiles, `tongs-agents workspace`, sidebar and the instrumented workspace validator done; plugin action and the maintainer's live run in progress.
-- **M2, config layer and app shell:** config emitters for Claude Code, Codex and pi, owned-file writer, managed Zellij download. Planned.
-- **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. Planned.
+- **M1, thin usable workspace:** Zellij spike, runtime rename, agents panel, multiplexer protocol, pinned Zellij CI, launch profiles, `tongs-agents workspace`, sidebar, plugin action and the instrumented workspace validator merged; the maintainer's live run is pending.
+- **M2, config layer and app shell:** owned-file writer, `config status`/`apply`/`capture`, emitters for Claude Code, Codex and pi, managed Zellij download and `notify` merged; app shell in progress.
+- **M3, multiplexer completeness and agent control:** send, paste and capture, a tmux adapter, opt-in audited MCP control. In progress.
 - **M4, session store hardening:** read-only readers and one cleanup owner. Planned.
-- **M5, agent chat:** off by default, granted per session. Planned.
-- **M6, release v0.10.0 and sunset:** first PyPI release with M0 to M5, then the claude-fleet-monitor sunset. Planned.
-- **M7, sandboxed agents with OpenShell:** sandboxed profiles, policies and approvals in the sidebar. Later.
+- **M5, agent chat:** off by default, granted per session. Design in progress.
+- **M7, sandboxed agents with OpenShell:** sandboxed profiles, policies and approvals in the sidebar. Investigation in progress; built before the release.
+- **M6, release v0.10.0 and sunset:** first PyPI release with M0 to M7, then the claude-fleet-monitor sunset. Planned.
 
 ## Upgrading from claude-fleet-monitor
 
