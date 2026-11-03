@@ -101,6 +101,7 @@ HOOKED_PROFILE = "f3"
 CONTROL_PROFILE = "f4"
 SESSION_BUDGET = 5.0
 STATUS_BUDGET = 4.0
+REPORT_WAIT = 10.0
 TOKEN_RE = re.compile(r"--spawn-request ([0-9a-f]{32})")
 DOWN_ARROW = b"\x1b[B"
 
@@ -606,12 +607,28 @@ def rerun_rows(session, feed, target, observations):
            "the uninstalled control profile did not stay a hookless launch row")
 
 
+def agent_reports(io_dir, names, timeout=REPORT_WAIT):
+    """Wait for each fake agent's report; it lands after its hooks have run."""
+    deadline = time.monotonic() + timeout
+    reports = {}
+    while True:
+        for name in names:
+            if name not in reports:
+                report = read_json(io_dir / f"agent-{name}.json")
+                if report is not None:
+                    reports[name] = report
+        if len(reports) == len(names) or time.monotonic() >= deadline:
+            return reports
+        time.sleep(0.1)
+
+
 def agent_env(io_dir, session, target, observations):
+    reports = agent_reports(io_dir, (*FIRST_PROFILES, *RERUN_PROFILES))
     records = records_by_profile(session)
     titles = {pane.get("title"): str(pane.get("id")) for pane in target.panes()}
     facts = {}
     for name in (*FIRST_PROFILES, *RERUN_PROFILES):
-        report = read_json(io_dir / f"agent-{name}.json") or {}
+        report = reports.get(name, {})
         child = report.get("env", {})
         record = records.get(name)
         facts[name] = {
