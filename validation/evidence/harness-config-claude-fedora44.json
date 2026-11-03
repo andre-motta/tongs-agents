@@ -1,0 +1,565 @@
+{
+  "generated": "2026-11-03T13:17:31Z",
+  "host": {
+    "arch": "x86_64",
+    "os": "Fedora Linux 44",
+    "python": "3.14.8",
+    "system": "linux"
+  },
+  "isolation": {
+    "env": "built from scratch: PATH, USER, LANG, private HOME and XDG dirs, the harness config-dir variable, PROBE_SECRET and PROBE_INHERIT (synthetic values)",
+    "model_sessions_started": 0,
+    "namespace": "unshare --user --map-current-user --net (loopback down)",
+    "network": "unreachable"
+  },
+  "issue": 17,
+  "item": "M2-0",
+  "labels": {
+    "live": "the installed harness binary ran in isolated dirs and its output or files were observed",
+    "unvalidated": "documented or inferred, not exercised by this probe"
+  },
+  "probe_sha256": {
+    "fake_mcp.py": "d3bb022e692e24fba680543a7193965e65fa3951d7deff64f2f7a134817cfcbb",
+    "pi_loader.mjs": "217526a34457df652422dff09a944db49f023c29b14a134b072387c08d2babc9",
+    "probe.py": "53f95fd13eae4fc1cc7576103eb60eebc07ad3dae675c46bc84f755bf2dc1f80",
+    "recorder.py": "6a6577923ec3b496d6d2e6425324926ab135679f4a9b4fab6c56c1ad691a36b3"
+  },
+  "result": {
+    "checks": {
+      "claude_md_import": {
+        "answer": "Documented behaviour (memory imports, up to 5 hops); no offline command renders the memory, and starting a session is out of scope for this item",
+        "label": "unvalidated",
+        "question": "Does <config>/CLAUDE.md load an `@path` import of a tongs-agents-owned file?"
+      },
+      "mcp_add_existing_name": {
+        "answer": "no: it exits non-zero and keeps the old entry",
+        "exit_code": 1,
+        "label": "live",
+        "question": "Does `claude mcp add` replace an existing user entry of the same name?",
+        "stderr_first_line": "MCP server probe-plain already exists in user config"
+      },
+      "mcp_add_stores": {
+        "answer": "env value stored verbatim",
+        "exit_codes": {
+          "add_env": 0,
+          "add_plain": 0
+        },
+        "file": "<CLAUDE_CONFIG_DIR>/.claude.json",
+        "label": "live",
+        "question": "What does `claude mcp add --scope user -e NAME=${NAME}` store?",
+        "stored_entry_keys": [
+          "args",
+          "command",
+          "env",
+          "type"
+        ]
+      },
+      "mcp_env_by_name": {
+        "answer": {
+          "plugin_mcp_json_env_vars_only": "expanded",
+          "plugin_mcp_json_placeholder": "expanded",
+          "user_scope_env_placeholder": "expanded",
+          "user_scope_no_env_inherits": "expanded"
+        },
+        "exit_code": 0,
+        "label": "live",
+        "legend": {
+          "absent": "variable not set for the server",
+          "expanded": "server saw the synthetic value from claude's environment",
+          "literal-placeholder": "server saw the text ${PROBE_SECRET}"
+        },
+        "question": "How do stdio MCP servers get environment values at start (health check by `claude mcp list`)?",
+        "servers_listed": [
+          "plugin:tongs-copy:tongs-copy-mcp",
+          "plugin:tongs-agents:tongs-agents-mcp",
+          "probe-env",
+          "probe-plain"
+        ],
+        "servers_started": {
+          "probe-env": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 21,
+            "env_names": [
+              "AI_AGENT",
+              "CLAUDECODE",
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+              "CLAUDE_CODE_ENTRYPOINT",
+              "CLAUDE_CODE_SESSION_ID",
+              "CLAUDE_CONFIG_DIR",
+              "CLAUDE_PROJECT_DIR",
+              "COREPACK_ENABLE_AUTO_PIN",
+              "HOME",
+              "LANG",
+              "NoDefaultCurrentDirectoryInExePath",
+              "PATH",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          },
+          "probe-plain": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 21,
+            "env_names": [
+              "AI_AGENT",
+              "CLAUDECODE",
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+              "CLAUDE_CODE_ENTRYPOINT",
+              "CLAUDE_CODE_SESSION_ID",
+              "CLAUDE_CONFIG_DIR",
+              "CLAUDE_PROJECT_DIR",
+              "COREPACK_ENABLE_AUTO_PIN",
+              "HOME",
+              "LANG",
+              "NoDefaultCurrentDirectoryInExePath",
+              "PATH",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          },
+          "tongs-agents-mcp": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 23,
+            "env_names": [
+              "AI_AGENT",
+              "CLAUDECODE",
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+              "CLAUDE_CODE_ENTRYPOINT",
+              "CLAUDE_CODE_SESSION_ID",
+              "CLAUDE_CONFIG_DIR",
+              "CLAUDE_PLUGIN_DATA",
+              "CLAUDE_PLUGIN_ROOT",
+              "CLAUDE_PROJECT_DIR",
+              "COREPACK_ENABLE_AUTO_PIN",
+              "HOME",
+              "LANG",
+              "NoDefaultCurrentDirectoryInExePath",
+              "PATH",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          },
+          "tongs-copy-envvars": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "expanded",
+            "PROBE_SECRET": "expanded",
+            "env_count": 23,
+            "env_names": [
+              "AI_AGENT",
+              "CLAUDECODE",
+              "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+              "CLAUDE_CODE_ENTRYPOINT",
+              "CLAUDE_CODE_SESSION_ID",
+              "CLAUDE_CONFIG_DIR",
+              "CLAUDE_PLUGIN_DATA",
+              "CLAUDE_PLUGIN_ROOT",
+              "CLAUDE_PROJECT_DIR",
+              "COREPACK_ENABLE_AUTO_PIN",
+              "HOME",
+              "LANG",
+              "NoDefaultCurrentDirectoryInExePath",
+              "PATH",
+              "PROBE_INHERIT",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER",
+              "XDG_CACHE_HOME",
+              "XDG_CONFIG_HOME",
+              "XDG_DATA_HOME",
+              "XDG_RUNTIME_DIR",
+              "XDG_STATE_HOME"
+            ]
+          }
+        }
+      },
+      "mcp_remove": {
+        "answer": "yes",
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does `claude mcp remove --scope user` remove only the named entry?",
+        "remaining": [
+          "probe-env"
+        ]
+      },
+      "owned_plugin_bundle": {
+        "answer": "yes for both",
+        "inventory": {
+          "tongs-agents@skills-dir": {
+            "Agents": {
+              "count": 1,
+              "names": "tongs-agents-agent"
+            },
+            "Hooks": {
+              "count": 1,
+              "names": "SessionEnd"
+            },
+            "MCP servers": {
+              "count": 1,
+              "names": "tongs-agents-mcp"
+            },
+            "Skills": {
+              "count": 1,
+              "names": "tongs-agents-skill"
+            }
+          },
+          "tongs-copy@skills-dir": {
+            "Agents": {
+              "count": 1,
+              "names": "tongs-copy-agent"
+            },
+            "MCP servers": {
+              "count": 1,
+              "names": "tongs-copy-mcp"
+            },
+            "Skills": {
+              "count": 1,
+              "names": "tongs-copy-skill"
+            }
+          }
+        },
+        "label": "live",
+        "note": "`plugin details` reads the plugin the way a session would load it; no session was started",
+        "plugin_list": {
+          "tongs-agents@skills-dir": {
+            "enabled": true,
+            "scope": "user"
+          },
+          "tongs-copy@skills-dir": {
+            "enabled": true,
+            "scope": "user"
+          }
+        },
+        "question": "Does a tongs-agents-owned plugin directory under <config>/skills/ load as a skills-dir plugin, copied and symlinked, with its skills, agents, hooks and MCP servers?"
+      },
+      "plain_agents_dir": {
+        "answer": "Documented behaviour; only plugin agents are observable offline (owned_plugin_bundle)",
+        "label": "unvalidated",
+        "question": "Does <config>/agents/*.md load as user subagents?"
+      },
+      "plain_skill_dirs_in_plugin_list": {
+        "answer": "no",
+        "label": "live",
+        "note": "Plain user skills are documented to load from <config>/skills/<name>/SKILL.md; their session loading was not exercised offline",
+        "question": "Do plain skill dirs (no .claude-plugin manifest) appear in `claude plugin list`?"
+      },
+      "plugin_disable_records": {
+        "answer": "settings.json enabledPlugins",
+        "enabled_after": false,
+        "enabled_plugins": {
+          "tongs-copy@skills-dir": false
+        },
+        "exit_code": 0,
+        "files_changed": [
+          "settings.json"
+        ],
+        "label": "live",
+        "question": "Where does a user's `claude plugin disable` of an owned skills-dir plugin land?"
+      },
+      "plugin_hooks_on_offline_command": {
+        "answer": "no",
+        "events": [],
+        "label": "live",
+        "question": "Do owned-plugin hooks fire for offline `claude mcp list` (M0-E saw settings.json SessionEnd fire)?"
+      },
+      "plugin_validate": {
+        "answer": {
+          "bundle": true,
+          "bundle_with_env_vars_key": true
+        },
+        "exit_codes": {
+          "bundle": 0,
+          "bundle_with_env_vars_key": 0
+        },
+        "label": "live",
+        "output_tail": [
+          "The directory also runs a safety scan and a policy review that this command does not.",
+          "",
+          "\u2714 Validation passed"
+        ],
+        "output_tail_env_vars": [
+          "",
+          "The directory also runs a safety scan and a policy review that this command does not.",
+          "",
+          "\u2714 Validation passed"
+        ],
+        "question": "Does `claude plugin validate` accept the owned bundle, and one whose .mcp.json uses Codex `env_vars`?"
+      }
+    },
+    "commands": [
+      {
+        "argv": [
+          "claude",
+          "--version"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "claude",
+          "mcp",
+          "add",
+          "--scope",
+          "user",
+          "probe-env",
+          "-e",
+          "PROBE_SECRET=${PROBE_SECRET}",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/claude/mcp.log",
+          "probe-env"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "mcp",
+          "add",
+          "--scope",
+          "user",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/claude/mcp.log",
+          "probe-plain"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "mcp",
+          "add",
+          "--scope",
+          "user",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/claude/mcp.log",
+          "probe-plain-changed"
+        ],
+        "exit": 1,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "list",
+          "--json"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "details",
+          "tongs-agents@skills-dir"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "details",
+          "tongs-copy@skills-dir"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "mcp",
+          "list"
+        ],
+        "exit": 0,
+        "seconds": 0.2
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "disable",
+          "tongs-copy@skills-dir"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "list",
+          "--json"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "enable",
+          "tongs-copy@skills-dir"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "validate",
+          "<root>/claude/data/tongs-agents/claude/tongs-agents"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "plugin",
+          "validate",
+          "<root>/claude/cc/skills/tongs-copy"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      },
+      {
+        "argv": [
+          "claude",
+          "mcp",
+          "remove",
+          "--scope",
+          "user",
+          "probe-plain"
+        ],
+        "exit": 0,
+        "seconds": 0.1
+      }
+    ],
+    "config_tree_after": {
+      ".claude.json": "01dc9b3e5d3d",
+      "backups/.claude.json.backup.1793711812695": "a8ce2815f728",
+      "settings.json": "0fe84d03b8ed",
+      "skills/linked-skill": "symlink",
+      "skills/plain-skill/SKILL.md": "1ae39d46308a",
+      "skills/tongs-agents": "symlink",
+      "skills/tongs-copy/.claude-plugin/plugin.json": "96fb999be68b",
+      "skills/tongs-copy/.mcp.json": "6b9659edb308",
+      "skills/tongs-copy/agents/tongs-copy-agent.md": "0baaf1b66bdc",
+      "skills/tongs-copy/skills/tongs-copy-skill/SKILL.md": "664a24378ac3"
+    },
+    "harness": "claude",
+    "version": "2.1.317 (Claude Code)"
+  },
+  "user_config": {
+    "~/.agents/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": true
+    },
+    "~/.claude/CLAUDE.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/agents/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.local.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/config.toml": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/hooks.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/mcp.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    }
+  }
+}

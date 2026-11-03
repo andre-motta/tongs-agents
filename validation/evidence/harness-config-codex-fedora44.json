@@ -1,0 +1,644 @@
+{
+  "generated": "2026-11-03T13:17:31Z",
+  "host": {
+    "arch": "x86_64",
+    "os": "Fedora Linux 44",
+    "python": "3.14.8",
+    "system": "linux"
+  },
+  "isolation": {
+    "env": "built from scratch: PATH, USER, LANG, private HOME and XDG dirs, the harness config-dir variable, PROBE_SECRET and PROBE_INHERIT (synthetic values)",
+    "model_sessions_started": 0,
+    "namespace": "unshare --user --map-current-user --net (loopback down)",
+    "network": "unreachable"
+  },
+  "issue": 17,
+  "item": "M2-0",
+  "labels": {
+    "live": "the installed harness binary ran in isolated dirs and its output or files were observed",
+    "unvalidated": "documented or inferred, not exercised by this probe"
+  },
+  "probe_sha256": {
+    "fake_mcp.py": "d3bb022e692e24fba680543a7193965e65fa3951d7deff64f2f7a134817cfcbb",
+    "pi_loader.mjs": "217526a34457df652422dff09a944db49f023c29b14a134b072387c08d2babc9",
+    "probe.py": "53f95fd13eae4fc1cc7576103eb60eebc07ad3dae675c46bc84f755bf2dc1f80",
+    "recorder.py": "6a6577923ec3b496d6d2e6425324926ab135679f4a9b4fab6c56c1ad691a36b3"
+  },
+  "result": {
+    "checks": {
+      "config_layers": {
+        "answer": "see layers",
+        "error": null,
+        "label": "live",
+        "layers": [
+          {
+            "file": "<root>/codex/cx/config.toml",
+            "profile": null,
+            "type": "user"
+          },
+          {
+            "file": "/etc/codex/config.toml",
+            "type": "system"
+          }
+        ],
+        "question": "Which config layers does Codex read (config/read includeLayers)?"
+      },
+      "custom_agents": {
+        "answer": "Not probed: needs public Codex docs for the 0.166.0 `[agents]` schema; config.toml is the only candidate surface seen",
+        "label": "unvalidated",
+        "question": "Where do Codex custom agents (roles) live?"
+      },
+      "env_vars_parsed": {
+        "answer": "yes",
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does Codex parse `env_vars = [\"NAME\"]` on a stdio server?",
+        "transport_keys": [
+          "args",
+          "command",
+          "cwd",
+          "env",
+          "env_vars",
+          "type"
+        ]
+      },
+      "instructions": {
+        "answer": {
+          "agents_md": true,
+          "agents_md_with_override": false,
+          "at_import_expanded": false,
+          "developer_instructions_override": true,
+          "override_shown": true,
+          "symlinked_agents_md": true
+        },
+        "label": "live",
+        "question": "How does Codex take global instructions (rendered by `codex debug prompt-input`)?"
+      },
+      "mcp_cli_env_flags": {
+        "answer": "no: stdio servers take only --env KEY=VALUE; --bearer-token-env-var is for HTTP servers",
+        "label": "live",
+        "question": "Can the `codex mcp add` CLI express env pass-through by name (`env_vars`)?",
+        "source": "`codex mcp add --help` on this version"
+      },
+      "mcp_cli_existing_name": {
+        "answer": "replaced in place",
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does `codex mcp add` replace an existing entry of the same name?",
+        "stderr_first_line": ""
+      },
+      "mcp_cli_preserves_user_text": {
+        "answer": "no: see user_comments_kept",
+        "appended_tables": [
+          "mcp_servers.probe-literal.env",
+          "mcp_servers.probe-plain"
+        ],
+        "exit_codes": {
+          "add_literal": 0,
+          "add_plain": 0
+        },
+        "label": "live",
+        "question": "Does `codex mcp add` keep the user's comments, key order and unrelated tables in config.toml?",
+        "seed_is_prefix_after_add": false,
+        "user_comments_kept": {
+          "A user's own comment at the top.": true,
+          "USER-COMMENT-ABOVE-MCP-TABLE": false,
+          "USER-COMMENT-INSIDE-MCP-TABLE": false,
+          "USER-INLINE-COMMENT-IN-MCP-TABLE": false,
+          "inline user comment": true
+        }
+      },
+      "mcp_env_by_name": {
+        "answer": {
+          "disabled_user_server_started": false,
+          "env_literal_placeholder": "literal-placeholder",
+          "env_vars_name": "expanded",
+          "no_env_inherits_PROBE_SECRET": "absent"
+        },
+        "label": "live",
+        "question": "How do stdio MCP servers get environment values (servers started by app-server mcpServerStatus/list)?",
+        "servers_started": {
+          "probe-envvars": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "absent",
+            "PROBE_SECRET": "expanded",
+            "env_count": 6,
+            "env_names": [
+              "HOME",
+              "LANG",
+              "PATH",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER"
+            ]
+          },
+          "probe-literal": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "absent",
+            "PROBE_SECRET": "literal-placeholder",
+            "env_count": 6,
+            "env_names": [
+              "HOME",
+              "LANG",
+              "PATH",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER"
+            ]
+          },
+          "probe-plain-changed": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "absent",
+            "PROBE_SECRET": "absent",
+            "env_count": 5,
+            "env_names": [
+              "HOME",
+              "LANG",
+              "PATH",
+              "TMPDIR",
+              "USER"
+            ]
+          }
+        },
+        "status": {
+          "probe-envvars": {
+            "tools": [
+              "probe_tool"
+            ]
+          },
+          "probe-literal": {
+            "tools": [
+              "probe_tool"
+            ]
+          },
+          "probe-plain": {
+            "tools": [
+              "probe_tool"
+            ]
+          },
+          "user-server": {
+            "tools": []
+          }
+        },
+        "status_error": null
+      },
+      "owned_block_survives_cli": {
+        "after_cli_add": {
+          "begin_marker": false,
+          "block_intact": false,
+          "end_marker": true,
+          "end_marker_is_last_line": true,
+          "env_vars_table_present": true
+        },
+        "after_cli_remove": {
+          "begin_marker": false,
+          "block_intact": false,
+          "end_marker": true,
+          "end_marker_is_last_line": true,
+          "env_vars_table_present": true
+        },
+        "answer": "no",
+        "exit_codes": {
+          "add": 0,
+          "remove": 0
+        },
+        "label": "live",
+        "question": "Does a marker-delimited owned block survive later `codex mcp add` and `remove` by the user?",
+        "text_after_add": "<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-literal\"]\n\n[mcp_servers.probe-literal.env]\nPROBE_SECRET = \"${PROBE_SECRET}\"\n\n[mcp_servers.probe-plain]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-plain-changed\"]\n\n[mcp_servers.probe-envvars]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-envvars\"]\nenv_vars = [\"PROBE_SECRET\"]\n\n[mcp_servers.probe-after]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-after\"]\n# <<< tongs-agents managed\n",
+        "text_after_remove": "<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-literal\"]\n\n[mcp_servers.probe-literal.env]\nPROBE_SECRET = \"${PROBE_SECRET}\"\n\n[mcp_servers.probe-plain]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-plain-changed\"]\n\n[mcp_servers.probe-envvars]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-envvars\"]\nenv_vars = [\"PROBE_SECRET\"]\n# <<< tongs-agents managed\n",
+        "user_seed_kept": false,
+        "written": {
+          "begin_marker": true,
+          "block_intact": true,
+          "end_marker": true,
+          "end_marker_is_last_line": true,
+          "env_vars_table_present": true
+        }
+      },
+      "owned_plugin_bundle": {
+        "answer": "yes",
+        "cache_versions": [
+          "0.0.1"
+        ],
+        "config_tables_added": [
+          "marketplaces.tongs-agents-local",
+          "plugins.\"tongs-agents@tongs-agents-local\""
+        ],
+        "exit_codes": {
+          "marketplace_add": 0,
+          "plugin_add": 0
+        },
+        "installed_as": "copy",
+        "label": "live",
+        "mcp_status_names": [
+          "tongs-agents-envvars",
+          "tongs-agents-mcp",
+          "user-server"
+        ],
+        "plugin_mcp_started": {
+          "tongs-agents-envvars": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "absent",
+            "PROBE_SECRET": "expanded",
+            "env_count": 6,
+            "env_names": [
+              "HOME",
+              "LANG",
+              "PATH",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER"
+            ]
+          },
+          "tongs-agents-mcp": {
+            "HOME_set": true,
+            "PROBE_INHERIT": "absent",
+            "PROBE_SECRET": "literal-placeholder",
+            "env_count": 6,
+            "env_names": [
+              "HOME",
+              "LANG",
+              "PATH",
+              "PROBE_SECRET",
+              "TMPDIR",
+              "USER"
+            ]
+          }
+        },
+        "plugin_skills": {
+          "tongs-agents:tongs-agents-skill": {
+            "path": "<root>/codex/cx-plugin/plugins/cache/tongs-agents-local/tongs-agents/0.0.1/skills/tongs-agents-skill/SKILL.md",
+            "pluginId": "tongs-agents@tongs-agents-local"
+          }
+        },
+        "question": "Does Codex install the same Claude-layout owned bundle from a local marketplace, and what does it write?",
+        "stderr_first_line": "",
+        "user_comments_kept": {
+          "A user's own comment at the top.": true,
+          "USER-COMMENT-ABOVE-MCP-TABLE": true,
+          "USER-COMMENT-INSIDE-MCP-TABLE": true,
+          "USER-INLINE-COMMENT-IN-MCP-TABLE": true,
+          "inline user comment": true
+        },
+        "user_text_kept": true
+      },
+      "skills_locations": {
+        "answer": {
+          "agents-skill": {
+            "enabled": true,
+            "path": "<root>/codex/home/.agents/skills/agents-skill/SKILL.md",
+            "pluginId": null,
+            "scope": "user"
+          },
+          "cx-skill": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/cx-skill/SKILL.md",
+            "pluginId": null,
+            "scope": "user"
+          },
+          "dir-linked-skill": {
+            "enabled": true,
+            "path": "<root>/codex/data/tongs-agents/codex/linked-root/dir-linked-skill/SKILL.md",
+            "pluginId": null,
+            "scope": "user"
+          },
+          "imagegen": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/.system/imagegen/SKILL.md",
+            "pluginId": null,
+            "scope": "system"
+          },
+          "linked-skill": {
+            "enabled": true,
+            "path": "<root>/codex/data/tongs-agents/codex/linked-skill/SKILL.md",
+            "pluginId": null,
+            "scope": "user"
+          },
+          "nested-skill": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/tongs-agents/nested-skill/SKILL.md",
+            "pluginId": null,
+            "scope": "user"
+          },
+          "openai-docs": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/.system/openai-docs/SKILL.md",
+            "pluginId": null,
+            "scope": "system"
+          },
+          "review-agent": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/.system/review-agent/SKILL.md",
+            "pluginId": null,
+            "scope": "system"
+          },
+          "skill-creator": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/.system/skill-creator/SKILL.md",
+            "pluginId": null,
+            "scope": "system"
+          },
+          "skill-installer": {
+            "enabled": true,
+            "path": "<root>/codex/cx/skills/.system/skill-installer/SKILL.md",
+            "pluginId": null,
+            "scope": "system"
+          }
+        },
+        "in_prompt_input": {
+          "agents-skill": true,
+          "cx-skill": true,
+          "dir-linked-skill": true,
+          "linked-skill": true,
+          "nested-skill": true
+        },
+        "label": "live",
+        "question": "Which user skill locations does Codex load, and does it follow symlinks?",
+        "system_skills": [
+          "imagegen",
+          "openai-docs",
+          "review-agent",
+          "skill-creator",
+          "skill-installer"
+        ]
+      },
+      "toml_include_key": {
+        "answer": "no",
+        "exit_code": 0,
+        "label": "live",
+        "question": "Does a top-level `include = [...]` key pull an owned TOML file into config.toml?",
+        "stderr_first_line": ""
+      }
+    },
+    "commands": [
+      {
+        "argv": [
+          "codex",
+          "--version"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "add",
+          "probe-literal",
+          "--env",
+          "PROBE_SECRET=${PROBE_SECRET}",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/codex/mcp.log",
+          "probe-literal"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "add",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/codex/mcp.log",
+          "probe-plain"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "add",
+          "probe-plain",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/codex/mcp.log",
+          "probe-plain-changed"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "add",
+          "probe-after",
+          "--",
+          "python3",
+          "<probe>/fake_mcp.py",
+          "<root>/codex/mcp.log",
+          "probe-after"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "remove",
+          "probe-after"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "get",
+          "probe-envvars",
+          "--json"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "app-server"
+        ],
+        "exit": null,
+        "seconds": null
+      },
+      {
+        "argv": [
+          "codex",
+          "mcp",
+          "list",
+          "--json"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "app-server"
+        ],
+        "exit": null,
+        "seconds": null
+      },
+      {
+        "argv": [
+          "codex",
+          "debug",
+          "prompt-input"
+        ],
+        "exit": 0,
+        "seconds": 5.0
+      },
+      {
+        "argv": [
+          "codex",
+          "debug",
+          "prompt-input"
+        ],
+        "exit": 0,
+        "seconds": 5.0
+      },
+      {
+        "argv": [
+          "codex",
+          "debug",
+          "prompt-input"
+        ],
+        "exit": 0,
+        "seconds": 5.0
+      },
+      {
+        "argv": [
+          "codex",
+          "debug",
+          "prompt-input"
+        ],
+        "exit": 0,
+        "seconds": 5.0
+      },
+      {
+        "argv": [
+          "codex",
+          "debug",
+          "prompt-input",
+          "-c",
+          "developer_instructions=\"MARKER-DEVELOPER-INSTRUCTIONS\""
+        ],
+        "exit": 0,
+        "seconds": 5.0
+      },
+      {
+        "argv": [
+          "codex",
+          "plugin",
+          "marketplace",
+          "add",
+          "<root>/codex/data/tongs-agents/codex/marketplace"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "plugin",
+          "add",
+          "tongs-agents@tongs-agents-local"
+        ],
+        "exit": 0,
+        "seconds": 0.0
+      },
+      {
+        "argv": [
+          "codex",
+          "app-server"
+        ],
+        "exit": null,
+        "seconds": null
+      }
+    ],
+    "config_toml_after": "# A user's own comment at the top.\nmodel = \"synthetic-model\"\n\n[user_table]\nkeep = true # inline user comment\n\n[mcp_servers.user-server]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"user-server\"]\nenabled = false\n\n[mcp_servers.probe-literal]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-literal\"]\n\n[mcp_servers.probe-literal.env]\nPROBE_SECRET = \"${PROBE_SECRET}\"\n\n[mcp_servers.probe-plain]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-plain-changed\"]\n\n[mcp_servers.probe-envvars]\ncommand = \"python3\"\nargs = [\"<probe>/fake_mcp.py\", \"<root>/codex/mcp.log\", \"probe-envvars\"]\nenv_vars = [\"PROBE_SECRET\"]\n# <<< tongs-agents managed\n",
+    "harness": "codex",
+    "version": "codex-cli 0.166.0"
+  },
+  "user_config": {
+    "~/.agents/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": true
+    },
+    "~/.claude/CLAUDE.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/agents/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/settings.local.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.claude/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/config.toml": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/hooks.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.codex/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/AGENTS.md": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/mcp.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/settings.json": {
+      "exists": true,
+      "unchanged": true,
+      "volatile": false
+    },
+    "~/.pi/agent/skills/ (listing)": {
+      "unchanged": true,
+      "volatile": false
+    }
+  }
+}
