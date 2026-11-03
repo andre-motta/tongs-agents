@@ -92,7 +92,8 @@ def _tmux_context(terminal_env: dict) -> tuple[list[str], str | None] | None:
 def _run_tmux(command: list[str]) -> subprocess.CompletedProcess | None:
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=5
+            command, capture_output=True, text=True, timeout=5,
+            stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

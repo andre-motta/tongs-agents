@@ -1,0 +1,202 @@
+{
+  "schema": "tmux-workspace-validation/1",
+  "provenance": "instrumented",
+  "runs": {
+    "3.7c": {
+      "schema": "tmux-workspace-validation-run/1",
+      "result": "pass",
+      "error": null,
+      "tmux_version": "tmux 3.7c",
+      "provenance": "instrumented",
+      "provenance_detail": "real tmux servers on private sockets (-L tongs-<token> and the default socket under a private TMUX_TMPDIR), real TmuxMultiplexer, spawn path, launcher, sidebar and workspace/send/read CLI processes in a private root; fake REPL fixtures with bracketed paste stand in for agents and log submitted prompts",
+      "fixtures": {
+        "r1": "fake REPL profile (harness other) spawned by tongs-agents",
+        "r2": "fake REPL profile (harness other) spawned by tongs-agents",
+        "r3": "fake REPL profile (harness other) spawned by tongs-agents",
+        "r4": "fake REPL profile (harness other) spawned by tongs-agents",
+        "claude, codex and pi on PATH": "stub CLI that records its arguments"
+      },
+      "send_delay_ms": 150,
+      "available": {
+        "ok": true,
+        "detail": "tmux 3.7c",
+        "floor": "3.2",
+        "version_read_live": true
+      },
+      "spawn": {
+        "session_absent_before": true,
+        "sessions_after": 1,
+        "sidebar_first_pane": true,
+        "sidebar_alive_after_seconds": 2.0,
+        "profiles": [
+          "r1",
+          "r2"
+        ],
+        "claimed": true,
+        "seconds": 2.23,
+        "pane_ids": {
+          "r1": "%1",
+          "r2": "%2"
+        },
+        "socket_recorded": true,
+        "session_recorded": true
+      },
+      "list": {
+        "panes": 3,
+        "titles": [
+          "r1",
+          "r2",
+          "tongs-agents-sidebar"
+        ],
+        "matches_raw_list_panes": true,
+        "profile_panes_match_records": true,
+        "none_exited": true
+      },
+      "focus": {
+        "steps": [
+          {
+            "profile": "r2",
+            "was_active": false,
+            "selection_succeeded": true,
+            "selection_detail": "window and pane selection",
+            "activation_attempted": false,
+            "readback_active_pane_matches": true
+          },
+          {
+            "profile": "r1",
+            "was_active": false,
+            "selection_succeeded": true,
+            "selection_detail": "window and pane selection",
+            "activation_attempted": false,
+            "readback_active_pane_matches": true
+          },
+          {
+            "profile": "r1",
+            "was_active": true,
+            "selection_succeeded": true,
+            "selection_detail": "already the active pane",
+            "activation_attempted": false,
+            "readback_active_pane_matches": true
+          }
+        ],
+        "attached_clients": 0,
+        "sessions_after": 1
+      },
+      "in_session": {
+        "argv": [
+          "tongs-agents",
+          "workspace",
+          "--multiplexer",
+          "tmux",
+          "--profile",
+          "r3"
+        ],
+        "ran_inside_a_pane_with_tmux_set": true,
+        "exit_code": 0,
+        "output": "",
+        "sessions_after": 1,
+        "attached_clients": 0,
+        "profile_pane_added": true,
+        "sidebar_panes": 1
+      },
+      "multi_line": {
+        "argv": [
+          "tongs-agents",
+          "send",
+          "<r1>",
+          "-"
+        ],
+        "exit_code": 0,
+        "sent_lines": 3,
+        "submitted_prompts": 1,
+        "text_intact": true,
+        "pastes_in_prompt": 1,
+        "received_lines": 3
+      },
+      "read": {
+        "argv": [
+          "tongs-agents",
+          "read",
+          "<r1>",
+          "--lines",
+          "5"
+        ],
+        "exit_code": 0,
+        "lines_returned": 4,
+        "acknowledgement_in_tail": true,
+        "last_line_is_prompt": true
+      },
+      "refused": {
+        "case": "unclaimed launch record in the session",
+        "send_exit_code": 5,
+        "read_exit_code": 5,
+        "prompts_delivered": 0
+      },
+      "audit": {
+        "mode": "0o600",
+        "sends_ok": 1,
+        "sends_refused": 1,
+        "sent_text_found": false
+      },
+      "outside": {
+        "argv": [
+          "tongs-agents",
+          "workspace",
+          "--multiplexer",
+          "tmux",
+          "--session",
+          "<session2>",
+          "--profile",
+          "r4",
+          "--print-command"
+        ],
+        "socket": "tmux default socket under the private TMUX_TMPDIR",
+        "exit_code": 0,
+        "printed_attach_command": true,
+        "notice": "tongs-agents workspace: started the detached tmux session '<session2>'; run the command below to attach to it",
+        "sessions": 1,
+        "panes": 2,
+        "profile_claimed": true,
+        "pane_names": [
+          "r4",
+          "tongs-agents-sidebar"
+        ],
+        "exec_attach_clients": 1,
+        "exec_attach_client_is_the_command": true,
+        "panes_after_attach": 2
+      },
+      "cleanup": {
+        "tracked": 9,
+        "survivors": 0,
+        "marker_strays": 0,
+        "servers_killed": 2,
+        "temp_dir_removed": true,
+        "marker_strays_after_run": 0
+      },
+      "user_config_unchanged": true,
+      "user_agent_config_unchanged": true,
+      "duration_seconds": 6.0,
+      "platform": {
+        "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+        "kernel_release": "7.2.11-200.fc44.x86_64",
+        "desktop": "KDE",
+        "session_type": "wayland",
+        "python_version": "3.14.8"
+      },
+      "tested_commit": "69046ced5a365a8d2238172043eba2d1fd3e8a54",
+      "modified_since_commit": false,
+      "sha256": {
+        "src/tongs_agents/commands/sidebar.py": "f9b9f59e00fb81b6f327860f3ada607b49506db641c3d9f0e9b886c7dea09a80",
+        "src/tongs_agents/commands/workspace.py": "555c894dc8ac1ce926e06d0eceddcd9236d8f3af64566847a00c6c43dc416d22",
+        "src/tongs_agents/control.py": "527cee2174cad8e7d01db3d334bf9b66055b9a2a3399b3d486d6a8260bdfc190",
+        "src/tongs_agents/launch.py": "6b4530f4eb2bf3859e7901eacae7e2bf74bb96e648a5aaa45c0ec48322bd3f7d",
+        "src/tongs_agents/launches.py": "0356fa9cf0a43fd8c3790a779f36b05313c02e214b15ddba72968a16f0a0441a",
+        "src/tongs_agents/multiplexers/tmux.py": "a5798ce42f56b1a6c03ca9b1b295bf8dbcf311e43c9e471c7baf24764b7ed1a3",
+        "src/tongs_agents/terminal_apis/tmux.py": "c14dc6aaaf84a4667e3e8732f13d7f1eb647460262b504d136d2c1010a5eb59b",
+        "src/tongs_agents/workspace_spawn.py": "462a0aa712598f7a8617eca6ec4d72dd54583af26875d2d6abeeee86fe9a31bf",
+        "validation/fixtures/fake_repl.py": "63c7adb36164ba465316144ae14e78be4bd2e3ebfa2333d0d7e1ec43699a75eb",
+        "validation/tmux_workspace.py": "a9289070d3c55e01b5361d6d2a28f81705e4ff403f48268a9041ff87404e2edb"
+      }
+    }
+  }
+}

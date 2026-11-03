@@ -19,6 +19,7 @@ from collections.abc import Mapping
 
 from tongs_agents import discovery, launches
 from tongs_agents.multiplexers.base import PaneRef
+from tongs_agents.multiplexers.tmux import env_socket
 from tongs_agents.profiles import (
     CONFIG_DIR_ENV_BY_HARNESS,
     Profile,
@@ -59,7 +60,12 @@ def _pane_text(value) -> bool:
 
 
 def pane_from_env(env: Mapping[str, str]) -> PaneRef | None:
-    """The pane this process runs in, from Zellij or tmux variables only."""
+    """The pane this process runs in, from Zellij or tmux variables only.
+
+    Without ``ZELLIJ`` a tmux pane is ``TMUX_PANE`` on the server socket
+    named by ``TMUX`` (the socket path may itself hold commas). Its session
+    stays the one the launch record was created for.
+    """
     if env.get("ZELLIJ") is not None:
         session = env.get("ZELLIJ_SESSION_NAME")
         pane_id = env.get("ZELLIJ_PANE_ID")
@@ -72,10 +78,13 @@ def pane_from_env(env: Mapping[str, str]) -> PaneRef | None:
             socket_dir = None
         return PaneRef("zellij", session, pane_id, socket_dir)
     tmux_pane = env.get("TMUX_PANE")
-    tmux = env.get("TMUX", "")
-    if tmux_pane and tmux_pane.startswith("%") and is_decimal_id(tmux_pane[1:]):
-        socket = tmux.split(",", 1)[0] or None
-        if socket is not None and not (_pane_text(socket) and os.path.isabs(socket)):
+    if (
+        isinstance(tmux_pane, str)
+        and tmux_pane.startswith("%")
+        and is_decimal_id(tmux_pane[1:])
+    ):
+        socket = env_socket(env)
+        if socket is not None and not _pane_text(socket):
             socket = None
         return PaneRef("tmux", "", tmux_pane, socket)
     return None
