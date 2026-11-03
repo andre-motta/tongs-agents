@@ -25,6 +25,13 @@ never imports the downloader.
 Scope is Linux x86_64 and the `no-web` build. On any other platform both verbs
 print `unsupported, install zellij >= <floor> manually` and exit 2.
 
+`tongs-agents zellij install --web` installs the pinned full build with the
+web server instead (the `web_pins` table below), into
+`state_dir()/bin/zellij-web-<version>/` behind the symlink
+`state_dir()/bin/zellij-web`, with the same checks. It never replaces the
+no-web link, `doctor --fix zellij` never installs it, and it is used only
+while [web watching](web.md) is enabled.
+
 What the installer does, refusing at the first doubt:
 
 1. Picks the pin for this platform from the packaged table.
@@ -55,6 +62,17 @@ not added to `PATH`, so a shell started inside the workspace still runs the
 Evidence of a live run on Linux x86_64 is recorded in
 [`validation/evidence/zellij-download-linux-x86_64.json`](../validation/evidence/zellij-download-linux-x86_64.json).
 
+## Web build pins
+
+`web_pins` has the same shape as `pins` (version, then platform), and each
+entry's `flavor` is `web`. Its asset is the official full build
+(`zellij-x86_64-unknown-linux-musl.tar.gz`, no `no-web` prefix), and
+`binary_sha256` is required: the installer refuses a web pin without it.
+Hosted CI does not download web pins; they are checked by
+`python validation/zellij_web.py` (see [web watching](web.md)). The 0.45.1 web
+pin was approved with the [chat and web design](work/agent-chat.md) (row 17);
+its digests match the release's published checksum.
+
 ## Bumping a pin
 
 The project maintainer owns the pin table. An agent or contributor may
@@ -83,6 +101,10 @@ To add a release or move the floor or ceiling:
    becomes the floor or ceiling, then rerun the managed download once
    (`tongs-agents zellij install --version X.Y.Z` with a temporary
    `TONGS_AGENTS_STATE_DIR`) to confirm the new pin installs.
+
+A web pin is bumped the same way from the release's full (not `no-web`)
+tarball, followed by `python validation/zellij_web.py` instead of the hosted
+jobs.
 
 Never edit a digest to make a failing download pass. A digest mismatch means
 the asset changed upstream or in transit; stop and investigate.

@@ -57,7 +57,7 @@ def _assert_entry(version, platform, entry):
 def test_schema_is_valid():
     table = _load()
 
-    assert set(table) == {"floor", "validated_ceiling", "pins"}
+    assert set(table) == {"floor", "validated_ceiling", "pins", "web_pins"}
     _version(table["floor"])
     _version(table["validated_ceiling"])
     assert isinstance(table["pins"], dict) and table["pins"]

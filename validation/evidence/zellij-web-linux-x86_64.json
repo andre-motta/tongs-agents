@@ -1,0 +1,295 @@
+{
+  "schema": "zellij-web-validation/1",
+  "result": "pass",
+  "error": null,
+  "provenance": "live",
+  "provenance_detail": "real pinned Zellij web build, web server, sessions and PTY clients; real tongs-agents zellij install --web, web enable, workspace, web tokens revoke and web disable in a private root; a stdlib HTTP and websocket client stands in for the browser; fake harness fixtures stand in for agents; row selection runs the real SidebarApp headless with the sidebar pane's identity",
+  "secrets": "tokens and cookies were held in memory only; this file was checked for every one of them before it was written",
+  "path_zellij_version": "zellij 0.45.1",
+  "web_build": {
+    "source": "tongs-agents zellij install --web (downloaded from GitHub)",
+    "exit_code": 0,
+    "version": "0.45.1",
+    "asset": "zellij-x86_64-unknown-linux-musl.tar.gz",
+    "tarball_sha256_pinned": "40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc",
+    "binary_sha256": "d006c521dcb475a6005d741e9dd7c5758e5a23b28dd60a5c10cebfa4876319dd",
+    "binary_matches_pin": true
+  },
+  "before_enable": {
+    "zellij_binary_is_web_build": false,
+    "new_session_options": []
+  },
+  "enable": {
+    "argv": [
+      "tongs-agents",
+      "web",
+      "enable",
+      "--port",
+      "<port>"
+    ],
+    "exit_code": 0,
+    "stdout_lines": [
+      "Web watching is on at http://127.0.0.1:<port>/<session> (127.0.0.1 only, plain HTTP).",
+      "Read-only token token_1, shown once and not stored: <redacted>",
+      "From another device: ssh -L <port>:127.0.0.1:<port> <this host>, then open the URL there.",
+      "A workspace session started before web watching was enabled is not shared; quit 'agents' and run 'tongs-agents workspace' again to watch it."
+    ],
+    "stderr_tail": "",
+    "token_printed_once": true,
+    "token_name": "token_1"
+  },
+  "after_enable": {
+    "zellij_binary_is_web_build": true,
+    "new_session_options": [
+      "options",
+      "--web-sharing",
+      "on"
+    ],
+    "listening_addresses": [
+      "127.0.0.1"
+    ],
+    "config_bind": "127.0.0.1",
+    "tokens_db_mode": "0o600",
+    "web_dir_mode": "0o700",
+    "doctor": [
+      [
+        "web",
+        "ok"
+      ]
+    ]
+  },
+  "unauthenticated": {
+    "GET /": 200,
+    "GET /session-list": 401,
+    "POST /session": 401,
+    "bad_token_login": 401,
+    "ws /ws/terminal": 401
+  },
+  "workspace": {
+    "argv": [
+      "tongs-agents",
+      "workspace",
+      "--profile",
+      "f1",
+      "--profile",
+      "f2",
+      "--no-tongs",
+      "--session",
+      "<session>"
+    ],
+    "session_listed_seconds": 0.21,
+    "panes_listed_seconds": 0.42,
+    "session_budget_seconds": 5.0,
+    "terminal_panes": 3,
+    "expected_terminal_panes": 3,
+    "pane_titles": [
+      "f1",
+      "f2",
+      "tongs-agents-sidebar"
+    ],
+    "sidebar_panes": 1
+  },
+  "workspace_server_runs_web_build": true,
+  "unshared_sessions": {
+    "login_status": 200,
+    "session_list_status": 200,
+    "session_list_keys": [
+      "sessions"
+    ],
+    "sessions_listed": 2,
+    "workspace_listed": true,
+    "no_web_build_session": {
+      "bootstrap_status": 200,
+      "is_read_only": true,
+      "terminal_upgrade": 101,
+      "control_upgrade": 101,
+      "terminal_bytes": 19,
+      "terminal_closed": true,
+      "control_messages": [
+        "{\"type\":\"LogError\",\"lines\":[\"This session does not allow web connections.\"]}"
+      ],
+      "listed": true
+    },
+    "web_build_session_without_sharing": {
+      "bootstrap_status": 200,
+      "is_read_only": true,
+      "terminal_upgrade": 101,
+      "control_upgrade": 101,
+      "terminal_bytes": 19,
+      "terminal_closed": true,
+      "control_messages": [
+        "{\"type\":\"LogError\",\"lines\":[\"This session does not allow web connections.\"]}"
+      ],
+      "listed": false
+    }
+  },
+  "read_only_viewer": {
+    "bootstrap_status": 200,
+    "is_read_only": true,
+    "terminal_upgrade": 101,
+    "control_upgrade": 101,
+    "terminal_bytes": 28617,
+    "terminal_closed": false,
+    "control_messages": []
+  },
+  "focus_with_web_viewer": {
+    "driver": "SidebarApp run headless in the validator with the sidebar pane's Zellij identity; Enter on each agent row; readback by zellij list-clients and keystrokes typed by the interactive client",
+    "list_clients_with_viewer": 2,
+    "parent_activation_calls": [],
+    "steps": [
+      {
+        "profile": "f1",
+        "state": "partial",
+        "selection_succeeded": true,
+        "activation_attempted": false,
+        "activation_detail": "skipped: same zellij session",
+        "interactive_client_was_elsewhere": true,
+        "interactive_client_moved_to_target": true,
+        "keystroke_routed_to": [
+          "f1"
+        ],
+        "web_viewer_still_open": true
+      },
+      {
+        "profile": "f2",
+        "state": "partial",
+        "selection_succeeded": true,
+        "activation_attempted": false,
+        "activation_detail": "skipped: same zellij session",
+        "interactive_client_was_elsewhere": true,
+        "interactive_client_moved_to_target": true,
+        "keystroke_routed_to": [
+          "f2"
+        ],
+        "web_viewer_still_open": true
+      }
+    ]
+  },
+  "read_only_typing": {
+    "panes_captured": 3,
+    "captures_failed": [],
+    "marker_in_agent_input_logs": [],
+    "marker_in_pane_captures": [],
+    "list_clients_before": [
+      "terminal_2",
+      "terminal_2"
+    ],
+    "list_clients_after": [
+      "terminal_2",
+      "terminal_2"
+    ],
+    "viewer_terminal_open": true,
+    "positive_control": {
+      "typed_by": "the interactive PTY client, on an agent pane after the focus step",
+      "agent_input_logs": [
+        "f2"
+      ],
+      "pane_captures": [
+        "2"
+      ]
+    }
+  },
+  "revoke": {
+    "argv": [
+      "tongs-agents",
+      "web",
+      "tokens",
+      "revoke",
+      "<token name>"
+    ],
+    "exit_code": 0,
+    "stdout_lines": [
+      "Successfully revoked token.",
+      "Restarted the web server to close every open connection; viewers with other tokens reconnect."
+    ],
+    "open_terminal_websocket_closed": true,
+    "seconds_to_close": 0.26,
+    "close_budget_seconds": 10.0,
+    "revoked_cookie_session_list": 401,
+    "revoked_cookie_bootstrap": 401,
+    "revoked_token_login": 401
+  },
+  "enable_again": {
+    "argv": [
+      "tongs-agents",
+      "web",
+      "enable",
+      "--port",
+      "<port>"
+    ],
+    "exit_code": 0,
+    "stdout_lines": [
+      "Web watching is on at http://127.0.0.1:<port>/<session> (127.0.0.1 only, plain HTTP).",
+      "Read-only token token_1, shown once and not stored: <redacted>",
+      "From another device: ssh -L <port>:127.0.0.1:<port> <this host>, then open the URL there.",
+      "A workspace session started before web watching was enabled is not shared; quit 'agents' and run 'tongs-agents workspace' again to watch it."
+    ],
+    "stderr_tail": "",
+    "token_printed_once": true,
+    "token_name": "token_1"
+  },
+  "raw_zellij_revoke": {
+    "argv": [
+      "zellij",
+      "web",
+      "--revoke-token",
+      "<token name>"
+    ],
+    "exit_code": 0,
+    "terminal_websocket_open_before": true,
+    "terminal_websocket_still_open_after_seconds": 5.0,
+    "bytes_received_while_open": 72109,
+    "revoked_cookie_session_list": 401,
+    "note": "recorded, not a gate: Zellij 0.45.1 alone left the open websocket of a revoked token open, so tongs-agents web tokens revoke restarts the server"
+  },
+  "disable": {
+    "exit_code": 0,
+    "stdout_lines": [
+      "Web watching is off. New workspace sessions use the usual zellij."
+    ],
+    "port_listening_after": [],
+    "owned_server_processes_after": 0,
+    "tokens_after": [
+      "No tokens."
+    ],
+    "zellij_binary_is_web_build": false,
+    "new_session_options": []
+  },
+  "cleanup": {
+    "tracked": 8,
+    "survivors": 0,
+    "marker_strays": 0,
+    "temp_dir_removed": true,
+    "marker_strays_after_run": 0
+  },
+  "user_config_unchanged": true,
+  "user_agent_config_unchanged": true,
+  "user_zellij_cache_entries_for_run": 0,
+  "not_tested": [
+    "a real browser (cookie and Origin behaviour of browsers)",
+    "HTTPS with a certificate and any bind address other than 127.0.0.1",
+    "whether the web server counts as a unix-socket peer for parent activation",
+    "the share plugin toggling sharing at runtime",
+    "Zellij 0.44.2 (no web build is pinned for it)"
+  ],
+  "duration_seconds": 19.1,
+  "platform": {
+    "os": "Fedora Linux 44 (KDE Plasma Desktop Edition)",
+    "kernel_release": "7.2.11-200.fc44.x86_64",
+    "desktop": "KDE",
+    "session_type": "wayland",
+    "python_version": "3.14.8"
+  },
+  "tested_commit": "7a771805d74e3575933d959643e6561ee21f580f",
+  "modified_since_commit": false,
+  "sha256": {
+    "src/tongs_agents/commands/web.py": "ff2f3cbb2cdda564702ce69ac07dd5073e4f087c6f216d8214fb043266af057c",
+    "src/tongs_agents/commands/workspace.py": "f846938a77501ca7f251c9bf20dd33a08a609b24b3a013898b5434acfba621f9",
+    "src/tongs_agents/commands/zellij.py": "570268136d4fd2212b3456852e28615b4c0f327463d4f9fae47768eb6dc5bbd3",
+    "src/tongs_agents/data/zellij_pins.json": "cf7815fd147441ef1b21afeb09208e984a0a69df19dbb7013aa91167731984dd",
+    "src/tongs_agents/multiplexers/zellij_binary.py": "d8be8770a0f251caaca14fdace82b6075c79bd628fd1e67ccf854999f1ffbd14",
+    "src/tongs_agents/zellij_download.py": "0ccd322d2a0d809738f48cf79ccd4acaca477dfc1c55565147c1f932545ebe68",
+    "validation/workspace.py": "c407453f74e0e071988ee59a0471111f1e675a44c2d9d64f66748c21948438c3",
+    "validation/zellij_web.py": "bdad257cf6203d03ff24229f5233ca2293885efe02dfd5bebe2da2e18117ee12"
+  }
+}

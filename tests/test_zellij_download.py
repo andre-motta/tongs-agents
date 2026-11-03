@@ -488,3 +488,124 @@ def test_hook_never_imports_the_downloader_or_opens_a_socket(tmp_path):
 
     assert report == {"attempts": 0, "download_imported": False, "urllib_request_imported": False}
     assert list((tmp_path / "state" / "sessions").glob("*.json"))
+
+
+WEB_URL = "https://example.invalid/releases/zellij-x86_64-unknown-linux-musl.tar.gz"
+RELEASES = "https://github.com/zellij-org/zellij/releases/download/"
+
+
+def _web_table(asset, binary=FAKE_BINARY, **overrides):
+    table = _table(_binary_tar(b"#!/bin/sh\necho 'zellij 0.45.1 no-web'\n"))
+    entry = {
+        "flavor": "web",
+        "asset": "zellij-x86_64-unknown-linux-musl.tar.gz",
+        "url": WEB_URL,
+        "sha256": hashlib.sha256(asset).hexdigest(),
+        "size": len(asset),
+        "binary_sha256": hashlib.sha256(binary).hexdigest(),
+    }
+    entry.update(overrides)
+    table["web_pins"] = {"0.45.1": {"linux-x86_64": entry}}
+    return table
+
+
+def test_packaged_web_pin_is_the_reviewed_full_build(linux):
+    table = zellij_download.load_pins()
+    pin = zellij_download.select_pin(flavor=zellij_download.WEB)
+
+    assert set(table["web_pins"]) == {"0.45.1"}
+    assert pin.flavor == "web"
+    assert pin.asset == "zellij-x86_64-unknown-linux-musl.tar.gz"
+    assert pin.url == f"{RELEASES}v0.45.1/{pin.asset}"
+    assert pin.sha256 == "40bcc2e03f5d5ae8e054e39f676081fe12ab70871506996ba595834c3718eefc"
+    assert pin.size == 18729165
+    assert pin.binary_sha256 == (
+        "d006c521dcb475a6005d741e9dd7c5758e5a23b28dd60a5c10cebfa4876319dd")
+    assert zellij_download.select_pin().flavor == "no-web"
+
+
+def test_web_pin_needs_a_binary_digest_and_a_known_flavor(linux, monkeypatch):
+    asset = _binary_tar()
+    table = _web_table(asset)
+    del table["web_pins"]["0.45.1"]["linux-x86_64"]["binary_sha256"]
+    _use(monkeypatch, table)
+
+    with pytest.raises(zellij_download.DownloadError, match="binary_sha256"):
+        zellij_download.select_pin(flavor="web")
+    with pytest.raises(zellij_download.DownloadError, match="unknown zellij flavor"):
+        zellij_download.select_pin(flavor="full")
+
+
+def test_no_web_entry_is_never_installed_as_web(linux, monkeypatch):
+    asset = _binary_tar()
+    table = _web_table(asset)
+    table["web_pins"]["0.45.1"]["linux-x86_64"]["flavor"] = "no-web"
+    _use(monkeypatch, table)
+
+    with pytest.raises(zellij_download.DownloadError, match="not 'web'"):
+        zellij_download.select_pin(flavor="web")
+
+
+def test_web_build_installs_beside_the_no_web_link(linux, no_path_zellij, monkeypatch):
+    asset = _binary_tar()
+    _use(monkeypatch, _web_table(asset))
+
+    installed = zellij_download.install(opener=_Opener(asset), flavor="web")
+
+    assert installed.binary == _bin_dir() / "zellij-web-0.45.1" / "zellij"
+    assert installed.link == _bin_dir() / "zellij-web"
+    assert os.readlink(installed.link) == os.path.join("zellij-web-0.45.1", "zellij")
+    assert _mode(installed.binary.parent) == 0o700
+    assert _bin_entries() == ["zellij-web", "zellij-web-0.45.1"]
+    assert zellij_binary.managed_binary() is None
+    assert zellij_binary.zellij_binary() is None
+
+
+def test_web_build_digest_mismatch_installs_nothing(linux, monkeypatch):
+    asset = _binary_tar()
+    _use(monkeypatch, _web_table(asset, binary_sha256="0" * 64))
+
+    with pytest.raises(zellij_download.DownloadError, match="does not match"):
+        zellij_download.install(opener=_Opener(asset), flavor="web")
+
+    assert _bin_entries() == []
+
+
+def test_zellij_install_web_verb(linux, no_path_zellij, monkeypatch, capsys):
+    asset = _binary_tar()
+    _use(monkeypatch, _web_table(asset))
+    real_install = zellij_download.install
+    flavors = []
+
+    def fake_install(version=None, **kwargs):
+        flavors.append(kwargs.get("flavor"))
+        return real_install(version, opener=_Opener(asset), **kwargs)
+
+    monkeypatch.setattr(zellij_download, "install", fake_install)
+
+    code, out, _ = _cli(monkeypatch, capsys, "zellij", "install", "--web")
+
+    assert code == 0, out
+    assert flavors == ["web"]
+    assert "Installed zellij 0.45.1 (web)" in out
+    assert "only while web watching is enabled" in out
+    assert zellij_binary.managed_web_binary() == str(_bin_dir() / "zellij-web")
+    assert zellij_binary.zellij_binary() is None
+
+
+def test_doctor_fix_never_installs_the_web_build(linux, no_path_zellij, monkeypatch, capsys):
+    asset = _binary_tar()
+    _use(monkeypatch, _table(asset))
+    real_install = zellij_download.install
+    flavors = []
+
+    def fake_install(version=None, **kwargs):
+        flavors.append(kwargs.get("flavor"))
+        return real_install(version, opener=_Opener(asset), **kwargs)
+
+    monkeypatch.setattr(zellij_download, "install", fake_install)
+
+    code, _, _ = _cli(monkeypatch, capsys, "doctor", "--fix", "zellij")
+
+    assert code == 0
+    assert flavors == ["no-web"]
