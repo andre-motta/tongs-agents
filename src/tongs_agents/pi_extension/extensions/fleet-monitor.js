@@ -7,9 +7,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const RUNTIME_KEY = Symbol.for("claude-fleet-monitor.pi.runtime.v1");
-const CONFIG_OWNER = "claude-fleet-monitor";
-const CONFIG_NAME = "claude-fleet-monitor.json";
+const RUNTIME_KEY = Symbol.for("tongs-agents.pi.runtime.v1");
+const CONFIG_OWNER = "tongs-agents";
+const CONFIG_NAME = "tongs-agents.json";
 const MAX_QUEUE = 128;
 const SEND_TIMEOUT_MS = 1500;
 const MAX_CONFIG_BYTES = 16 * 1024;
@@ -244,7 +244,7 @@ function outcomeFromMessages(messages) {
   return { status: "idle", detail: "finished" };
 }
 
-export default function fleetMonitor(pi) {
+export default function tongsAgents(pi) {
   if (!config) return;
   pi.on("session_start", (event, ctx) => {
     const id = sessionId(ctx);

@@ -1,4 +1,4 @@
-"""Stale claude-fleet names may only remain in files that own the migration or history."""
+"""Stale claude-fleet names may only remain in the cleanup markers and in history."""
 
 import re
 from pathlib import Path
@@ -6,14 +6,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCANNED = ("docs", "src", "tests", "validation")
 LEGACY = re.compile(r"claude_fleet_monitor|claude-fleet-hook|CLAUDE_FLEET_MONITOR")
+# Cleanup markers only: the module that spells them, the upgrade test that
+# builds a synthetic 0.9.x install from them, this guard and the user guide
+# that tells people what gets cleaned up.
 ALLOWED_FILES = {
     "src/tongs_agents/legacy.py",
     "tests/test_upgrade.py",
     "tests/test_legacy_names.py",
     "docs/migration.md",
-    "docs/work/harnesses-desktop.md",
-    "docs/work/harness-facts.md",
-    "docs/work/agent-workspace-plan.md",
 }
 
 
@@ -21,8 +21,11 @@ def _allowed(relative: str) -> bool:
     if relative in ALLOWED_FILES:
         return True
     parts = relative.split("/")
-    # Committed evidence (validation/evidence/, validation/shells/evidence/, ...)
-    # is historical and keeps the pre-rename names until it is rerun.
+    # Dated work records under docs/work/ and committed evidence
+    # (validation/evidence/, validation/shells/evidence/, ...) are history and
+    # are never rewritten.
+    if parts[:2] == ["docs", "work"] and len(parts) == 3:
+        return True
     return parts[0] == "validation" and "evidence" in parts[1:-1]
 
 
@@ -54,7 +57,10 @@ def test_allowlist_covers_evidence_but_not_neighbours():
     assert _allowed("validation/shells/evidence/baseline.json")
     assert not _allowed("validation/tmux.py")
     assert not _allowed("validation/shells/run.py")
-    assert not _allowed("docs/work/harness-contract.md")
+    assert _allowed("docs/work/harness-facts.md")
+    assert not _allowed("docs/work/nested/new.md")
+    assert not _allowed("docs/pi.md")
+    assert not _allowed("src/tongs_agents/cli.py")
 
 
 def test_pattern_matches_each_legacy_spelling():

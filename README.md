@@ -7,7 +7,7 @@
 
 A standalone agent workspace companion app for [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and [Codex](https://learn.chatgpt.com/codex) sessions, with optional [Pi](https://github.com/earendil-works/pi) lifecycle integration. See all your running agent sessions at a glance, get notified when one needs input, and jump to the right terminal tab instantly. It runs on its own; the [tongs](https://github.com/andre-motta/tongs) plugin is an optional extra.
 
-> **Formerly `claude-fleet-monitor`.** tongs-agents continues that project under a new name as a standalone companion app. The session directory (`~/.claude/fleet/`), the MCP server name (`fleet`) and the Pi configuration file are unchanged in this release. See [Upgrading from claude-fleet-monitor](#upgrading-from-claude-fleet-monitor). Issue and PR numbers before the rename refer to the [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
+> **Formerly `claude-fleet-monitor`.** tongs-agents continues that project under a new name as a standalone companion app, with its own runtime names: sessions live in `$XDG_STATE_HOME/tongs-agents/sessions/`, the MCP server is named `tongs-agents`, the Pi configuration file is `tongs-agents.json` and the tongs plugin entry point is `agents`. `tongs-agents install` cleans up a claude-fleet-monitor 0.9.x install. See [Upgrading from claude-fleet-monitor](#upgrading-from-claude-fleet-monitor). Issue and PR numbers before the rename refer to the [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
 
 ## Features
 
@@ -31,9 +31,9 @@ before adding another harness.
 
 | Harness | Lifecycle ingestion | Process identity | Terminal selection | GUI window activation | MCP consumer access | Native harness MCP registration |
 | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | Installed native hooks for start, prompt, tool, permission, stop, failure, elicitation and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | Fleet MCP is available to configured Claude Code sessions | Fleet MCP is registered in Claude Code settings by the default installer |
-| Codex | Installed native hooks for start, prompt, tool, permission, stop and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | Fleet MCP is available to configured Codex sessions | When the Codex CLI is available, the default installer registers Fleet MCP through the Codex MCP configuration |
-| Pi | Optional dependency-free extension emits normalized `fleet-event` records | Emitter supplies the exact Pi PID, native session ID, extension instance and sequence; Pi is not process-name discovered | Accepted live validation selected the exact tmux pane for a real Pi process; other terminal backends require their own evidence | No live desktop GUI result is claimed; detached tmux has no GUI parent and reports activation separately | Fleet consumers can read Pi records, but Pi itself has no Fleet MCP client | None; Pi installation adds the lifecycle extension only |
+| Claude Code | Installed native hooks for start, prompt, tool, permission, stop, failure, elicitation and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | The `tongs-agents` MCP server is available to configured Claude Code sessions | When the Claude Code CLI is available, the default installer registers it with `claude mcp add --scope user` |
+| Codex | Installed native hooks for start, prompt, tool, permission, stop and end | Discoverable by registered exact process names and ancestry; unresolved records are explicit when process evidence is unavailable | Captured terminal metadata is dispatched to the matching backend; result is complete, partial, unavailable or failed according to observed operations | Desktop conversation targets have no accepted backend; parent-terminal activation is backend-specific | The `tongs-agents` MCP server is available to configured Codex sessions | When the Codex CLI is available, the default installer registers it with `codex mcp add` |
+| Pi | Optional dependency-free extension emits normalized `fleet-event` records | Emitter supplies the exact Pi PID, native session ID, extension instance and sequence; Pi is not process-name discovered | Accepted live validation selected the exact tmux pane for a real Pi process; other terminal backends require their own evidence | No live desktop GUI result is claimed; detached tmux has no GUI parent and reports activation separately | Consumers can read Pi records, but Pi itself has no tongs-agents MCP client | None; Pi installation adds the lifecycle extension only |
 
 The evidence behind this table has defined limits:
 
@@ -248,10 +248,13 @@ pip install .
 tongs-agents install
 ```
 
-The installer updates Claude Code's `~/.claude/settings.json`, writes Codex
-hooks to `~/.codex/hooks.json`, and registers the Fleet MCP server for Claude
-Code and, when the Codex CLI is available, Codex. Restart your sessions after
-the first install. Codex requires you to review and trust the installed hooks
+The installer writes Claude Code hooks to `~/.claude/settings.json` and Codex
+hooks to `~/.codex/hooks.json`, and registers the `tongs-agents` MCP server
+through the Claude Code CLI (`claude mcp add --scope user`, which writes
+`~/.claude.json`) and the Codex CLI (`codex mcp add`) when they are installed.
+Session records go to `$XDG_STATE_HOME/tongs-agents/sessions/`
+(`~/.local/state/tongs-agents/sessions/` by default), a private directory.
+Restart your sessions after the first install. Codex requires you to review and trust the installed hooks
 through `/hooks` before they run.
 
 Pi support is optional and requires Pi 0.84.4 or newer:
@@ -274,7 +277,9 @@ Tongs Agents works without tongs. To also use it as an optional plugin inside
 pip install tongs-agents[tongs]
 ```
 
-Then launch tongs and open the command palette (Ctrl+P) to find "Fleet Monitor".
+The plugin registers under the `tongs.plugins` entry point `agents` (tongs
+config key `[plugins.agents]`). Launch tongs and open the command palette
+(Ctrl+P) to find "Fleet Monitor".
 
 ### Upgrading
 
@@ -289,10 +294,13 @@ hook paths.
 
 ### Upgrading from claude-fleet-monitor
 
-Follow the [migration guide](docs/migration.md). In short, run
-`claude-fleet uninstall --keep-data` and `pip uninstall claude-fleet-monitor`
-before `tongs-agents install`, so the two hook commands do not both run. Session
-data in `~/.claude/fleet/` is kept.
+Run `tongs-agents install` (add `--agent all` if you used Pi). It removes the
+claude-fleet-monitor hooks, its `fleet` MCP entries and its Pi extension, and
+keeps everything else. Then run `pip uninstall claude-fleet-monitor` and
+`tongs-agents doctor`, which reports anything left over, including the old
+`~/.claude/fleet/` directory and the command to remove it. Nothing is
+migrated: old session records are live status that goes stale within minutes.
+See the [migration guide](docs/migration.md).
 
 ### Dependencies
 
@@ -340,7 +348,7 @@ tongs-agents status
 
 ### MCP Tools
 
-Any Claude Code or Codex session with the fleet MCP server can use these tools:
+Any Claude Code or Codex session with the `tongs-agents` MCP server can use these tools:
 
 | Tool | Description |
 |------|-------------|
@@ -358,7 +366,7 @@ Ask your agent: "what sessions are running?" or "focus on the autofix session".
                                                               <-- MCP server
 Claude Code sessions --\                                      <-- TUI monitor
   (hooks per event)     |                                      <-- tongs plugin
-                       |-- write --> ~/.claude/fleet/*.json    <-- CLI status
+                       |-- write --> sessions/*.json           <-- CLI status
 Codex sessions --------|                                      <-- focus command
   (hooks per event)     |
 Pi sessions ------------|
@@ -368,7 +376,7 @@ Pi sessions ------------|
 ```
 
 1. **Hooks** fire on Claude Code and Codex events; the optional Pi extension translates Pi lifecycle events
-2. Each hook captures the session's **terminal type** and **PID**, writes to `~/.claude/fleet/`
+2. Each hook captures the session's **terminal type** and **PID**, writes to the private sessions directory (`$XDG_STATE_HOME/tongs-agents/sessions/`)
 3. **Process discovery** scans for `claude` and `codex` processes cross-platform to find sessions without hooks
 4. **Consumers** (TUI, MCP, tongs plugin, CLI, focus) read the JSON files
 5. **Focus** reads the session's `terminal` field and dispatches to the right terminal API
@@ -380,7 +388,7 @@ Hook fires inside session
   --> Linux: nearest known terminal or multiplexer ancestor (/proc/<pid>/stat only)
   --> otherwise detect terminal via env vars (TMUX, KONSOLE_VERSION, ITERM_SESSION_ID, ...)
   --> capture terminal-specific env (socket paths, DBus service, session IDs)
-  --> store in fleet JSON: {"terminal": "tmux", "terminal_env": {"TMUX": "..."}}
+  --> store in the session JSON: {"terminal": "tmux", "terminal_env": {"TMUX": "..."}}
 
 Focus command reads session JSON
   --> get_terminal_api("tmux") --> TmuxAPI
@@ -409,6 +417,8 @@ src/tongs_agents/
     discovery.py        # Process discovery, session file I/O
     tui.py              # Textual standalone app (FleetMonitorApp)
     cli.py              # tongs-agents CLI entry point
+    paths.py            # State and sessions directories
+    legacy.py           # claude-fleet-monitor cleanup markers
     pi_install.py       # Optional Pi package lifecycle
     pi_extension/       # Dependency-free packaged Pi bridge
     focus.py            # Session lookup + terminal focus dispatch
@@ -461,15 +471,23 @@ src/tongs_agents/
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `FLEET_DIR` | `~/.claude/fleet` | Shared directory for Claude Code and Codex session status files |
+| `TONGS_AGENTS_STATE_DIR` | `$XDG_STATE_HOME/tongs-agents` (`~/.local/state/tongs-agents`) | State directory; session status files live in its `sessions/` subdirectory |
+| `XDG_STATE_HOME` | `~/.local/state` | Base of the default state directory (ignored when relative) |
+
+`FLEET_DIR` is no longer read.
 
 ### Uninstall
 
 ```bash
-tongs-agents uninstall              # removes hooks, MCP config, and data
-tongs-agents uninstall --keep-data  # keeps ~/.claude/fleet/
-tongs-agents uninstall --agent pi   # removes only Fleet's owned Pi extension
+tongs-agents uninstall              # removes hooks, MCP config, and session records
+tongs-agents uninstall --keep-data  # keeps the sessions directory
+tongs-agents uninstall --agent pi   # removes only the Pi extensions tongs-agents owns
+tongs-agents doctor                 # reports claude-fleet-monitor leftovers
 ```
+
+Uninstall also removes the claude-fleet-monitor hooks and MCP entries of the
+selected agents, and its Pi extension with `--agent pi` or `--agent all`. It never deletes the old `~/.claude/fleet/` directory; `doctor`
+prints the command to remove it.
 
 ## Contributing
 

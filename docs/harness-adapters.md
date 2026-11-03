@@ -141,8 +141,11 @@ unresolved placeholder after a successful identity migration.
 
 ## Storage, privacy and fail-open behavior
 
-All writes go through [discovery.py](../src/tongs_agents/discovery.py).
-The configured Fleet directory cannot be a symlink. Symlink record and lock
+All writes go through [discovery.py](../src/tongs_agents/discovery.py) into
+the sessions directory from [paths.py](../src/tongs_agents/paths.py):
+`$XDG_STATE_HOME/tongs-agents/sessions` (`~/.local/state/tongs-agents/sessions`
+by default, or `$TONGS_AGENTS_STATE_DIR/sessions`). The state and sessions
+directories are created private (0700) and cannot be symlinks. Symlink record and lock
 entries are ignored or rejected, depending on the operation. Each canonical
 record has its own lock; writes use a private temporary file, flush and an
 atomic replacement, so readers observe a complete old or new document. A
@@ -154,7 +157,7 @@ or arbitrary command field. Details and tool names must be deliberately
 bounded. A native hook may receive richer input from its harness, but the
 translation boundary must discard fields Fleet does not need.
 
-Delivery is best effort. A rejected event or unavailable Fleet directory must
+Delivery is best effort. A rejected event or unavailable sessions directory must
 not block the harness's own turn. The Pi bridge has a bounded queue and
 bounded send and shutdown waits; it drops intermediate events when necessary
 and keeps the final shutdown attempt bounded. Future bridges must retain this
@@ -164,7 +167,11 @@ runtimes into the hook path.
 ## Installer and package ownership
 
 The [CLI installer](../src/tongs_agents/cli.py) owns Claude Code and
-Codex hook configuration and the Fleet MCP registration. The default command
+Codex hook configuration and the `tongs-agents` MCP registration, made through
+`claude mcp add --scope user` and `codex mcp add`. It also removes the
+claude-fleet-monitor 0.9.x hooks and `fleet` MCP entries it recognizes (see
+[legacy.py](../src/tongs_agents/legacy.py) and the
+[migration guide](migration.md)). The default command
 configures those two harnesses. Pi is explicit opt-in:
 
 ```bash
@@ -175,11 +182,11 @@ tongs-agents install --agent pi
 an upgrade path and an uninstall path. It must preserve unrelated settings and
 must not silently convert an existing user-owned configuration.
 
-Pi's [installer](../src/tongs_agents/pi_install.py) records an ownership
-marker, exact absolute hook and extension paths, and all managed paths. It
+Pi's [installer](../src/tongs_agents/pi_install.py) records the ownership
+marker `tongs-agents` in `tongs-agents.json`, exact absolute hook and extension paths, and all managed paths. It
 installs the new package path before removing old owned references; failed old
 removals remain recorded for retry. It refuses an unowned config, removes only
-paths recorded as Fleet-owned and leaves unrelated extensions in place. A new
+paths recorded as owned by tongs-agents and leaves unrelated extensions in place. A new
 adapter must define equivalent ownership and migration behavior before its
 install command is advertised.
 
@@ -241,7 +248,7 @@ Before calling an adapter supported, contributors should provide:
    session switching. A process name in an arbitrary argument is not enough.
 5. Storage tests for symlinks, path traversal, lock contention, atomic
    visibility and legacy records, plus proof that payload fields cannot escape
-   the Fleet directory.
+   the sessions directory.
 6. Fail-open timing and shutdown tests that do not block the harness or import
    heavy Fleet consumers.
 7. Installer tests for clean install, idempotence, virtual-environment or

@@ -8,10 +8,12 @@ import tempfile
 from importlib.resources import files
 from pathlib import Path
 
+from tongs_agents import legacy
+
 
 MINIMUM_PI_VERSION = (0, 84, 4)
-PI_CONFIG_NAME = "claude-fleet-monitor.json"
-PI_CONFIG_OWNER = "claude-fleet-monitor"
+PI_CONFIG_NAME = "tongs-agents.json"
+PI_CONFIG_OWNER = "tongs-agents"
 PI_CONFIG_SCHEMA = 1
 _MAX_CONFIG_BYTES = 16 * 1024
 _VERSION_PATTERN = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:\+[^\s]+)?$")
@@ -40,7 +42,7 @@ def pi_extension_path() -> Path:
     return path.resolve(strict=True)
 
 
-def _read_owned_config(path: Path):
+def _read_owned_config(path: Path, owner: str = PI_CONFIG_OWNER):
     if path.is_symlink():
         raise ValueError(f"Refusing to replace unrecognized Pi config: {path}")
     if not path.exists():
@@ -53,7 +55,7 @@ def _read_owned_config(path: Path):
         raise ValueError(f"Refusing to replace unrecognized Pi config: {path}") from error
     if (
         not isinstance(value, dict)
-        or value.get("owner") != PI_CONFIG_OWNER
+        or value.get("owner") != owner
         or value.get("schema_version") != PI_CONFIG_SCHEMA
         or not _absolute_path(value.get("hook_path"))
         or not _absolute_path(value.get("extension_path"))
@@ -91,7 +93,7 @@ def _save_owned_config(path: Path, value: dict):
 
 
 def _isolated_version_environment():
-    temporary = tempfile.TemporaryDirectory(prefix="fleet-pi-version-")
+    temporary = tempfile.TemporaryDirectory(prefix="tongs-agents-pi-version-")
     root = Path(temporary.name)
     environment = os.environ.copy()
     environment.update({
@@ -143,6 +145,39 @@ def _remove_succeeded(result):
     if result is None:
         return False
     return result.returncode == 0 or "No matching package found" in result.stderr
+
+
+def _remove_legacy_pi(pi_command: str | None, keep: str = "") -> bool:
+    """Remove the extension a claude-fleet-monitor install registered with Pi."""
+    config_path = pi_config_dir() / legacy.LEGACY_PI_CONFIG_NAME
+    try:
+        config = _read_owned_config(config_path, legacy.LEGACY_PI_CONFIG_OWNER)
+    except ValueError:
+        print(f"  Kept unrecognized legacy Pi config: {config_path}")
+        return True
+    if config is None:
+        return True
+    if pi_command is None:
+        print("  Pi is required to remove the claude-fleet-monitor Pi extension")
+        return False
+    candidates = [*config["managed_paths"], config["extension_path"]]
+    remaining = []
+    for value in dict.fromkeys(candidates):
+        if value == keep:
+            continue
+        if not _remove_succeeded(_run_pi_package(pi_command, "remove", Path(value))):
+            remaining.append(value)
+    if remaining:
+        print("  Could not remove the claude-fleet-monitor Pi extension; kept "
+              f"{config_path} for retry")
+        return False
+    try:
+        config_path.unlink()
+    except OSError as error:
+        print(f"  Could not remove legacy Pi config: {error}")
+        return False
+    print("  Removed claude-fleet-monitor Pi extension")
+    return True
 
 
 def install_pi(pi_command: str, hook_command: str) -> bool:
@@ -223,13 +258,15 @@ def install_pi(pi_command: str, hook_command: str) -> bool:
     try:
         _save_owned_config(config_path, config)
     except OSError as error:
-        print(f"  Pi installed, but its Fleet config could not be finalized: {error}")
+        print(f"  Pi installed, but its config could not be finalized: {error}")
         return False
     print(f"  Installed Pi extension from {extension_path}")
-    return True
+    return _remove_legacy_pi(pi_command, keep=str(extension_path))
 
 
 def uninstall_pi(pi_command: str | None) -> bool:
+    if not _remove_legacy_pi(pi_command):
+        return False
     config_path = pi_config_dir() / PI_CONFIG_NAME
     try:
         config = _read_owned_config(config_path)

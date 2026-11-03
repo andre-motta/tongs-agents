@@ -238,7 +238,7 @@ def verify_tmux_focus(started, fleet_dir):
         from tongs_agents import discovery
         from tongs_agents.focus import focus_session
 
-        discovery.FLEET_DIR = fleet_dir
+        os.environ["TONGS_AGENTS_STATE_DIR"] = str(fleet_dir.parent)
         result = focus_session(started["canonical_id"])
         after = active_tmux_pane(command)
         evidence = result.to_dict()
@@ -279,10 +279,11 @@ def validate(require_tmux):
         root = Path(temporary)
         config = root / "config"
         sessions = root / "sessions"
-        fleet_dir = root / "fleet"
+        state_dir = root / "state"
+        fleet_dir = state_dir / "sessions"
         config.mkdir()
         sessions.mkdir()
-        fleet_dir.mkdir()
+        fleet_dir.mkdir(mode=0o700, parents=True)
         fixture_extension = Path(__file__).with_name("fixture-extension.mjs").resolve()
         fixture_file = root / "fixture.txt"
         fixture_file.write_text("Public synthetic validation fixture.\n")
@@ -317,7 +318,7 @@ def validate(require_tmux):
             "PI_CODING_AGENT_DIR": str(config),
             "PI_OFFLINE": "1",
             "PI_TELEMETRY": "0",
-            "FLEET_DIR": str(fleet_dir),
+            "TONGS_AGENTS_STATE_DIR": str(state_dir),
             "LANG": "C.UTF-8",
         })
 
@@ -486,7 +487,7 @@ def validate(require_tmux):
             abrupt.process.wait(timeout=10)
             from tongs_agents import discovery
 
-            discovery.FLEET_DIR = fleet_dir
+            os.environ["TONGS_AGENTS_STATE_DIR"] = str(fleet_dir.parent)
             discovery.read_sessions()
             if any(
                 item.get("canonical_id") == abrupt_record["canonical_id"]
@@ -526,7 +527,7 @@ def validate(require_tmux):
             raise RuntimeError("Pi uninstall removed an unrelated extension")
         if uninstalled_settings.get("packages"):
             raise RuntimeError("Pi uninstall left its managed package reference")
-        if (config / "claude-fleet-monitor.json").exists():
+        if (config / "tongs-agents.json").exists():
             raise RuntimeError("Pi uninstall left its ownership config")
         repeated_uninstall = subprocess.run(
             [

@@ -27,7 +27,7 @@ Tests use `tmp_path` fixtures and mock the filesystem. No running Claude Code or
 ## Architecture
 
 ```
-hooks (hook.py)  -->  ~/.claude/fleet/*.json  <--  discovery.py
+hooks (hook.py)  -->  $XDG_STATE_HOME/tongs-agents/sessions/*.json  <--  discovery.py
                                               <--  mcp_server.py
                                               <--  tui.py
                                               <--  focus.py

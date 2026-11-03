@@ -5,11 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import cli, legacy
+from tongs_agents import cli, legacy, paths
 
 
 LEGACY_HOOK = legacy.LEGACY_HOOK_COMMANDS[0]
 LEGACY_MODULE = legacy.LEGACY_MCP_MODULES[0]
+OLD_KEY = legacy.LEGACY_MCP_NAME
 
 
 def test_install_creates_hooks(settings_file, monkeypatch):
@@ -37,19 +38,108 @@ def test_install_creates_codex_hooks(settings_file, monkeypatch):
     assert hooks["SessionStart"][0]["matcher"] == "startup|resume|clear"
 
 
-def test_install_creates_mcp_server(settings_file, monkeypatch):
+def test_install_registers_claude_mcp_through_claude_cli(settings_file, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
-    from tongs_agents.cli import cmd_install
-    cmd_install(None)
+    registered = []
+    monkeypatch.setattr(cli, "_install_claude_mcp", registered.append)
+    cli.cmd_install(None)
     settings = json.loads(settings_file.read_text())
-    assert "mcpServers" in settings
-    assert "fleet" in settings["mcpServers"]
-    assert settings["mcpServers"]["fleet"]["args"] == ["-m", "tongs_agents.mcp_server"]
+    assert "mcpServers" not in settings
+    assert registered == ["/usr/bin/claude"]
+
+
+def test_install_without_claude_cli_skips_mcp(settings_file, monkeypatch, capsys):
+    monkeypatch.setattr("shutil.which", lambda x: None if x == "claude" else f"/usr/bin/{x}")
+    registered = []
+    monkeypatch.setattr(cli, "_install_claude_mcp", registered.append)
+    cli.cmd_install(None)
+    assert registered == []
+    assert "Claude Code CLI not found" in capsys.readouterr().out
+
+
+def _claude_servers(directory, servers):
+    config = directory / ".claude.json"
+    config.write_text(json.dumps({"numStartups": 3, "mcpServers": servers}))
+    return config
+
+
+def _recorder(calls, returncode=0):
+    def fake_run(command, **kwargs):
+        calls.append((command[1:], kwargs.get("env")))
+        return SimpleNamespace(returncode=returncode, stderr="failed")
+    return fake_run
+
+
+CURRENT = {"type": "stdio", "command": cli.sys.executable,
+           "args": ["-m", "tongs_agents.mcp_server"], "env": {}}
+ADD_CLAUDE = ["mcp", "add", "--scope", "user", "tongs-agents", "--",
+              cli.sys.executable, "-m", "tongs_agents.mcp_server"]
+
+
+@pytest.mark.parametrize("servers, expected", [
+    ({}, [ADD_CLAUDE]),
+    ({"tongs-agents": CURRENT}, []),
+    ({"tongs-agents": {**CURRENT, "command": "/old/python3"}},
+     [["mcp", "remove", "--scope", "user", "tongs-agents"], ADD_CLAUDE]),
+    ({OLD_KEY: {"command": "/old/python3", "args": ["-m", LEGACY_MODULE]},
+      "tongs-agents": CURRENT},
+     [["mcp", "remove", "--scope", "user", OLD_KEY]]),
+    ({OLD_KEY: {"command": "node", "args": ["fleet.js"]}}, [ADD_CLAUDE]),
+    ({"tongs-agents": {"command": "node", "args": ["mine.js"]}}, []),
+])
+def test_install_claude_mcp(tmp_path, monkeypatch, servers, expected):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(tmp_path, servers))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/elsewhere")
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _recorder(calls))
+    cli._install_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == expected
+    assert all("CLAUDE_CONFIG_DIR" not in env for _, env in calls)
+
+
+def test_install_claude_mcp_does_not_add_when_replace_fails(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(
+        tmp_path, {"tongs-agents": {**CURRENT, "command": "/old/python3"}}))
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _recorder(calls, returncode=1))
+    cli._install_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == [["mcp", "remove", "--scope", "user", "tongs-agents"]]
+    assert "Could not replace Claude Code MCP server" in capsys.readouterr().out
+
+
+def test_unreadable_claude_config_still_registers(tmp_path, monkeypatch):
+    config = tmp_path / ".claude.json"
+    config.write_text("{not json")
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", config)
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _recorder(calls))
+    cli._install_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == [ADD_CLAUDE]
+    assert config.read_text() == "{not json"
+
+
+def test_uninstall_claude_mcp_removes_only_owned(tmp_path, monkeypatch):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(tmp_path, {
+        "tongs-agents": CURRENT,
+        OLD_KEY: {"command": "/old/python3", "args": ["-m", LEGACY_MODULE]},
+        "docs": {"command": "/usr/bin/python3", "args": ["-m", "tongs_agents.mcp_server"]},
+    }))
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _recorder(calls))
+    cli._uninstall_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == [
+        ["mcp", "remove", "--scope", "user", "tongs-agents"],
+        ["mcp", "remove", "--scope", "user", OLD_KEY],
+    ]
+
+
+def _codex_lookup(servers):
+    return lambda command, name: servers.get(name)
 
 
 def test_install_codex_mcp_uses_codex_cli(monkeypatch):
     from tongs_agents import cli
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: None)
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({}))
     calls = []
 
     def fake_run(command, **kwargs):
@@ -59,16 +149,17 @@ def test_install_codex_mcp_uses_codex_cli(monkeypatch):
     monkeypatch.setattr(cli.subprocess, "run", fake_run)
     cli._install_codex_mcp("/usr/bin/codex")
     assert calls == [[
-        "/usr/bin/codex", "mcp", "add", "fleet", "--", cli.sys.executable,
+        "/usr/bin/codex", "mcp", "add", "tongs-agents", "--", cli.sys.executable,
         "-m", "tongs_agents.mcp_server",
     ]]
 
 
 def test_install_codex_mcp_preserves_name_conflict(monkeypatch):
     from tongs_agents import cli
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: {
-        "transport": {"command": "other", "args": []}
-    })
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({
+        "tongs-agents": {"transport": {"command": "other", "args": []}},
+        OLD_KEY: {"transport": {"command": "node", "args": ["fleet.js"]}},
+    }))
     def fail_run(*args, **kwargs):
         raise AssertionError("Codex MCP config should not be replaced")
 
@@ -115,7 +206,7 @@ def test_uninstall_removes_hooks(settings_file, monkeypatch):
     cmd_uninstall(Args())
     settings = json.loads(settings_file.read_text())
     assert "hooks" not in settings or not settings["hooks"]
-    assert "fleet" not in settings.get("mcpServers", {})
+    assert "mcpServers" not in settings
     from tongs_agents import cli
     codex_hooks = json.loads(cli.CODEX_HOOKS_FILE.read_text())
     assert "hooks" not in codex_hooks or not codex_hooks["hooks"]
@@ -230,15 +321,17 @@ def test_foreign_mcp_entries(config):
     assert not cli._is_owned_mcp(config)
 
 
-def test_install_keeps_foreign_claude_mcp(settings_file, monkeypatch, capsys):
+def test_install_drops_owned_settings_mcp_and_keeps_foreign(settings_file, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda x: f"/usr/bin/{x}")
     foreign = {"command": "node", "args": ["fleet.js"]}
-    settings_file.write_text(json.dumps({"mcpServers": {"fleet": foreign}}))
+    settings_file.write_text(json.dumps({"mcpServers": {
+        OLD_KEY: foreign,
+        "tongs-agents": {"command": "/old/python3", "args": ["-m", "tongs_agents.mcp_server"]},
+    }}))
     cli.cmd_install(None)
-    assert json.loads(settings_file.read_text())["mcpServers"]["fleet"] == foreign
-    assert "Kept existing Claude MCP server named fleet" in capsys.readouterr().out
+    assert json.loads(settings_file.read_text())["mcpServers"] == {OLD_KEY: foreign}
     cli.cmd_uninstall(SimpleNamespace(keep_data=True))
-    assert json.loads(settings_file.read_text())["mcpServers"]["fleet"] == foreign
+    assert json.loads(settings_file.read_text())["mcpServers"] == {OLD_KEY: foreign}
 
 
 def _codex_runner(calls, returncode=0):
@@ -248,23 +341,23 @@ def _codex_runner(calls, returncode=0):
     return fake_run
 
 
-def test_install_codex_mcp_replaces_legacy_entry(monkeypatch):
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: {"transport": {
+def test_install_codex_mcp_removes_legacy_entry(monkeypatch):
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({OLD_KEY: {"transport": {
         "command": "/old/bin/python3", "args": ["-m", LEGACY_MODULE],
-    }})
+    }}}))
     calls = []
     monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
     cli._install_codex_mcp("/usr/bin/codex")
     assert calls == [
-        ["mcp", "remove", "fleet"],
-        ["mcp", "add", "fleet", "--", cli.sys.executable, "-m", "tongs_agents.mcp_server"],
+        ["mcp", "remove", OLD_KEY],
+        ["mcp", "add", "tongs-agents", "--", cli.sys.executable, "-m", "tongs_agents.mcp_server"],
     ]
 
 
 def test_install_codex_mcp_skips_current_entry(monkeypatch):
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: {"transport": {
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": {"transport": {
         "command": cli.sys.executable, "args": ["-m", "tongs_agents.mcp_server"],
-    }})
+    }}}))
     calls = []
     monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
     cli._install_codex_mcp("/usr/bin/codex")
@@ -272,13 +365,13 @@ def test_install_codex_mcp_skips_current_entry(monkeypatch):
 
 
 def test_install_codex_mcp_does_not_add_when_remove_fails(monkeypatch, capsys):
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: {
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({"tongs-agents": {
         "command": "/old/bin/python", "args": ["-m", "tongs_agents.mcp_server"],
-    })
+    }}))
     calls = []
     monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls, returncode=1))
     cli._install_codex_mcp("/usr/bin/codex")
-    assert calls == [["mcp", "remove", "fleet"]]
+    assert calls == [["mcp", "remove", "tongs-agents"]]
     assert "Could not replace Codex MCP server" in capsys.readouterr().out
 
 
@@ -288,12 +381,13 @@ def test_install_codex_mcp_does_not_add_when_remove_fails(monkeypatch, capsys):
     ({"transport": {"command": "node", "args": ["fleet.js"]}}, False),
     (None, False),
 ])
-def test_uninstall_codex_mcp_removes_only_owned(monkeypatch, existing, removed):
-    monkeypatch.setattr(cli, "_get_codex_mcp", lambda command: existing)
+@pytest.mark.parametrize("name", ["tongs-agents", OLD_KEY])
+def test_uninstall_codex_mcp_removes_only_owned(monkeypatch, existing, removed, name):
+    monkeypatch.setattr(cli, "_get_codex_mcp", _codex_lookup({name: existing}))
     calls = []
     monkeypatch.setattr(cli.subprocess, "run", _codex_runner(calls))
     cli._uninstall_codex_mcp("/usr/bin/codex")
-    assert calls == ([["mcp", "remove", "fleet"]] if removed else [])
+    assert calls == ([["mcp", "remove", name]] if removed else [])
 
 
 posix_only = pytest.mark.skipif(os.name == "nt", reason="POSIX modes and symlinks")
@@ -358,8 +452,7 @@ def test_malformed_settings_exit_without_write(settings_file, monkeypatch, capsy
 def fleet_data(settings_file, tmp_path, monkeypatch):
     monkeypatch.setattr("shutil.which", lambda x: None)
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "pi"))
-    fleet = cli.FLEET_DIR
-    fleet.mkdir()
+    fleet = paths.sessions_dir(create=True)
     for name in (
         "abc.json",
         "fleet-v1-0123.json",
@@ -374,6 +467,15 @@ def fleet_data(settings_file, tmp_path, monkeypatch):
 def test_uninstall_removes_fleet_records_and_empty_dir(fleet_data):
     cli.cmd_uninstall(SimpleNamespace(keep_data=False))
     assert not fleet_data.exists()
+    assert not paths.state_dir().exists()
+
+
+def test_uninstall_never_deletes_legacy_session_dir(fleet_data):
+    old = legacy.legacy_sessions_dir()
+    old.mkdir(parents=True)
+    (old / "abc.json").write_text("{}")
+    cli.cmd_uninstall(SimpleNamespace(keep_data=False))
+    assert (old / "abc.json").exists()
 
 
 def test_uninstall_keeps_unknown_fleet_files(fleet_data, capsys):
@@ -401,9 +503,10 @@ def test_uninstall_keeps_fleet_dir_while_pi_is_installed(fleet_data, tmp_path, c
 
 @posix_only
 def test_uninstall_keeps_symlinked_fleet_dir(fleet_data, tmp_path, monkeypatch):
-    link = tmp_path / "fleet-link"
+    link = tmp_path / "linked-state" / "sessions"
+    link.parent.mkdir()
     link.symlink_to(fleet_data)
-    monkeypatch.setattr(cli, "FLEET_DIR", link)
+    monkeypatch.setenv(paths.STATE_DIR_ENV, str(link.parent))
     before = sorted(entry.name for entry in fleet_data.iterdir())
     cli.cmd_uninstall(SimpleNamespace(keep_data=False))
     assert link.is_symlink()
