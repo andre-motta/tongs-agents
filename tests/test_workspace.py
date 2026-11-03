@@ -285,11 +285,11 @@ def test_a_partial_create_discards_the_records_already_written(env, monkeypatch,
     real = launches.create_pending
     calls = []
 
-    def second_fails(profile, session, multiplexer):
+    def second_fails(profile, session, multiplexer, **options):
         calls.append(profile.name)
         if len(calls) == 2:
             raise LaunchError("disk full")
-        return real(profile, session, multiplexer)
+        return real(profile, session, multiplexer, **options)
 
     monkeypatch.setattr(launches, "create_pending", second_fails)
     assert _run("--profile", "alpha", "--profile", "beta") == 1

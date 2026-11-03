@@ -328,3 +328,49 @@ def test_discard_never_follows_a_symlinked_record(tmp_path):
     link.symlink_to(target)
     launches.discard("a" * 32)
     assert target.read_text() == "{}"
+
+
+def _folder_profile():
+    return Profile(name="p", harness="claude", argv=("claude",))
+
+
+def test_folder_and_args_round_trip_and_stay_out_of_plain_records(tmp_path):
+    plain = launches.create_pending(_folder_profile(), "agents", "zellij")
+    assert "folder" not in plain.to_json() and "args" not in plain.to_json()
+    assert launches.get(plain.launch_id).args == ()
+    record = launches.create_pending(_folder_profile(), "agents", "zellij",
+                                     folder=str(tmp_path), args=["--resume", "", "a\nb"])
+    data = json.loads((paths.launches_dir() / f"{record.launch_id}.json").read_text())
+    assert (data["folder"], data["args"]) == (str(tmp_path), ["--resume", "", "a\nb"])
+    stored = launches.get(record.launch_id)
+    assert (stored.folder, stored.args) == (str(tmp_path), ("--resume", "", "a\nb"))
+    claimed = launches.claim(record.launch_id, os.getpid(), None, None)
+    assert (claimed.folder, claimed.args) == (str(tmp_path), ("--resume", "", "a\nb"))
+
+
+@pytest.mark.parametrize("folder, args, message", [
+    ("relative/dir", (), "absolute path"),
+    ("/tmp/a\x07b", (), "absolute path"),
+    (None, "--resume", "list of strings"),
+    (None, ["a\0b"], "NUL"),
+    (None, ["x"] * (launches.MAX_ARGS + 1), f"at most {launches.MAX_ARGS}"),
+    (None, ["x" * (launches.MAX_ARG_LENGTH + 1)], "longer than"),
+    (None, ["x" * launches.MAX_ARG_LENGTH] * 5, "in all"),
+])
+def test_invalid_folder_or_args_are_refused(folder, args, message):
+    with pytest.raises(launches.LaunchError, match=message):
+        launches.create_pending(_folder_profile(), "agents", "zellij", folder=folder, args=args)
+    assert launches.list_records() == []
+
+
+@pytest.mark.parametrize("change", [
+    {"folder": "relative"}, {"folder": 7}, {"args": "--resume"}, {"args": ["a\0b"]},
+    {"args": [1]}, {"args": None},
+])
+def test_a_tampered_folder_or_args_makes_the_record_invalid(change):
+    record = launches.create_pending(_folder_profile(), "agents", "zellij")
+    path = paths.launches_dir() / f"{record.launch_id}.json"
+    data = json.loads(path.read_text())
+    data.update(change)
+    path.write_text(json.dumps(data))
+    assert launches.get(record.launch_id) is None

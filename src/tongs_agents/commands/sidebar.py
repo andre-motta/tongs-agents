@@ -8,6 +8,10 @@ pending launches; failures become notifications. Selecting a row focuses its
 pane: hook rows through ``focus.focus_session`` (its in-session branch), and
 hookless rows by selecting their pane directly after checking it is listed.
 
+``+`` (or the palette's Add agent…) opens the Add agent dialog: a profile, a
+folder with path completion and optional extra arguments, started through
+the same spawn path as ``tongs-agents run``.
+
 Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
 the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
 selected launched pane, each confirmed in a dialog), Post to chat and Open
@@ -114,6 +118,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("r", "refresh", "Refresh", show=True, priority=True),
+        Binding("plus", "add_agent", "Add agent", show=True),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
         Binding("a", "review_access", "Access", show=True),

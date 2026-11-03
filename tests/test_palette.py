@@ -12,6 +12,7 @@ from tongs_agents.app_config import AppConfig, WorkspaceSettings
 from tongs_agents.commands.sidebar import SidebarApp
 from tongs_agents.multiplexers import PaneRef
 from tongs_agents.palette import (
+    ADD_AGENT,
     FOCUS_SESSION,
     NEXT_ATTENTION,
     OPEN_TONGS,
@@ -65,7 +66,8 @@ def test_both_apps_register_the_provider():
 def test_commands_inside_a_session(profiles, tools):
     app = _monitor(FakeMux(), default_profiles=("gamma", "missing", "alpha"))
     assert _titles(app) == [
-        "New agent: gamma", "New agent: alpha", "New agent: beta", OPEN_TONGS, *ACTIONS,
+        ADD_AGENT, "New agent: gamma", "New agent: alpha", "New agent: beta", OPEN_TONGS,
+        *ACTIONS,
     ]
 
 
@@ -222,7 +224,9 @@ async def test_the_sidebar_offers_new_agents_into_its_own_session(profiles, tool
                                                    default_profiles=("beta",)))
     feed = WorkspaceFeed("agents", mux, lambda: [])
     app = SidebarApp(mux, "agents", feed=feed, refresh_interval=60, config=config)
-    assert _titles(app)[:3] == ["New agent: beta", "New agent: alpha", "New agent: gamma"]
+    assert _titles(app)[:4] == [
+        ADD_AGENT, "New agent: beta", "New agent: alpha", "New agent: gamma",
+    ]
     async with app.run_test(size=(40, 20)) as pilot:
         await _settle(app, pilot)
         _command(app, "New agent: gamma").callback()

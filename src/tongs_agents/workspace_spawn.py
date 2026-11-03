@@ -1,10 +1,12 @@
 """The one spawn path for agent panes, plus the workspace's runtime files.
 
-Every agent pane, whether started by ``tongs-agents workspace`` inside or
-outside Zellij or by the sidebar from a spawn request, is created by
-``spawn_launch``: a pending launch record names the profile, and the pane runs
+Every agent pane, whether started by ``tongs-agents workspace`` or
+``tongs-agents run`` inside or outside a session, by the sidebar from a spawn
+request, its Add agent dialog or the palette, is created by ``spawn_launch``:
+a pending launch record names the profile, and the pane runs
 ``<python> -m tongs_agents.launch <profile> --launch-id <id>``, which claims
-the record and execs the profile.
+the record and execs the profile. A launch may carry a folder and extra
+arguments chosen by the maintainer (``check_launch`` validates them first).
 
 A spawn request (``runtime_dir()/requests/<token>.json``) hands pending
 launches from the workspace command to the sidebar of a session that does
@@ -35,7 +37,7 @@ from pathlib import Path
 from tongs_agents import launches, paths
 from tongs_agents.launches import LaunchError, LaunchRecord
 from tongs_agents.multiplexers.base import Multiplexer, MultiplexerError, PaneRef
-from tongs_agents.profiles import Profile
+from tongs_agents.profiles import Profile, folder_problem
 
 LAUNCH_MODULE = "tongs_agents.launch"
 SIDEBAR_MODULE = "tongs_agents.commands.sidebar"
@@ -79,17 +81,49 @@ def sidebar_argv(token: str | None = None) -> list[str]:
     return argv
 
 
+class LaunchOptionError(LaunchError):
+    """A folder or extra arguments a profile cannot be started with."""
+
+
+def check_launch(profile: Profile, folder: str | None = None,
+                 args: Iterable[str] = ()) -> tuple[str | None, tuple[str, ...]]:
+    """The validated folder and extra arguments for one launch of ``profile``.
+
+    The folder must be an absolute existing directory (and, for a sandboxed
+    profile that uploads its workspace, not a home or credentials folder).
+    Raises LaunchOptionError naming the problem.
+    """
+    try:
+        extra = launches.check_args(args if isinstance(args, str) else list(args))
+        if folder is not None:
+            launches.check_folder(folder)
+    except LaunchError as error:
+        raise LaunchOptionError(str(error)) from None
+    if folder is not None:
+        problem = folder_problem(profile, Path(folder))
+        if problem is not None:
+            raise LaunchOptionError(f"profile {profile.name}: folder {problem}")
+    return folder, extra
+
+
 def create_launches(
-    multiplexer: str, session: str, profiles: Iterable[Profile]
+    multiplexer: str, session: str, profiles: Iterable[Profile], *,
+    folder: str | None = None, args: Iterable[str] = (),
 ) -> list[LaunchRecord]:
     """Pending launch records, one per profile, for panes not spawned yet.
 
-    When one cannot be written, those already written are discarded.
+    ``folder`` and ``args`` apply to every one of them. When one cannot be
+    written, those already written are discarded.
     """
     records = []
+    profiles = list(profiles)
+    for profile in profiles:
+        folder, args = check_launch(profile, folder, args)
     try:
         for profile in profiles:
-            records.append(launches.create_pending(profile, session, multiplexer))
+            records.append(launches.create_pending(
+                profile, session, multiplexer, folder=folder, args=args,
+            ))
     except BaseException:
         discard_launches(records)
         raise
@@ -107,16 +141,24 @@ def spawn_launch(mux: Multiplexer, record: LaunchRecord) -> PaneRef:
 
 
 def spawn_profiles(
-    mux: Multiplexer, session: str, profiles: Iterable[Profile]
+    mux: Multiplexer, session: str, profiles: Iterable[Profile], *,
+    folder: str | None = None, args: Iterable[str] = (),
 ) -> list[LaunchRecord]:
     """Create a pending record and spawn one launcher pane per profile, in order.
 
-    Raises the first MultiplexerError or LaunchError; panes spawned before it
-    stay up, and the record of the pane that failed to start is discarded.
+    ``folder`` and ``args`` (see ``check_launch``) apply to every profile and
+    are checked for all of them before any pane starts. Raises the first
+    MultiplexerError or LaunchError; panes spawned before it stay up, and the
+    record of the pane that failed to start is discarded.
     """
     records = []
+    profiles = list(profiles)
     for profile in profiles:
-        record = launches.create_pending(profile, session, mux.name)
+        folder, args = check_launch(profile, folder, args)
+    for profile in profiles:
+        record = launches.create_pending(
+            profile, session, mux.name, folder=folder, args=args,
+        )
         try:
             spawn_launch(mux, record)
         except BaseException:

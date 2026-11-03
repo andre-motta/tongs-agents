@@ -260,3 +260,93 @@ def test_exec_failure_is_127_and_waits_on_a_tty(config, monkeypatch, tmp_path, c
     assert err.count("\n") == 1
     assert "no-such-agent" in err and "press Enter" in err
     assert prompts == [()]
+
+
+def test_launch_args_follow_the_codex_rule_and_the_profile_args():
+    profile = Profile("c", "codex", ("codex",), model_args=("-m", "x"))
+    assert launch.build_argv(profile, ("resume", "--last")) == [
+        "codex", "--no-daemon", "-m", "x", "resume", "--last",
+    ]
+    assert launch.build_argv(profile, ("--no-daemon",)) == [
+        "codex", "-m", "x", "--no-daemon",
+    ]
+    claude = Profile("p", "claude", ("claude",))
+    assert launch.build_argv(claude, ("--resume",)) == ["claude", "--resume"]
+
+
+def test_launch_folder_and_args_reach_the_exec(config, no_exec, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    default = tmp_path / "default"
+    chosen = tmp_path / "chosen dir"
+    default.mkdir()
+    chosen.mkdir()
+    config(f'[profiles.p]\ncommand = ["claude"]\ncwd = {json.dumps(str(default))}\n')
+    profile = Profile("p", "claude", ("claude",))
+    record = launches.create_pending(profile, "agents", "zellij", folder=str(chosen),
+                                     args=("--resume", "a b", "$(x)"))
+    assert launch.main(["p", "--launch-id", record.launch_id]) == 127
+    [(file, args, _env)] = no_exec
+    assert args == ["claude", "--resume", "a b", "$(x)"]
+    assert os.getcwd() == str(chosen)
+    claimed = launches.get(record.launch_id)
+    assert (claimed.state, claimed.folder, claimed.args) == (
+        "running", str(chosen), ("--resume", "a b", "$(x)"),
+    )
+
+
+def test_a_launch_folder_removed_before_start_is_64(config, no_exec, monkeypatch, tmp_path,
+                                                    capsys):
+    monkeypatch.chdir(tmp_path)
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    config('[profiles.p]\ncommand = ["x"]\n')
+    record = launches.create_pending(Profile("p", "other", ("x",)), "agents", "zellij",
+                                     folder=str(gone))
+    gone.rmdir()
+    assert launch.main(["p", "--launch-id", record.launch_id]) == 64
+    assert no_exec == []
+    assert launches.get(record.launch_id).state == "pending"
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_a_sandboxed_launch_refuses_a_home_folder(config, no_exec, monkeypatch, tmp_path,
+                                                  capsys):
+    home = tmp_path / "home"
+    project = home / "src" / "app"
+    project.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    config(f'[profiles.boxed]\ncommand = ["claude"]\ncwd = {json.dumps(str(project))}\n'
+           '[profiles.boxed.sandbox]\n')
+    boxed = Profile("boxed", "claude", ("claude",))
+    record = launches.create_pending(boxed, "agents", "zellij", folder=str(home))
+    prepared = []
+    monkeypatch.setattr(launch.sandbox_launcher, "prepare",
+                        lambda *args, **kwargs: prepared.append(args))
+    assert launch.main(["boxed", "--launch-id", record.launch_id]) == 64
+    assert prepared == [] and no_exec == []
+    assert "your home folder" in capsys.readouterr().err
+
+
+def test_a_sandboxed_launch_uploads_the_chosen_folder(config, no_exec, monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    default = home / "src" / "default"
+    chosen = home / "src" / "chosen"
+    default.mkdir(parents=True)
+    chosen.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    config(f'[profiles.boxed]\ncommand = ["claude"]\ncwd = {json.dumps(str(default))}\n'
+           '[profiles.boxed.sandbox]\n')
+    record = launches.create_pending(Profile("boxed", "claude", ("claude",)), "agents",
+                                     "zellij", folder=str(chosen), args=("--resume",))
+    seen = []
+
+    def prepare(profile, claimed, environ, command):
+        seen.append((profile.cwd, list(command)))
+        return launch.sandbox_launcher.Prepared(argv=["openshell"], env={}, sandbox="s",
+                                                reused=False)
+
+    monkeypatch.setattr(launch.sandbox_launcher, "prepare", prepare)
+    assert launch.main(["boxed", "--launch-id", record.launch_id]) == 127
+    assert seen == [(chosen, ["claude", "--resume"])]

@@ -2,8 +2,11 @@
 
 In order it validates the profile and launch id, claims the launch record
 with its own pid, process start token and pane identity, builds the agent's
-environment, changes to the profile's cwd and execs the profile argv. Exec
-keeps the pid, so the record names the agent (or its exec wrapper).
+environment, changes to the launch folder (the record's ``folder``, else the
+profile's cwd) and execs the profile argv plus the record's extra ``args``.
+Exec keeps the pid, so the record names the agent (or its exec wrapper). The
+folder is checked again here (``profiles.folder_problem``): it must still be a
+directory, and a sandboxed profile still refuses a home or credentials folder.
 
 A profile with a ``sandbox`` table execs ``openshell`` instead: the sandbox
 is created or reused and confirmed Ready first (``sandbox.launcher``), and
@@ -17,9 +20,11 @@ the pane waits for Enter so the message stays readable.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from pathlib import Path
 
 from tongs_agents import discovery, launches
 from tongs_agents.multiplexers.base import PaneRef
@@ -28,7 +33,9 @@ from tongs_agents.profiles import (
     CONFIG_DIR_ENV_BY_HARNESS,
     Profile,
     ProfileError,
+    folder_problem,
     load_profiles,
+    uploads_workspace,
 )
 from tongs_agents.sandbox import launcher as sandbox_launcher
 from tongs_agents.terminal_apis._env import is_decimal_id
@@ -98,13 +105,29 @@ def pane_from_env(env: Mapping[str, str]) -> PaneRef | None:
     return None
 
 
-def build_argv(profile: Profile) -> list[str]:
-    """The exec argv: profile command, ``--no-daemon`` for codex, then extra args."""
+def build_argv(profile: Profile, launch_args: Sequence[str] = ()) -> list[str]:
+    """The exec argv: profile command, ``--no-daemon`` for codex, model and
+    effort args, then this launch's own arguments."""
     argv = list(profile.argv)
-    extra = [*profile.model_args, *profile.effort_args]
+    extra = [*profile.model_args, *profile.effort_args, *launch_args]
     if profile.harness == "codex" and CODEX_NO_DAEMON not in (*argv, *extra):
         argv.append(CODEX_NO_DAEMON)
     return argv + extra
+
+
+def launch_profile(profile: Profile, folder: str | None) -> Profile:
+    """``profile`` with the launch folder as its cwd; raises ProfileError when refused."""
+    if folder is not None:
+        problem = folder_problem(profile, Path(folder))
+        if problem is not None:
+            raise ProfileError(f"profile {profile.name}: folder {problem}")
+        return dataclasses.replace(profile, cwd=Path(folder))
+    if uploads_workspace(profile) and profile.cwd is None:
+        raise ProfileError(
+            f"profile {profile.name}: no folder to upload into the sandbox; "
+            "start it with 'tongs-agents run' and a project folder"
+        )
+    return profile
 
 
 def build_env(profile: Profile, launch_id: str, base: Mapping[str, str]) -> dict[str, str]:
@@ -165,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
             f"launch {args.launch_id} was created for harness {pending.harness!r}, "
             f"but profile {profile.name!r} now uses {profile.harness!r}",
         )
+    try:
+        profile = launch_profile(profile, pending.folder)
+    except ProfileError as error:
+        return _fail(EXIT_USAGE, str(error))
     pid = os.getpid()
     info = discovery.get_process_info(pid)
     try:
@@ -177,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     except (launches.LaunchError, OSError) as error:
         return _fail(EXIT_USAGE, f"cannot claim launch {args.launch_id}: {error}")
     env = build_env(profile, record.launch_id, os.environ)
-    command = build_argv(profile)
+    command = build_argv(profile, record.args)
     if profile.sandbox is not None:
         try:
             prepared = sandbox_launcher.prepare(profile, record, os.environ, command)

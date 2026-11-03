@@ -91,7 +91,7 @@ def test_the_selected_heavy_verb_is_the_only_one_loaded(tmp_path):
 def test_every_verb_is_still_registered():
     parser, handlers = cli.build_parser()
     expected = {
-        "agent-status", "chat", "cleanup", "config", "doctor", "notify", "profiles", "read",
+        "agent-status", "chat", "cleanup", "config", "doctor", "notify", "profiles", "read", "run",
         "sandbox", "send", "sidebar", "wait", "web", "workspace", "zellij",
     }
     assert expected | set(cli.BUILTIN_COMMANDS) == set(handlers)
