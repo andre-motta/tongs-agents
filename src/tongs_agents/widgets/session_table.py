@@ -65,7 +65,12 @@ def _age_style(session: FleetSession) -> str:
 
 
 def session_name(session: FleetSession) -> str:
-    return str(getattr(session, "profile_id", "") or "") or session.repo
+    """The row's name: the label given in the sidebar, else the profile, else the repo."""
+    return (
+        str(getattr(session, "label", "") or "")
+        or str(getattr(session, "profile_id", "") or "")
+        or session.repo
+    )
 
 
 def compact_status_label(status: SessionStatus) -> str:
@@ -183,7 +188,7 @@ class SessionTable(DataTable):
             attention,
             icon,
             Text(s.agent[:6], style="dim"),
-            Text(s.repo[:23], style="bold"),
+            Text((str(getattr(s, "label", "") or "") or s.repo)[:23], style="bold"),
             Text(status_label(s), style=style),
             Text(term, style="dim"),
             Text(detail),

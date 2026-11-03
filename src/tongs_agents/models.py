@@ -178,6 +178,7 @@ class FleetSession:
     process_identity: str = ""
     launch_id: str = ""
     profile_id: str = ""
+    label: str = ""
     focus_target: FocusTarget = field(
         default_factory=lambda: FocusTarget(FocusTargetKind.UNAVAILABLE)
     )
@@ -218,6 +219,7 @@ class FleetSession:
             "process_identity": self.process_identity,
             "launch_id": self.launch_id,
             "profile_id": self.profile_id,
+            "label": self.label,
             "focus_target": {
                 "kind": self.focus_target.kind.value,
                 "terminal": self.focus_target.terminal,

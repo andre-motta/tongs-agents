@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from collections.abc import Callable, Iterable
+from dataclasses import replace
 
 from tongs_agents import discovery, launches, session_store
 from tongs_agents.launches import LaunchRecord
@@ -118,6 +119,7 @@ def launch_session(record: LaunchRecord, pane: PaneInfo, now: float) -> FleetSes
         process_start=record.process_start or "",
         launch_id=record.launch_id,
         profile_id=record.profile,
+        label=record.label or "",
     )
 
 
@@ -150,7 +152,8 @@ class WorkspaceFeed(SessionFeed):
     running, starting (launcher not claimed yet) or exited with its status.
     A claimed record whose process is gone while its pane id runs something
     else belongs to an earlier session of the same name and is skipped, as
-    are records replaced by a later claim.
+    are records replaced by a later claim. A row whose launch record has a
+    label (``launches.set_label``) carries it in ``FleetSession.label``.
     """
 
     def __init__(
@@ -194,6 +197,12 @@ class WorkspaceFeed(SessionFeed):
             session for session in super().snapshot()
             if self.in_session(session) or self._launched_here(session, claimed)
         ]
+        labels = {record.launch_id: record.label for record in records if record.label}
+        sessions = [
+            replace(session, label=labels[session.launch_id])
+            if session.launch_id in labels else session
+            for session in sessions
+        ]
         return sessions + self.launch_rows(sessions, records)
 
     def in_session(self, session: FleetSession) -> bool:
@@ -226,6 +235,13 @@ class WorkspaceFeed(SessionFeed):
             if record.session == self.session
             and record.multiplexer == self.multiplexer.name
         ]
+
+    def launch_record(self, launch_id: str) -> LaunchRecord | None:
+        """This session's launch record ``launch_id``, or None when it is not one."""
+        return next(
+            (record for record in self._launch_records() if record.launch_id == launch_id),
+            None,
+        )
 
     def launch_pane(self, launch_id: str) -> PaneRef | None:
         """The pane of this session's running launch ``launch_id``, or None."""
@@ -307,6 +323,7 @@ def _search_fields(session: FleetSession) -> tuple[str, ...]:
     return (
         session.agent,
         session.repo,
+        str(getattr(session, "label", "") or ""),
         session.detail,
         session.status.value,
         str(getattr(session, "profile_id", "") or ""),

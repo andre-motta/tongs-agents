@@ -24,8 +24,10 @@ class FakeMux:
 
     def __init__(self, *, here=None, exists=False, available=(True, "zellij 0.45.1"),
                  panes=(), fail_spawn=None, state=None, fail_delete=False,
-                 fail_show=False):
+                 fail_show=False, fail_rename=False):
         self.fail_show = fail_show
+        self.fail_rename = fail_rename
+        self.renamed = []
         self.shown = []
         self.layouts = []
         self.here = here
@@ -97,6 +99,11 @@ class FakeMux:
 
     def set_layout(self, session, layout):
         self.layouts.append((session, layout))
+
+    def rename_pane(self, ref, name):
+        if self.fail_rename:
+            raise MultiplexerError("no such pane")
+        self.renamed.append((ref, name))
 
 
 def profile(name, harness="other", argv=("sleep", "600")):

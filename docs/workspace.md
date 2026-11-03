@@ -273,6 +273,35 @@ slot. Hook rows go through the same focus path as `tongs-agents focus`;
 hookless rows select their pane directly after checking that it is still
 listed. Spawn failures appear as notifications.
 
+### Renaming an agent
+
+Agents started from the same profile all show the profile name until you
+name them. `R` (shift+r) on a row opens a one-line prompt at the bottom of
+the sidebar, prefilled with the agent's current name:
+
+| Key | Action |
+| --- | --- |
+| `R` | Open the rename prompt for the selected agent. |
+| Enter | Save the name. An empty name restores the default, the profile name. A refused name (more than 64 characters, a control character, a leading `-`, or `tongs-agents-sidebar` or `tongs-agents-home`) keeps the prompt open with the reason. |
+| Escape | Close the prompt without saving. |
+
+The name is a display label only: the profile, harness, session id, command
+and folder stay as they are. It is kept in the agent's launch record (as
+`label`), so it survives sidebar restarts, and it is shown in the sidebar
+row, in `tongs-agents agent-status` (`PROFILE (NAME)`, and `label` in
+`--json`) and in the MCP tools that list agents (`label` in each session of
+the `fleet_*` tools and in `agents_status` and `agents_wait`). The
+multiplexer pane is renamed too, best effort: Zellij with
+`rename-pane --pane-id`, tmux by setting `@tongs_agents_name`, the pane title
+(`select-pane -T`) and, in a `single` session, the window the pane is parked
+in alone. When renaming the pane fails the name is still saved and a warning
+says why; a program that sets its own pane title can overwrite the Zellij
+title later.
+
+Only an agent started in this workspace has a launch record to keep the name
+in. Any other row, such as a discovered or hook-only session, is refused
+with a short message in the prompt's place.
+
 ## tmux
 
 `--multiplexer tmux` (or `multiplexer = "tmux"` in `[workspace]`) runs the

@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.10.2 (experimental)
+
+### Added
+
+- Rename an agent from the sidebar: `R` on a row opens a prompt prefilled
+  with its current name; Enter saves, Escape cancels and an empty name
+  restores the profile name. The name is a display label kept in the launch
+  record (`label`), shown in the sidebar row, `agent-status` and the MCP
+  tools that list agents, and given to the Zellij or tmux pane, best effort.
+  It never changes the profile, harness, session id or command. Rows not
+  started in this workspace are refused (#130).
+
 ## 0.10.1 (experimental)
 
 The first round of feedback from using 0.10.0 every day: start empty, add

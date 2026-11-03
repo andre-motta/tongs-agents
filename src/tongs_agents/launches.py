@@ -8,7 +8,9 @@ resurrected pane, for example) gets a fresh record that names the old one in
 caller's launch id in ``spawned_by``. A launch the maintainer started with a
 folder or extra harness arguments (``tongs-agents run``, the sidebar's Add
 agent dialog) carries them in ``folder`` and ``args``; the MCP tools never set
-them. Records live in
+them. ``label`` is the display name the maintainer gave the agent in the
+sidebar (``set_label``); it only changes what the sidebar, ``agent-status``
+and the MCP tools show, never what runs. Records live in
 ``state_dir()/launches/<launch_id>.json``: written atomically at 0600, read
 without following symlinks, 64 KiB at most.
 """
@@ -26,7 +28,7 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 from tongs_agents import discovery, hook, paths
-from tongs_agents.multiplexers.base import PaneRef
+from tongs_agents.multiplexers.base import HOME_PANE_NAME, SIDEBAR_PANE_NAME, PaneRef
 from tongs_agents.profiles import HARNESSES, PROFILE_NAME_RE, Profile
 
 SCHEMA_VERSION = 1
@@ -35,6 +37,8 @@ MAX_TEXT_LENGTH = 1024
 MAX_ARGS = 64
 MAX_ARG_LENGTH = 4096
 MAX_ARGS_TOTAL = 16 * 1024
+MAX_LABEL_LENGTH = 64
+RESERVED_LABELS = (SIDEBAR_PANE_NAME, HOME_PANE_NAME)
 LAUNCH_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
 STATES = ("pending", "running")
 
@@ -60,11 +64,12 @@ class LaunchRecord:
     spawned_by: str | None = None
     folder: str | None = None
     args: tuple[str, ...] = ()
+    label: str | None = None
     schema_version: int = SCHEMA_VERSION
 
     def to_json(self) -> dict:
         data = asdict(self)
-        for key in ("spawned_by", "folder"):
+        for key in ("spawned_by", "folder", "label"):
             if data[key] is None:
                 del data[key]
         if data["args"]:
@@ -111,6 +116,41 @@ def check_args(value) -> tuple[str, ...]:
     return tuple(value)
 
 
+def _label_problem(value) -> str | None:
+    if not isinstance(value, str) or not value:
+        return "must be a non-empty name"
+    if len(value) > MAX_LABEL_LENGTH:
+        return f"at most {MAX_LABEL_LENGTH} characters"
+    if not value.isprintable():
+        return "control characters are not allowed"
+    if value != value.strip():
+        return "no leading or trailing spaces"
+    if value.startswith("-"):
+        return "it cannot start with '-'"
+    if value in RESERVED_LABELS:
+        return f"{value!r} is reserved for tongs-agents panes"
+    return None
+
+
+def check_label(value) -> str | None:
+    """A display name as stored: stripped, or None for empty text (the default name).
+
+    Names are printable, at most ``MAX_LABEL_LENGTH`` characters, never start
+    with ``-`` and never take a pane name tongs-agents reserves, so every
+    label is also a valid Zellij and tmux pane name. LaunchError otherwise.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+    problem = _label_problem(value)
+    if problem is not None:
+        raise LaunchError(f"invalid name: {problem}")
+    return value
+
+
 def _folder_text(value) -> bool:
     return _text(value) and os.path.isabs(value)
 
@@ -143,6 +183,7 @@ def _parse(data) -> LaunchRecord | None:
         and (data.get("spawned_by") is None or is_launch_id(data["spawned_by"]))
         and (data.get("folder") is None or _folder_text(data["folder"]))
         and _args_problem(data.get("args", [])) is None
+        and (data.get("label") is None or _label_problem(data["label"]) is None)
         and type(created) is int
     ):
         return None
@@ -268,6 +309,20 @@ def get(launch_id: str) -> LaunchRecord | None:
     return _read(paths.launches_dir() / f"{launch_id}.json")
 
 
+def set_label(launch_id: str, label: str | None) -> LaunchRecord:
+    """Store ``label`` (checked with ``check_label``) as the launch's display name.
+
+    None or empty text removes it, so the profile name shows again. The
+    record is rewritten atomically like every other update; nothing else in
+    it changes.
+    """
+    label = check_label(label)
+    record = _read(_record_path(launch_id))
+    if record is None:
+        raise LaunchError(f"no launch record for id {launch_id}")
+    return _write(replace(record, label=label))
+
+
 def _claimed(record: LaunchRecord, pid: int, process_start: str | None,
              pane: PaneRef | None) -> LaunchRecord:
     changes = {"pid": pid, "process_start": process_start, "state": "running"}
@@ -359,6 +414,11 @@ def list_records(session: str | None = None) -> list[LaunchRecord]:
     if session is not None:
         records = [record for record in records if record.session == session]
     return sorted(records, key=lambda record: (record.created, record.launch_id))
+
+
+def labels() -> dict[str, str]:
+    """Launch id to label for every valid record that has one."""
+    return {record.launch_id: record.label for record in list_records() if record.label}
 
 
 def alive(record: LaunchRecord) -> bool:

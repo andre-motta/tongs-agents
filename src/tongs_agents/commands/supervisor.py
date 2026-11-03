@@ -124,8 +124,9 @@ def add_status_arguments(parser):
 
 def _line(status: control.AgentStatus) -> str:
     detail = f"  {status.detail}" if status.detail else ""
+    label = f" ({status.label})" if status.label else ""
     return (
-        f"{status.launch_id}  {status.profile}  {status.session}:{status.pane_id}  "
+        f"{status.launch_id}  {status.profile}{label}  {status.session}:{status.pane_id}  "
         f"{status.state}{detail}"
     )
 

@@ -153,11 +153,13 @@ class AgentStatus:
     detail: str = ""
     exit_status: int | None = None
     updated: int | None = None
+    label: str = ""
 
     def to_json(self) -> dict:
         return {
             "launch_id": self.launch_id,
             "profile": self.profile,
+            "label": self.label,
             "harness": self.harness,
             "session": self.session,
             "pane_id": self.pane_id,
@@ -639,6 +641,7 @@ def _status_of(record: LaunchRecord, state: str, detail: str = "", *,
         detail=detail,
         exit_status=exit_status,
         updated=updated,
+        label=record.label or "",
     )
 
 

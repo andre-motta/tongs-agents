@@ -833,6 +833,14 @@ class ZellijMultiplexer:
         env = _cli_env(self._effective_socket_dir(socket_dir))
         return _events(argv, env, max_events, float(timeout))
 
+    def rename_pane(self, ref: PaneRef, name: str) -> None:
+        """Set the pane's frame title; the program in it may retitle it later."""
+        session, pane, socket_dir = _target(ref)
+        self._action(
+            session, socket_dir, "rename-pane", "--pane-id", f"terminal_{pane}", "--",
+            _pane_name(name),
+        )
+
 
 def _target(ref) -> tuple[str, str, str | None]:
     if not isinstance(ref, PaneRef) or ref.multiplexer != NAME:
