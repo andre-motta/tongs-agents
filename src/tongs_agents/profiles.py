@@ -23,6 +23,11 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal
 
+try:
+    import pwd
+except ImportError:  # Windows has no pwd module
+    pwd = None
+
 from tongs_agents import paths
 
 CONFIG_FILE_NAME = "config.toml"
@@ -369,11 +374,18 @@ def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
     repository, so uploading ``/``, the home folder or a folder holding it would
     copy SSH keys and harness credentials where the agent can read them.
     """
+    explicit = home is not None
     home = _home() if home is None else home
     if home is not None and not home.is_absolute():
         home = None
     folders = {Path(folder), _resolved(Path(folder))}
     homes = {home, _resolved(home)} if home is not None else set()
+    if not explicit:
+        # $HOME can be unset, empty or pointed elsewhere; the account's own home
+        # directory is protected either way.
+        account = _account_home()
+        if account is not None:
+            homes |= {account, _resolved(account)}
     for candidate in folders:
         if candidate.anchor and candidate == Path(candidate.anchor):
             return f"{folder} is the filesystem root"
@@ -382,7 +394,20 @@ def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
                 return f"{folder} is your home folder"
             if candidate in place.parents:
                 return f"{folder} holds your home folder"
+            if candidate.parent == place and candidate.name.startswith("."):
+                return f"{folder} is a hidden folder in your home, where credentials live"
     return None
+
+
+def _account_home() -> Path | None:
+    if pwd is None:
+        return None
+    try:
+        directory = pwd.getpwuid(os.getuid()).pw_dir
+    except (KeyError, OSError):
+        return None
+    path = Path(directory)
+    return path if path.is_absolute() else None
 
 
 def _check_sandboxed(where: str, sandbox: SandboxSpec, *, env, config_dir, cwd,

@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from tongs_agents import profiles
 from tongs_agents.profiles import (
     DEFAULT_SANDBOX_WORKDIR,
     ProfileError,
@@ -149,3 +150,18 @@ def test_config_file_round_trip(tmp_path, monkeypatch):
     assert json.loads(spec.driver_config) == {
         "kubernetes": {"pod": {"node_selector": {"pool": "gpu"}}}
     }
+
+
+def test_hidden_home_folders_are_refused_for_upload(tmp_path):
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    assert "hidden folder" in profiles.unsafe_folder(home / ".ssh", home)
+    assert profiles.unsafe_folder(home / "project", home) is None
+
+
+def test_the_account_home_is_protected_when_home_is_overridden(monkeypatch, tmp_path):
+    account = tmp_path / "account"
+    account.mkdir()
+    monkeypatch.setattr(profiles, "_account_home", lambda: account)
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    assert "home folder" in profiles.unsafe_folder(account)
