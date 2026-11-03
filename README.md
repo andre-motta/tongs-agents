@@ -46,7 +46,7 @@ The planned shape, part of milestone M1 and not available yet:
 
 ## Quick start (from source)
 
-Requires Python 3.10 or newer and git.
+Requires Python 3.11 or newer and git.
 
 ```bash
 git clone https://github.com/andre-motta/tongs-agents.git

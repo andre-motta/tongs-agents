@@ -2,6 +2,9 @@
 
 ## Development Setup
 
+Python 3.11 or newer is required (the config file is read with the standard
+library `tomllib`). CI tests 3.11, 3.12 and 3.13.
+
 ```bash
 git clone https://github.com/andre-motta/tongs-agents.git
 cd tongs-agents
@@ -39,6 +42,7 @@ hooks (hook.py)  -->  $XDG_STATE_HOME/tongs-agents/sessions/*.json  <--  discove
 - **tui.py**: Textual-based interactive dashboard.
 - **focus.py**: Cross-platform terminal window/tab focus (KDE/GNOME/macOS/Windows).
 - **cli.py**: Entry point for `tongs-agents` command.
+- **profiles.py**, **launches.py**, **launch.py**: agent profiles from `config.toml`, owned launch records and the in-pane launcher. See [docs/profiles.md](docs/profiles.md).
 
 ## Agent-led initiatives
 

@@ -13,7 +13,7 @@ active initiative until a migration is agreed again.
 | Default branch | `main`; merging into it is Andre's acceptance gate |
 | Feature integration | One local integration branch per initiative when it has several items, owned by the orchestrator; none active |
 | Worktrees | One isolated worktree and branch per work item, outside the repository checkout; removed once integrated |
-| Runtime | Python >=3.10; CI matrix 3.10, 3.12, 3.13 on Ubuntu 24.04 |
+| Runtime | Python >=3.11; CI matrix 3.11, 3.12, 3.13 on Ubuntu 24.04 |
 | Setup | `python3 -m venv .venv`, then `.venv/bin/python -m pip install -e ".[dev]"`; Windows uses `.venv/Scripts/python.exe` |
 | Focused checks | Relevant pytest modules, applicable functional checks and `git diff --check` |
 | Integrated checks | Full pytest and available local Python matrix; `.[dev,tongs]` when changing Tongs integration; actual affected CLI/MCP/harness journeys |
