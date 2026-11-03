@@ -9,7 +9,9 @@ the harness's and argparse never sees it, exactly as ``cli.parse_args``
 splits it. Anything else, such as ``ls`` or ``!make``, is refused.
 
 The registry holds ``run`` (``commands.run``: ``run PROFILE [DIR] [-- ARGS]``
-in the sidebar's own session). A verb is a ``Verb``: its name, its
+in the sidebar's own session) and ``resume`` (``commands.resume``: ``resume``
+lists the sessions it can resume, ``resume ID [--profile NAME]`` starts one in
+the sidebar's session). A verb is a ``Verb``: its name, its
 ``add_arguments``, the completion kind of each positional and ``prepare``,
 which checks the parsed arguments on the UI thread and returns a ``Prepared``
 whose ``execute`` runs in a worker thread. ``register_verb`` adds one.
@@ -39,6 +41,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Static
 
 from tongs_agents import workspace_spawn
+from tongs_agents.commands import resume as resume_command
 from tongs_agents.commands import run as run_command
 from tongs_agents.launches import LaunchError
 from tongs_agents.multiplexers import Multiplexer, MultiplexerError
@@ -347,6 +350,80 @@ RUN = register_verb(Verb(
 ))
 
 
+# -- The resume verb --
+
+def resume_into(context: CommandContext, session_id: str,
+                profile: str | None = None) -> tuple[resume_command.Plan, str | None]:
+    """Start ``session_id`` in the context's session: the plan and any live warning.
+
+    Raises CommandError. It reads the store and the harness config dirs, so
+    call it off the UI thread.
+    """
+    try:
+        profiles = context.load_profiles()
+    except ProfileError as error:
+        raise CommandError(str(error)) from None
+    try:
+        target = resume_command.find_session(resume_command.recent_sessions(), session_id)
+        plan = resume_command.plan(target, profiles, profile)
+    except resume_command.ResumeRefused as refused:
+        raise CommandError(str(refused)) from None
+    warning = resume_command.live_warning(target, context.session)
+    try:
+        workspace_spawn.spawn_profiles(
+            context.multiplexer, context.session, [plan.profile], **plan.options,
+        )
+    except (MultiplexerError, LaunchError, OSError) as error:
+        raise CommandError(getattr(error, "detail", None) or str(error)) from None
+    return plan, warning
+
+
+def resume_session(context: CommandContext, session_id: str,
+                   profile: str | None = None) -> str:
+    """``resume_into`` as the command line's result text."""
+    plan, warning = resume_into(context, session_id, profile)
+    result = f"resumed {plan.summary}"
+    if warning is not None:
+        result += f"\nwarning: {warning}"
+    return result
+
+
+def recent_listing(context: CommandContext) -> str:
+    """The sessions ``resume`` can start, as ``tongs-agents resume`` lists them."""
+    try:
+        profiles = context.load_profiles()
+    except ProfileError:
+        profiles = {}
+    sessions = resume_command.recent_sessions()
+    if not sessions:
+        return "no sessions to resume in the session store"
+    return resume_command.table(sessions[:resume_command.LIST_LIMIT], profiles)
+
+
+def _prepare_resume(context: CommandContext, args: argparse.Namespace) -> Prepared:
+    try:
+        run_command.refuse_options(context.multiplexer.name, args, context.session)
+    except run_command.RunRefused as refused:
+        raise CommandError(str(refused)) from None
+    if args.session_id is None:
+        if args.profile is not None:
+            raise CommandError("resume: --profile needs an ID")
+        return Prepared("listing sessions", lambda: recent_listing(context))
+    session_id, profile = args.session_id, args.profile
+    return Prepared(
+        f"resuming {session_id[:resume_command.SHORT_ID]}",
+        lambda: resume_session(context, session_id, profile),
+    )
+
+
+RESUME = register_verb(Verb(
+    name=resume_command.NAME,
+    help=resume_command.HELP,
+    add_arguments=resume_command.add_arguments,
+    prepare=_prepare_resume,
+))
+
+
 # -- The widget --
 
 class CommandLine(Widget):
@@ -417,7 +494,8 @@ class CommandLine(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield Static(":", classes="command-prompt")
-            yield Input(placeholder="run PROFILE [DIR] [-- ARGS]", id="command-input")
+            yield Input(placeholder="run PROFILE [DIR] [-- ARGS] | resume [ID]",
+                        id="command-input")
         yield Static("", classes="command-result")
 
     @property
