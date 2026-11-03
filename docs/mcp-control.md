@@ -18,6 +18,16 @@ tools are always available and unchanged.
 No tool takes a command, arguments, environment or working directory: an
 agent can only start a profile you configured, as configured.
 
+That limits what a caller can start, not what it can do once a pane runs.
+`agents_send` types the text into the target as if you typed it, so it has
+your full authority there: shell escapes such as `!` in Claude Code and Pi,
+slash commands such as `/permissions`, and anything else the harness accepts
+from its user. The target's permission mode and approval settings do not
+stop it, and neither session asks you first. A caller that drives a
+`worker` profile therefore holds every permission that profile could be
+given, whatever mode the caller itself runs in. Set `mcp_control = true` only
+on profiles whose full access you would grant the calling agent anyway.
+
 ## Turning it on
 
 Control needs both the server switch and a per-profile opt-in:

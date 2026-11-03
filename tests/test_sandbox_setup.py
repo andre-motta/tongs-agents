@@ -189,6 +189,74 @@ def test_missing_folder_is_refused(tmp_path):
         plan(tmp_path, folder=tmp_path / "absent").check()
 
 
+@pytest.fixture
+def home(tmp_path, monkeypatch):
+    """A private home folder under tmp_path; the real one is never read."""
+    folder = tmp_path / "home" / "user"
+    (folder / "project").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(folder))
+    monkeypatch.setenv("USERPROFILE", str(folder))
+    return folder
+
+
+@pytest.mark.parametrize("where, message", [
+    (lambda home: home, "is your home folder"),
+    (lambda home: home.parent, "holds your home folder"),
+    (lambda home: home.parent.parent, "holds your home folder"),
+    (lambda home: Path("/"), "is the filesystem root"),
+])
+def test_root_home_and_folders_holding_home_are_never_uploaded(home, where, message):
+    folder = where(home)
+    assert message in setup.unsafe_folder(folder)
+    with pytest.raises(setup.SetupError, match=f"folder: .*{message}.*credentials included"):
+        setup.default_plan("claude", folder).check()
+
+
+def test_a_link_to_home_is_refused_and_a_project_inside_home_is_not(home, tmp_path):
+    link = tmp_path / "link"
+    link.symlink_to(home)
+    assert "is your home folder" in setup.unsafe_folder(link)
+    assert setup.unsafe_folder(home / "project") is None
+    assert setup.unsafe_folder(tmp_path / "elsewhere") is None
+    assert setup.default_plan("claude", home / "project").check().folder == home / "project"
+
+
+def test_the_current_directory_is_no_default_in_home_or_root(home, monkeypatch):
+    monkeypatch.chdir(home)
+    started = setup.default_plan("claude")
+    assert started.folder is None
+    with pytest.raises(setup.SetupError, match="folder: name the project folder"):
+        started.check()
+    monkeypatch.chdir("/")
+    assert setup.default_plan("claude").folder is None
+    monkeypatch.chdir(home / "project")
+    assert setup.default_plan("claude").folder == home / "project"
+
+
+def test_setup_in_home_needs_a_project_folder(fake, home, monkeypatch, capsys):  # noqa: F811
+    monkeypatch.chdir(home)
+    assert run() == 1
+    assert "folder: name the project folder" in capsys.readouterr().err
+    assert run("--folder", str(home)) == 1
+    assert "is your home folder" in capsys.readouterr().err
+    assert fake.calls() == []
+    assert run("--folder", str(home / "project")) == 0
+    assert f'cwd = "{home / "project"}"' in capsys.readouterr().out
+
+
+def test_finish_warns_about_credentials_in_the_folder(tmp_path):
+    (tmp_path / ".ssh").mkdir()
+    (tmp_path / ".env").write_text("TOKEN=x\n")
+    chosen = plan(tmp_path)
+    notes = setup.finish(chosen, None, setup.review(chosen)).notes
+    assert any(note.startswith(f"{tmp_path} holds .ssh, .env.") for note in notes)
+    clean = tmp_path / "clean"
+    clean.mkdir()
+    chosen = plan(clean)
+    assert not any(" holds " in note
+                   for note in setup.finish(chosen, None, setup.review(chosen)).notes)
+
+
 def test_snippet_loads_as_a_sandboxed_profile(tmp_path):
     odd = tmp_path / 'my "project"'
     odd.mkdir()

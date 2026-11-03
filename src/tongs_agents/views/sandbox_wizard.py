@@ -141,7 +141,8 @@ class SandboxWizardScreen(Screen[str | None]):
                 yield Static("Checking the host...", id="host-checks", classes="text")
             with VerticalScroll(id="step-plan"):
                 yield Label("Project folder (uploaded into the sandbox)")
-                yield Input(str(plan.folder), id="folder")
+                yield Input("" if plan.folder is None else str(plan.folder), id="folder",
+                            placeholder="a project folder, not your home folder or /")
                 yield Label("Harness")
                 yield Select([(name, name) for name in setup.SETUP_HARNESSES],
                              value=plan.harness, allow_blank=False, id="harness")
@@ -280,10 +281,11 @@ class SandboxWizardScreen(Screen[str | None]):
         presets = tuple(key for key in setup.PRESETS
                         if self.query_one(f"#preset-{key}", Checkbox).value)
         policy_path = self.query_one("#policy-path", Input).value.strip()
+        folder = self.query_one("#folder", Input).value.strip()
         return Plan(
             profile=self.query_one("#profile", Input).value.strip(),
             harness=harness if isinstance(harness, str) else self.start.harness,
-            folder=Path(self.query_one("#folder", Input).value.strip() or "."),
+            folder=Path(folder) if folder else None,
             presets=presets,
             providers=providers,
             image=image,

@@ -6,22 +6,24 @@ by ``sandbox.approvals``) reads as waiting, so it counts as NEEDS-YOU, jumps
 with ``n`` and raises the panel's desktop notification.
 
 ``ApprovalActions`` is the host mixin. It polls the sandboxes of the listed
-rows in a worker thread, notifies once per new request, and on ``a`` (or the
-palette's "Review access requests") opens ``ApprovalScreen`` with the full
-proposal text, Security and Prover lines included. Approving needs the Yes
-button of ``ApproveScreen``, which shows the whole proposal again (Security
-and Prover first) in a capped, scrollable body with its buttons always on
-screen; no single key approves. Rejecting needs a reason. Output the parser
-does not recognise is shown raw and cannot be approved here. Polling only
-reads, one poll at a time; nothing approves without those actions (row 14),
-and there is no approve-all.
+rows in a worker thread, notifies once per new request (naming its Rule
+line), and on ``a`` (or the palette's "Review access requests") opens
+``ApprovalScreen`` with the full proposal text, Security and Prover lines
+included. Approving needs the Yes button of ``ApproveScreen``, which shows
+the whole proposal again in a capped, scrollable body with its buttons
+always on screen; no single key approves. Lines from Rationale on stay in
+printed order inside a quoted, labelled block, since the agent's rationale
+can imitate them (``sandbox.approvals``); when that block holds Security,
+Prover or Application lines, a note at the top says so. Rejecting needs a
+reason. Output the parser does not recognise is shown raw and cannot be
+approved here. Polling only reads, one poll at a time; nothing approves
+without those actions (row 14), and there is no approve-all.
 """
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import replace
 
 from rich.text import Text
 from textual import work
@@ -46,8 +48,9 @@ Key = tuple[str | None, str]
 APPROVAL_POLL_SECONDS = 5.0
 REVIEW_ACCESS = "Review access requests"
 NOTE_LIMIT = 160
-FLAG_LABELS = ("Security:", "Prover:", "Validation:", "Application:")
-FIRST_LABELS = ("Security:", "Prover:", "Validation:")
+FLAG_LABELS = tuple(approvals.QUOTE + label
+                    for label in ("Security:", "Prover:", "Validation:", "Application:"))
+NOTE_FIELDS = ("Security", "Prover", "Application")
 
 
 def launch_sandboxes() -> dict[str, Key]:
@@ -98,22 +101,40 @@ class ApprovalFeed:
         return set(self.launch_targets.values())
 
 
+def _line_style(line: str) -> str | None:
+    if line == approvals.UNVERIFIED_HEADING:
+        return "bold magenta"
+    if line.startswith(FLAG_LABELS):
+        return "bold yellow"
+    if line.startswith(approvals.QUOTE):
+        return "italic"
+    return None
+
+
 def proposal_text(proposal: Proposal) -> Text:
+    """Every line of the proposal in printed order, the unverified ones quoted."""
     text = Text()
     for index, line in enumerate(proposal.text.split("\n")):
         if index:
             text.append("\n")
-        style = "bold yellow" if line.startswith(FLAG_LABELS) else None
-        text.append(line, style=style)
+        text.append(line, style=_line_style(line))
     return text
 
 
 def approval_text(proposal: Proposal) -> Text:
-    """Every line of the proposal, Security and Prover lines first."""
-    lines = proposal.text.split("\n")
-    first = [line for line in lines if line.startswith(FIRST_LABELS)]
-    rest = [line for line in lines if not line.startswith(FIRST_LABELS)]
-    return proposal_text(replace(proposal, text="\n".join(first + rest)))
+    """The proposal as ``proposal_text``, after a note naming its notes to read.
+
+    Lines are never moved: those after Rationale may be the agent's, so they
+    stay inside the quoted block.
+    """
+    notes = [label for label in proposal.unverified_fields if label in NOTE_FIELDS]
+    if not notes:
+        return proposal_text(proposal)
+    names = notes[0] if len(notes) == 1 else f"{', '.join(notes[:-1])} and {notes[-1]}"
+    text = Text(f"Read the {names} lines in the quoted block before "
+                "approving; OpenShell or the agent wrote them.\n", style="bold yellow")
+    text.append_text(proposal_text(proposal))
+    return text
 
 
 def _short(value: str, limit: int = NOTE_LIMIT) -> str:

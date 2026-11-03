@@ -9,7 +9,10 @@ Shared by ``tongs-agents sandbox setup`` and the Textual wizard in
    gateway answers, the providers it already has (``provider list -o json``);
 2. takes a ``Plan``: a profile name, a host folder, a harness, network
    presets, provider names (credentials stay OpenShell providers, row 13),
-   an optional image and gateway;
+   an optional image and gateway. The folder is uploaded into the sandbox,
+   so ``/``, the home folder and any folder holding it are refused
+   (``unsafe_folder``), and the current directory is never the default
+   when it is one of them;
 3. renders the plan's policy (``policy_text``) for review. ``review`` turns
    it into a ``ReviewedPolicy``, which is the only thing ``probe_image`` and
    ``write_policy`` accept, so no sandbox starts before the policy was shown;
@@ -101,6 +104,9 @@ PROBE_SCRIPT = (
 # and mv; the bridge pulls with head and base64; uploads need tar.
 IMAGE_TOOLS: tuple[str, ...] = ("sh", "bash", "tar", "cat", "mv", "head", "base64")
 CHAT_TOOL = "tongs-agents"
+# The upload skips only what .gitignore lists; the wizard warns about these.
+SECRET_NAMES: tuple[str, ...] = (".ssh", ".aws", ".gnupg", ".kube", ".docker", ".env",
+                                 ".netrc", ".git-credentials")
 
 
 class SetupError(ValueError):
@@ -449,13 +455,62 @@ def _yaml(value, indent: int = 0) -> list[str]:
 # Plan
 
 
+def _home() -> Path | None:
+    try:
+        return Path.home()
+    except (RuntimeError, KeyError):
+        return None
+
+
+def _resolved(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError):
+        return path
+
+
+def unsafe_folder(folder: Path, home: Path | None = None) -> str | None:
+    """Why ``folder`` must not be uploaded into a sandbox, or None when it may be.
+
+    The upload skips only .gitignore'd files, and a home folder is rarely a git
+    repository, so uploading ``/``, the home folder or a folder holding it would
+    copy SSH keys and harness credentials where the agent can read them.
+    """
+    home = _home() if home is None else home
+    if home is not None and not home.is_absolute():
+        home = None
+    folders = {Path(folder), _resolved(Path(folder))}
+    homes = {home, _resolved(home)} if home is not None else set()
+    for candidate in folders:
+        if candidate.anchor and candidate == Path(candidate.anchor):
+            return f"{folder} is the filesystem root"
+        for place in homes:
+            if candidate == place:
+                return f"{folder} is your home folder"
+            if candidate in place.parents:
+                return f"{folder} holds your home folder"
+    return None
+
+
+def secret_paths(folder: Path) -> tuple[str, ...]:
+    """Well-known credential files or folders directly inside ``folder``."""
+    found = []
+    for name in SECRET_NAMES:
+        try:
+            if (Path(folder) / name).exists():
+                found.append(name)
+        except OSError:
+            continue
+    return tuple(found)
+
+
 @dataclass(frozen=True)
 class Plan:
     """The wizard's answers; ``check`` validates them."""
 
     profile: str
     harness: str
-    folder: Path
+    folder: Path | None
     presets: tuple[str, ...] = ()
     providers: tuple[str, ...] = ()
     image: str | None = None
@@ -480,11 +535,17 @@ class Plan:
             )
         if self.harness not in SETUP_HARNESSES:
             raise SetupError(f"harness: one of {', '.join(SETUP_HARNESSES)}")
+        if self.folder is None or not str(self.folder).strip():
+            raise SetupError("folder: name the project folder to upload into the sandbox")
         folder = Path(self.folder).expanduser()
         if not folder.is_absolute() or "\0" in str(folder):
             raise SetupError("folder: an absolute path")
         if not folder.is_dir():
             raise SetupError(f"folder: {folder} is not a directory")
+        unsafe = unsafe_folder(folder)
+        if unsafe is not None:
+            raise SetupError(f"folder: {unsafe}; everything in it would be uploaded into "
+                             "the sandbox, credentials included. Pick a project folder")
         unknown = [key for key in self.presets if key not in PRESETS]
         if unknown:
             raise SetupError(f"network preset {unknown[0]!r}: one of {', '.join(PRESETS)}")
@@ -520,13 +581,23 @@ def suggested_providers(harness: str, presets: Iterable[str] = ()) -> tuple[str,
     ))
 
 
+def default_folder() -> Path | None:
+    """The current directory, unless uploading it is refused (``unsafe_folder``)."""
+    try:
+        cwd = Path.cwd()
+    except OSError:
+        return None
+    return None if unsafe_folder(cwd) is not None else cwd
+
+
 def default_plan(harness: str = "claude", folder: Path | None = None,
                  profile: str | None = None) -> Plan:
+    """The wizard's starting answers; no folder when the current one may not be uploaded."""
     presets = suggested_presets(harness)
     return Plan(
         profile=profile or f"{harness}-boxed",
         harness=harness,
-        folder=folder if folder is not None else Path.cwd(),
+        folder=folder if folder is not None else default_folder(),
         presets=presets,
         providers=suggested_providers(harness, presets),
     )
@@ -724,6 +795,11 @@ def finish(plan: Plan, report: HostReport | None, reviewed: ReviewedPolicy | Non
                      "from the sidebar.")
     if report is not None and report.provider_error:
         notes.append(f"Could not list providers: {report.provider_error}")
+    secrets_found = secret_paths(plan.folder)
+    if secrets_found:
+        notes.append(f"{plan.folder} holds {', '.join(secrets_found)}. The upload skips only "
+                     "what .gitignore lists, so unless it lists them the agent can read "
+                     "these; move them out or pick a narrower folder.")
     if not plan.presets:
         notes.append("The policy allows no network access; the agent cannot reach its model "
                      "API until you approve a rule.")
