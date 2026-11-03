@@ -29,7 +29,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel.server import NotificationOptions
 from mcp.server.stdio import stdio_server
 
-from tongs_agents import control
+from tongs_agents import chat_wake, control
 from tongs_agents.chat import audit as chat_audit
 from tongs_agents.chat import frame
 from tongs_agents.chat import store as chat_store
@@ -263,6 +263,7 @@ class ChatGate:
                 return self._refuse("chat_post", error, data)
             except ChatError as error:
                 return error_payload(error)
+            chat_wake.wake_mentioned(current, posted, caller=grant.launch_id)
         return {
             "ok": True,
             "id": posted.id,

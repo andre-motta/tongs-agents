@@ -46,6 +46,15 @@ MAX_LINEAGE_STEPS = 64
 # needs only each ancestor's parent pid (#91).
 PPID_ONLY_WALK = sys.platform == "darwin"
 PPID_TIMEOUT = 5
+CHAT_DIGEST_EVENT = "chat-digest"
+_CHAT_EVENTS = frozenset({"session-start", "prompt-submit", "tool-use"})
+_CHAT_HARNESSES = frozenset({"claude", "codex"})
+# Mirrors chat.store.CHAT_DIR and DB_NAME: the cheap check before any chat import.
+_CHAT_FILE = ("chat", "chat.db")
+_MAX_DIGEST_REQUEST_BYTES = 1024
+# The chat identity check reads /proc only; elsewhere the ancestry walk would
+# start ps, and the hook starts no subprocess for chat (#32).
+CHAT_SUPPORTED = sys.platform == "linux"
 
 
 def _find_agent_pid(agent):
@@ -196,13 +205,13 @@ def _descends_by_ppid(process, pid, start_token, parent_of=None, lookup=None):
     return False
 
 
-def _launch_claim(launch_id):
-    """The claimed ``(pid, process_start)`` of a launch record, or None.
+def read_launch_data(launch_id):
+    """The launch record of ``launch_id`` as a dict, or None; never raises.
 
-    A dependency-free reader for the two claim fields with the checks
-    ``launches`` applies: no symlink, a regular file owned by this user, at
-    most 64 KiB, schema 1, named for its own id and claimed, and a process
-    start of at most 1024 printable characters. Never raises.
+    A dependency-free reader with the checks ``launches`` applies: no
+    symlink, a regular file owned by this user, at most 64 KiB, schema 1 and
+    named for its own id. Chat delivery (``chat.delivery``) reads records
+    through it too, so the hook never imports ``launches``.
     """
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
@@ -229,8 +238,18 @@ def _launch_claim(launch_id):
         not isinstance(data, dict)
         or data.get("schema_version") != _LAUNCH_SCHEMA_VERSION
         or data.get("launch_id") != launch_id
-        or data.get("state") != "running"
     ):
+        return None
+    return data
+
+
+def launch_claim_of(data):
+    """The claimed ``(pid, process_start)`` of launch record ``data``, or None.
+
+    The record must be claimed (``running``) with a positive pid and a process
+    start, when present, of at most 1024 printable characters.
+    """
+    if not isinstance(data, dict) or data.get("state") != "running":
         return None
     pid = data.get("pid")
     start = data.get("process_start")
@@ -243,6 +262,11 @@ def _launch_claim(launch_id):
     ):
         return None
     return pid, start
+
+
+def _launch_claim(launch_id):
+    """The claimed ``(pid, process_start)`` of a launch record, or None."""
+    return launch_claim_of(read_launch_data(launch_id))
 
 
 def _verified_launch(launch, process):
@@ -546,6 +570,52 @@ def handle(event, agent="claude"):
     return _store_event(*arguments)
 
 
+def _chat_file_exists():
+    try:
+        return stat.S_ISREG(os.lstat(paths.state_dir().joinpath(*_CHAT_FILE)).st_mode)
+    except (OSError, ValueError):
+        return False
+
+
+def _digest_point():
+    """The Pi extension event named on stdin by a ``chat-digest`` request."""
+    try:
+        request = json.loads(sys.stdin.read(_MAX_DIGEST_REQUEST_BYTES))
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return None
+    point = request.get("point") if isinstance(request, dict) else None
+    return point if isinstance(point, str) else None
+
+
+def chat_output(event, agent):
+    """What the hook prints for agent chat at ``event``; '' unless granted.
+
+    Sessions that tongs-agents did not launch cost no file access, and
+    launched sessions without a chat file cost one ``lstat``. Never raises:
+    chat never fails an agent event, and an ungranted session's output stays
+    empty, as before chat existed.
+    """
+    if not CHAT_SUPPORTED:
+        return ""
+    if agent in _CHAT_HARNESSES and event in _CHAT_EVENTS:
+        point = None
+    elif agent == "pi" and event == CHAT_DIGEST_EVENT:
+        point = _digest_point()
+    else:
+        return ""
+    launch = _capture_launch()
+    if not launch or "launch_id" not in launch or not _chat_file_exists():
+        return ""
+    try:
+        # Imported only past the cheap checks to keep the hook import budget:
+        # sessions without chat never load sqlite3 or the chat package.
+        from tongs_agents.chat import delivery
+
+        return delivery.hook_output(agent, event, launch, point=point)
+    except Exception:  # fail open: any chat failure means no output
+        return ""
+
+
 def main():
     if len(sys.argv) < 2:
         sys.exit(1)
@@ -559,6 +629,13 @@ def main():
         handle(sys.argv[1], agent)
     except ValueError:
         sys.exit(1)
+    output = chat_output(sys.argv[1], agent)
+    if output:
+        try:
+            sys.stdout.write(output)
+            sys.stdout.flush()
+        except (OSError, ValueError):
+            pass
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from textual.widget import Widget
 from textual.widgets import Button, Input, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
 
+from tongs_agents import chat_wake
 from tongs_agents.chat import frame, grants
 from tongs_agents.chat import store as chat_store
 from tongs_agents.chat.identity import maintainer_refusal
@@ -239,6 +240,7 @@ def submit_line(text: str, channel: str,
         thread, text = int(reply.group(1)), reply.group(2)
     with ChatStore.maintainer() as current:
         posted = current.post(channel, text, thread=thread)
+        chat_wake.wake_mentioned(current, posted)
     mentioned = f", mentioned {', '.join('@' + name for name in posted.mentioned)}" \
         if posted.mentioned else ""
     return f"Posted {posted.id} to #{posted.channel}{mentioned}"

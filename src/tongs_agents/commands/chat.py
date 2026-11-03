@@ -11,7 +11,9 @@ tools. Exit codes: 0 ok, 1 error, 5 refused.
   to type the handle at an interactive terminal. There is no ``--yes``.
 - ``revoke LAUNCH_ID``, ``grants``, ``channels``, ``channel-create NAME``,
   ``channel-archive NAME``, ``post CHANNEL TEXT [--thread ID]``,
-  ``read CHANNEL``, ``prune`` and ``purge``.
+  ``read CHANNEL``, ``prune`` and ``purge``. A post wakes the idle
+  ``chat+wake`` sessions it mentions (``chat_wake``) and reports that on
+  stderr.
 
 See docs/chat.md.
 """
@@ -25,7 +27,7 @@ import sys
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
-from tongs_agents import control
+from tongs_agents import chat_wake, control
 from tongs_agents.app_config import AppConfigError, load_app_config
 from tongs_agents.chat import frame, grants
 from tongs_agents.chat import store as chat_store
@@ -205,8 +207,12 @@ def run_post(args) -> int:
     text = _stdin_text() if args.text == STDIN else args.text
     with ChatStore.maintainer() as current:
         posted = current.post(args.channel, text, thread=args.thread)
+        woken = chat_wake.wake_mentioned(current, posted)
     mentioned = " ".join(f"@{name}" for name in posted.mentioned)
     print(f"{posted.id}" + (f" mentioned {mentioned}" if mentioned else ""))
+    for result in woken:
+        shown = "woke" if result.outcome == chat_wake.WOKEN else f"did not wake ({result.outcome})"
+        print(f"{shown} @{result.handle}", file=sys.stderr)
     return EXIT_OK
 
 

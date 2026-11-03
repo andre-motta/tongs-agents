@@ -414,6 +414,14 @@ class ZellijMultiplexer:
         except RuntimeError as error:
             raise MultiplexerError(str(error)) from error
 
+    def focused_panes(self, session: str) -> set[str]:
+        """Pane ids that an attached client has focused (``list-clients``)."""
+        prefix = "terminal_"
+        clients = self._clients(_session(session), self._effective_socket_dir())
+        return {
+            shown[len(prefix):] for shown in clients.values() if shown.startswith(prefix)
+        }
+
     def focus(self, ref: PaneRef) -> FocusResult:
         """Select ref's pane for the most recent client; never activate."""
         if not isinstance(ref, PaneRef) or ref.multiplexer != NAME:

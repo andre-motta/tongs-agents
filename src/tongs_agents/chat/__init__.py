@@ -11,7 +11,12 @@ docs/chat.md. The package is split by concern:
   the sidebar;
 - ``audit``: the chat audit log ``state_dir()/audit/chat.jsonl``;
 - ``frame``: the data framing and previews every reader sees;
-- ``inbox``: the read-mostly seam the hook uses for mention injection (M5-C).
+- ``inbox``: the read-mostly seam the hook uses for mention injection;
+- ``delivery``: what the hook prints for a granted session (M5-C), imported
+  only after the hook's cheap checks.
+
+Wake on mention lives outside the package in ``tongs_agents.chat_wake``,
+because it drives panes through the control layer.
 
 No daemon: every participant opens the file directly.
 """

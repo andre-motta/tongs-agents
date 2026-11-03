@@ -26,7 +26,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from tongs_agents import control, discovery, hook, launches
-from tongs_agents.chat.store import Grant
+# grant_matches lives in the store so the hook reaches it without this module.
+from tongs_agents.chat.store import grant_matches  # re-exported
 from tongs_agents.launches import LaunchRecord
 from tongs_agents.profiles import PROFILE_NAME_RE
 
@@ -89,14 +90,6 @@ def verify_agent(env: Mapping[str, str] | None = None, pid: int | None = None) -
         raise IdentityError(f"launch {launch_id} no longer runs its claimed process")
     return AgentIdentity(launch_id, record.profile, record.harness,
                          record.process_start, record)
-
-
-def grant_matches(grant: Grant | None, identity: AgentIdentity) -> bool:
-    return (
-        grant is not None
-        and grant.launch_id == identity.launch_id
-        and grant.process_start == identity.process_start
-    )
 
 
 def _ancestors(pid: int) -> list[tuple[int, str]]:

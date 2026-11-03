@@ -32,8 +32,10 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
-from tongs_agents import launches, paths
+from tongs_agents import paths
+from tongs_agents.models import valid_launch_value
 
 CHAT_DIR = "chat"
 DB_NAME = "chat.db"
@@ -57,6 +59,10 @@ HOOK_BUSY_TIMEOUT_MS = 200
 READ_LIMIT_DEFAULT = 20
 READ_LIMIT_MAX = 50
 INBOX_MENTIONS = 10
+WAKE_INTERVAL_MS = 120_000
+WAKE_WINDOW_MS = 3_600_000
+WAKES_PER_WINDOW = 10
+WAKE_LOOP_MESSAGES = 6
 
 ROLE_MAINTAINER = "maintainer"
 ROLE_AGENT = "agent"
@@ -214,6 +220,20 @@ class Grant:
         }
 
 
+def grant_matches(grant: Grant | None, identity) -> bool:
+    """True when ``grant`` was given to ``identity``'s launch and claimed process.
+
+    ``identity`` is anything with ``launch_id`` and ``process_start`` (the MCP
+    server's ``AgentIdentity`` or the hook's lighter one), so a grant dies with
+    the process it was given to.
+    """
+    return (
+        grant is not None
+        and grant.launch_id == identity.launch_id
+        and grant.process_start == identity.process_start
+    )
+
+
 @dataclass(frozen=True)
 class Channel:
     id: int
@@ -245,6 +265,12 @@ class Posted:
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def is_launch_id(value) -> bool:
+    """32 lowercase hex, as ``launches.is_launch_id``; kept here so the hook can
+    import the store without the launcher's imports."""
+    return valid_launch_value("launch_id", value)
 
 
 def is_name(value) -> bool:
@@ -324,7 +350,15 @@ def _create_file(path: Path) -> None:
 
 
 def _uri(path: Path) -> str:
-    return Path(os.path.abspath(path)).as_uri() + "?mode=rw"
+    """The ``file:`` URI SQLite opens, never creating the file.
+
+    Built by hand: ``Path.as_uri`` imports ``urllib.request`` on Python 3.14,
+    which cost the hook about 10 ms per run (#32).
+    """
+    text = Path(os.path.abspath(path)).as_posix()
+    if not text.startswith("/"):
+        text = "/" + text
+    return "file:" + quote(os.fsencode(text), safe="/:") + "?mode=rw"
 
 
 def _translate(error: sqlite3.Error) -> ChatError:
@@ -460,13 +494,13 @@ class ChatStore:
 
     @classmethod
     def agent(cls, launch_id: str, *, busy_ms: int | None = None) -> ChatStore:
-        if not launches.is_launch_id(launch_id):
+        if not is_launch_id(launch_id):
             raise ChatRefused("not a tongs-agents launch id")
         return cls(connect(ROLE_AGENT, busy_ms=busy_ms), launch_id, ROLE_AGENT)
 
     @classmethod
     def hook(cls, launch_id: str, *, busy_ms: int | None = None) -> ChatStore:
-        if not launches.is_launch_id(launch_id):
+        if not is_launch_id(launch_id):
             raise ChatRefused("not a tongs-agents launch id")
         return cls(connect(ROLE_HOOK, busy_ms=busy_ms), launch_id, ROLE_HOOK)
 
@@ -550,7 +584,7 @@ class ChatStore:
                   profile: str, harness: str, now: int | None = None) -> Grant:
         """Write (or replace) the grant of one launch. Maintainer only."""
         self._require_maintainer()
-        if not launches.is_launch_id(launch_id):
+        if not is_launch_id(launch_id):
             raise ChatRefused("not a tongs-agents launch id")
         if not is_name(handle) or handle == MAINTAINER:
             raise ChatError(f"invalid handle {handle!r:.40}: use 1 to 32 of a-z, 0-9 and -")
@@ -843,6 +877,86 @@ class ChatStore:
                 [(known[name], message_id) for name in mentioned],
             )
             return Posted(message_id, found.name, thread, tuple(mentioned))
+
+        return self._write(work)
+
+    # -- Wake bookkeeping (docs/work/agent-chat.md, row 12) --
+
+    def agent_streak(self, message_id: int) -> int:
+        """Agent-authored messages in a row at the end of ``message_id``'s thread.
+
+        Counts back from ``message_id`` through its thread (root and replies)
+        and stops at the first maintainer message; at most
+        ``WAKE_LOOP_MESSAGES``.
+        """
+        root = self._thread_root(message_id)
+        rows = self._rows(
+            "SELECT author FROM messages WHERE id <= ? AND (id = ? OR thread_id = ?) "
+            "ORDER BY id DESC LIMIT ?",
+            (message_id, root, root, WAKE_LOOP_MESSAGES),
+        )
+        streak = 0
+        for (author,) in rows:
+            if author == MAINTAINER:
+                break
+            streak += 1
+        return streak
+
+    def _thread_root(self, message_id: int) -> int:
+        row = self._rows("SELECT coalesce(thread_id, id) FROM messages WHERE id = ?",
+                         (message_id,))
+        return row[0][0] if row else message_id
+
+    def _wake_row(self, target: str) -> tuple | None:
+        return self.connection.execute(
+            "SELECT last_wake, wake_window_start, wakes_in_window FROM deliveries "
+            "WHERE participant = ?",
+            (target,),
+        ).fetchone()
+
+    @staticmethod
+    def _wake_allowed(row: tuple | None, now: int) -> tuple[bool, int, int]:
+        """(allowed, window start, wakes in window) for a wake at ``now``."""
+        if row is None:
+            return False, now, 0
+        last, start, count = row
+        if start is None or now - start >= WAKE_WINDOW_MS:
+            start, count = now, 0
+        allowed = (
+            (last is None or now - last >= WAKE_INTERVAL_MS) and count < WAKES_PER_WINDOW
+        )
+        return allowed, start, count
+
+    def wake_rate_ok(self, target: str, now: int | None = None) -> bool:
+        """True when ``target`` may be woken now: 1 per 2 min and 10 per hour."""
+        stamp = now_ms() if now is None else now
+        try:
+            return self._wake_allowed(self._wake_row(target), stamp)[0]
+        except sqlite3.Error as error:
+            raise _translate(error) from None
+
+    def claim_wake(self, target: str, now: int | None = None) -> bool:
+        """Reserve one wake of ``target`` under the rate limits; True when reserved.
+
+        The poster's process wakes the target, so this is the one statement
+        that updates another participant's ``deliveries`` row, and it touches
+        only the wake columns. Check and update share one transaction, so two
+        posters never both wake a target inside the limit. The hook never
+        wakes.
+        """
+        if self.role == ROLE_HOOK:
+            raise ChatRefused("the hook does not wake")
+        stamp = now_ms() if now is None else now
+
+        def work():
+            allowed, start, count = self._wake_allowed(self._wake_row(target), stamp)
+            if allowed:
+                self.connection.execute(
+                    "UPDATE deliveries SET last_wake = ?, wake_window_start = ?, "
+                    "wakes_in_window = ? WHERE participant = ?",
+                    (stamp, start, count + 1, target),
+                )
+            return allowed
 
         return self._write(work)
 
