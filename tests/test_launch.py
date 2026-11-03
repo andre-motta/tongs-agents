@@ -225,6 +225,16 @@ def test_exit_64_cases(config, no_exec, capsys):
     assert "profiles.p.command" in lines[-1]
 
 
+def test_harness_changed_since_pending_is_64(config, no_exec, capsys):
+    config('[profiles.p]\ncommand = ["x"]\nharness = "codex"\n')
+    record = pending("p", "claude")
+    assert launch.main(["p", "--launch-id", record.launch_id]) == 64
+    assert no_exec == []
+    assert launches.get(record.launch_id).state == "pending"
+    error = capsys.readouterr().err
+    assert "'claude'" in error and "'codex'" in error
+
+
 def test_missing_cwd_is_64(config, no_exec, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     config(f'[profiles.p]\ncommand = ["x"]\ncwd = {json.dumps(str(tmp_path / "gone"))}\n')

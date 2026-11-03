@@ -78,9 +78,9 @@ def _read_config_bytes(path: Path) -> bytes | None:
         raise ProfileError(f"{path}: refusing to read a symlinked config file")
     if not stat.S_ISREG(info.st_mode):
         raise ProfileError(f"{path}: not a regular file")
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    # O_NONBLOCK keeps a FIFO swapped in after the lstat check from hanging the
+    # open; fstat below still refuses anything but a regular file.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as error:

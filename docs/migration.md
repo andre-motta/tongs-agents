@@ -43,18 +43,28 @@ do not carry over.
 they act on:
 
 - each hook command that runs `claude-fleet-hook` or the older
-  `~/.claude/bin/fleet-hook.sh`, one command at a time. Other commands in the
-  same hook group stay;
+  `~/.claude/bin/fleet-hook.sh`, one command at a time, including the unquoted
+  form the old installer wrote when the home directory contains a space. Other
+  commands in the same hook group stay;
 - a `fleet` MCP entry only when it starts `claude_fleet_monitor.mcp_server` or
-  `tongs_agents.mcp_server` with Python: the `settings.json` entry, a Claude
-  Code user-scope entry and the Codex entry. A `fleet` server that runs
-  anything else is yours and is kept;
+  `tongs_agents.mcp_server` with Python, or is the oldest
+  `uv run --directory ~/.claude/fleet-mcp server.py` form: the `settings.json`
+  entry, a Claude Code user-scope entry and the Codex entry. A `fleet` server
+  that runs anything else is yours and is kept;
 - with `--agent pi` or `--agent all`, the Pi extension paths recorded in
   `claude-fleet-monitor.json` with the `claude-fleet-monitor` marker, followed
   by that file. A failed removal keeps the file so a later run can retry, and a
   file without the marker is left alone.
 
-Uninstall also removes the entries tongs-agents itself installed.
+Uninstall also removes the entries tongs-agents itself installed, and the
+old `~/.claude/bin/fleet-*.sh` scripts and `~/.claude/fleet-mcp` directory.
+The directory is kept, with the command to run, while a Claude Code entry
+still starts it (for example when the `claude` CLI was not found), so no MCP
+registration is left pointing at a removed directory.
+
+A full uninstall deletes only tongs-agents session records
+(`fleet-v<N>-<digest>.json`) and its lock and temp files from the sessions
+directory; other files there are kept.
 
 ## What is never removed automatically
 

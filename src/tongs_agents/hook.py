@@ -6,6 +6,7 @@ import sys
 import time
 import uuid
 
+from tongs_agents._envcheck import bounded_env_value
 from tongs_agents.discovery import (
     MAX_DETAIL_LENGTH,
     MAX_EVENT_BYTES,
@@ -30,8 +31,6 @@ from tongs_agents.models import (
     valid_launch_value,
     validated_launch,
 )
-
-MAX_LAUNCH_ENV_BYTES = 1024
 
 
 def _find_agent_pid(agent):
@@ -101,20 +100,6 @@ def _capture_terminal_info():
     return capture_terminal_info()
 
 
-def _launch_env_value(name):
-    try:
-        value = os.environ.get(name)
-        if (
-            not isinstance(value, str)
-            or "\0" in value
-            or len(value.encode("utf-8")) > MAX_LAUNCH_ENV_BYTES
-        ):
-            return ""
-    except Exception:
-        return ""
-    return value
-
-
 def _capture_launch():
     """Read the launcher's identity from this process env; never raises."""
     launch = {}
@@ -122,7 +107,7 @@ def _capture_launch():
         ("launch_id", LAUNCH_ID_ENV),
         ("profile_id", PROFILE_ID_ENV),
     ):
-        value = _launch_env_value(name)
+        value = bounded_env_value(name) or ""
         if valid_launch_value(key, value):
             launch[key] = value
     return launch or None

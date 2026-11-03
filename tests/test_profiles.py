@@ -1,6 +1,7 @@
 """Profiles: the [profiles] section of config.toml and its validation matrix."""
 
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -232,6 +233,33 @@ def test_foreign_owned_config_is_refused(config_dir, monkeypatch):
     monkeypatch.setattr(profiles.os, "getuid", lambda: real_getuid() + 1)
     with pytest.raises(ProfileError, match="another user"):
         load_profiles()
+
+
+@posix_only
+def test_fifo_swapped_in_after_lstat_does_not_hang(config_dir, monkeypatch):
+    path = write_config(config_dir, '[profiles.p]\ncommand = ["x"]\n')
+    real_open = os.open
+
+    def swap_then_open(target, flags, *args):
+        if Path(target) == path:
+            path.unlink()
+            os.mkfifo(path)
+        return real_open(target, flags, *args)
+
+    monkeypatch.setattr(profiles.os, "open", swap_then_open)
+    outcome = []
+
+    def load():
+        try:
+            load_profiles()
+        except ProfileError as error:
+            outcome.append(str(error))
+
+    worker = threading.Thread(target=load, daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert outcome and "regular file" in outcome[0]
 
 
 def test_name_patterns_reject_trailing_newline():

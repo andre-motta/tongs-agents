@@ -8,7 +8,7 @@ import sys
 
 import pytest
 
-from tongs_agents import discovery, mcp_server
+from tongs_agents import _envcheck, discovery, hook, mcp_server
 from tongs_agents.discovery import ProcessInfo, read_session_records
 from tongs_agents.hook import handle
 from tongs_agents.models import (
@@ -19,6 +19,7 @@ from tongs_agents.models import (
     parse_session,
     validated_launch,
 )
+from tongs_agents.terminal_apis import _env
 from tests import test_pi_extension
 from tests.conftest import write_session
 from tests.test_harness_contract import make_record
@@ -369,6 +370,16 @@ def test_hook_subprocess_records_launch(fleet_dir, tmp_path):
     }
 
 
+def test_launch_capture_and_terminal_capture_share_one_env_check(monkeypatch):
+    monkeypatch.setenv(LAUNCH_ID_ENV, LAUNCH_ID)
+    monkeypatch.setenv(PROFILE_ID_ENV, "reviewer")
+    assert hook._capture_launch() == {"launch_id": LAUNCH_ID, "profile_id": "reviewer"}
+    assert _env.bounded_env((PROFILE_ID_ENV,)) == {PROFILE_ID_ENV: "reviewer"}
+    monkeypatch.setattr(_envcheck, "MAX_VALUE_BYTES", len("reviewer") - 1)
+    assert hook._capture_launch() is None
+    assert _env.bounded_env((PROFILE_ID_ENV,)) == {}
+
+
 def test_hook_import_path_gains_no_modules():
     result = subprocess.run(
         [sys.executable, "-c",
@@ -378,6 +389,7 @@ def test_hook_import_path_gains_no_modules():
     modules = set(result.stdout.split())
     assert {name for name in modules if name.startswith("tongs_agents")} == {
         "tongs_agents",
+        "tongs_agents._envcheck",
         "tongs_agents._version",
         "tongs_agents.discovery",
         "tongs_agents.harnesses",

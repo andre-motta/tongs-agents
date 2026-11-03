@@ -290,6 +290,39 @@ def test_install_is_profile_driven(home, profiled, monkeypatch, capsys):
     }
 
 
+def _without_pi(home, monkeypatch):
+    real_which = cli.shutil.which
+    monkeypatch.setattr(cli.shutil, "which", lambda name: None if name == "pi" else real_which(name))
+
+
+def test_missing_pi_for_profile_only_is_a_named_warning(home, profiled, monkeypatch, capsys):
+    _without_pi(home, monkeypatch)
+    _run(monkeypatch, "install")
+    output = capsys.readouterr().out
+    assert "Warning: skipped Pi monitoring (for profile pi-local)" in output
+    assert "Tongs Agents installed" in output
+    assert home.pi_calls == []
+    assert _owned_groups(cli.SETTINGS_FILE, "claude") == _all_events("claude")
+
+
+@pytest.mark.parametrize("argv", [["--agent", "pi"], ["--agent", "all"]])
+def test_missing_pi_requested_explicitly_still_fails(home, profiled, monkeypatch, capsys, argv):
+    _without_pi(home, monkeypatch)
+    with pytest.raises(SystemExit) as raised:
+        _run(monkeypatch, "install", *argv)
+    assert raised.value.code == 1
+    output = capsys.readouterr().out
+    assert "Warning: skipped" not in output
+    assert "Pi and tongs-agents-hook must be installed before enabling Pi" in output
+
+
+def test_install_help_documents_profile_pi_warning(monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _run(monkeypatch, "install", "--help")
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "skipped with a warning" in help_text
+
+
 def test_agent_selection_limits_profile_homes(home, profiled, monkeypatch):
     _run(monkeypatch, "install", "--agent", "codex")
     assert (profiled.c / "hooks.json").exists()

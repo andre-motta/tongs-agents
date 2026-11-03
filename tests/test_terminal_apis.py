@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tongs_agents import discovery
+from tongs_agents import _envcheck, discovery
 from tongs_agents.discovery import ProcessInfo
 from tongs_agents.terminal_apis import (
     TERMINALS,
@@ -310,7 +310,7 @@ def test_bounded_env_keeps_values_at_the_byte_limit(monkeypatch):
 
 def test_bounded_env_omits_unset_nul_and_non_text(monkeypatch):
     environ = {"GOOD": "1", "NUL": "a\0b", "BYTES": b"1", "NONE": None}
-    monkeypatch.setattr(_env, "os", SimpleNamespace(environ=environ))
+    monkeypatch.setattr(_envcheck, "os", SimpleNamespace(environ=environ))
 
     assert _env.bounded_env(("GOOD", "NUL", "BYTES", "NONE", "UNSET")) == {
         "GOOD": "1"
@@ -322,7 +322,7 @@ def test_bounded_env_never_raises(monkeypatch):
         def get(self, name):
             raise RuntimeError("broken environment")
 
-    monkeypatch.setattr(_env, "os", SimpleNamespace(environ=BrokenEnviron()))
+    monkeypatch.setattr(_envcheck, "os", SimpleNamespace(environ=BrokenEnviron()))
 
     assert _env.bounded_env(("ANY",)) == {}
 

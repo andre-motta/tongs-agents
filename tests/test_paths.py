@@ -189,13 +189,12 @@ def test_foreign_owned_dir_is_refused(tmp_path, monkeypatch):
         paths.ensure_private_dir(directory)
 
 
-@pytest.mark.parametrize("relation", ["equal", "inside", "parent"])
+@pytest.mark.parametrize("relation", ["equal", "inside"])
 def test_owned_dirs_never_overlap_the_legacy_dir(xdg_home, monkeypatch, relation):
     legacy_dir = xdg_home / ".claude" / "fleet"
     candidate = {
         "equal": legacy_dir,
         "inside": legacy_dir / "state",
-        "parent": xdg_home / ".claude",
     }[relation]
     for variable, resolve in (
         (paths.STATE_DIR_ENV, paths.state_dir),
@@ -210,3 +209,13 @@ def test_owned_dirs_never_overlap_the_legacy_dir(xdg_home, monkeypatch, relation
     with pytest.raises(paths.UnsafePathError, match="legacy"):
         paths.runtime_dir(create=True)
     assert not legacy_dir.exists()
+
+
+@pytest.mark.parametrize("ancestor", ["home", "claude"])
+def test_state_dir_may_be_an_ancestor_of_the_legacy_dir(xdg_home, monkeypatch, ancestor):
+    candidate = xdg_home if ancestor == "home" else xdg_home / ".claude"
+    monkeypatch.setenv(paths.STATE_DIR_ENV, str(candidate))
+    assert paths.state_dir(create=True) == candidate
+    assert paths.sessions_dir(create=True) == candidate / "sessions"
+    assert paths.launches_dir(create=True) == candidate / "launches"
+    assert not (xdg_home / ".claude" / "fleet").exists()
