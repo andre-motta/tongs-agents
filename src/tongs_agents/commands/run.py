@@ -82,7 +82,14 @@ def _notice(message: str) -> None:
 def resolve_folder(value: str | None, profile) -> str | None:
     """DIR as an absolute path; without it the current directory, else the profile cwd."""
     if value is not None:
-        return os.path.abspath(os.path.expanduser(value))
+        expanded = os.path.expanduser(value)
+        if os.path.isabs(expanded):
+            return os.path.normpath(expanded)
+        try:
+            return os.path.abspath(expanded)
+        except OSError:
+            # A relative DIR needs the current directory, which may be gone.
+            return None
     try:
         return os.getcwd()
     except OSError:
@@ -192,6 +199,12 @@ def run(args) -> int:
             EXIT_USAGE,
         )
     folder = resolve_folder(args.folder, profile)
+    if args.folder is not None and folder is None:
+        return _error(
+            f"cannot resolve {args.folder!r:.80}: the current directory is unreadable; "
+            "give an absolute path",
+            EXIT_USAGE,
+        )
     try:
         folder, extra = workspace_spawn.check_launch(profile, folder, args.extra or ())
     except LaunchError as error:

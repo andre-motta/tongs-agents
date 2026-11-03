@@ -280,3 +280,12 @@ def test_run_help_shows_the_separator(capsys):
     out = capsys.readouterr().out
     assert "PROFILE [DIR] [-- ARGS ...]" in out
     assert "-- --resume" in out
+
+
+def test_a_relative_dir_without_a_current_directory_is_refused(env, monkeypatch, capsys):
+    def gone():
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(run.os, "getcwd", gone)
+    assert _main("run", "alpha", "sub") == 2
+    assert "give an absolute path" in capsys.readouterr().err

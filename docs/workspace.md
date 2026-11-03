@@ -292,6 +292,10 @@ hides the harness are reported by the core doctor checks and by
   when that sidebar spawned it.
 - Zellij restores layouts, not agent processes; resurrecting an EXITED
   session does not restart agents.
+- When Zellij restarts a launched pane (for example after a resurrect), the
+  launcher runs again with the same folder and the same arguments given to
+  `run`. That is what you want for `--resume`; avoid passing a one-shot prompt
+  as an argument if the pane may be restarted.
 - Zellij 0.44.2 to 0.45.1 take pasted text only as a command argument
   (`zellij action paste --pane-id N -- <text>`), so text from
   `tongs-agents send`, MCP `agents_send` and chat wakes is readable in the
