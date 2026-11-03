@@ -488,6 +488,61 @@ def run_claude_print(lab, env, prompt, timeout=RUN_TIMEOUT):
     return process.returncode, messages, stderr[-2000:], process.pid
 
 
+def probe_claude_default(lab, section, home):
+    """The unset-CLAUDE_CONFIG_DIR case today's default install targets."""
+    settings = claude_settings_hooks(lab, "claude-default")
+    settings["mcpServers"] = {"probe-default-settings": {
+        "command": str(lab.fake_mcp), "args": [], "env": {}}}
+    (home / ".claude").mkdir(exist_ok=True)
+    (home / ".claude" / "settings.json").write_text(json.dumps(settings, indent=2))
+    env = lab.env(home)
+
+    _, listing, _ = run(["claude", "mcp", "list"], env=env, timeout=90)
+    get_cli = run(["claude", "mcp", "get", "probe-cli"], env=env, timeout=60)[0]
+    get_settings = run(["claude", "mcp", "get", "probe-default-settings"],
+                       env=env, timeout=60)[0]
+    section["mcp_cli_view_default"] = fact(
+        "Without CLAUDE_CONFIG_DIR, which user MCP servers does the Claude CLI see?",
+        "live",
+        {
+            "probe-cli (HOME/.claude.json)": "probe-cli" in listing,
+            "probe-default-settings (HOME/.claude/settings.json mcpServers)":
+                "probe-default-settings" in listing,
+        },
+        mcp_get_exit={"probe-cli": get_cli, "probe-default-settings": get_settings},
+    )
+
+    start = len(lab.records_for("claude-default"))
+    identity = launch_id()
+    session_env = lab.env(
+        home, ANTHROPIC_BASE_URL=lab.base_url,
+        ANTHROPIC_API_KEY="synthetic-local-key",
+        TONGS_AGENTS_LAUNCH_ID=identity, TONGS_AGENTS_PROFILE="probe")
+    code, messages, stderr, _ = run_claude_print(lab, session_env, TEXT_PROMPT)
+    init = next((message for message in messages
+                 if message.get("type") == "system" and message.get("subtype") == "init"),
+                {})
+    servers = {server.get("name"): server.get("status")
+               for server in init.get("mcp_servers", [])}
+    section["mcp_session_view_default"] = fact(
+        "Without CLAUDE_CONFIG_DIR, which user MCP servers does a Claude session load?",
+        "live",
+        {
+            "probe-cli (HOME/.claude.json)": servers.get("probe-cli"),
+            "probe-default-settings (HOME/.claude/settings.json mcpServers)":
+                servers.get("probe-default-settings"),
+        },
+        exit_code=code,
+        init_seen=bool(init),
+        stderr_tail=stderr if code else "",
+    )
+    section["hooks_default"] = fact(
+        "Without CLAUDE_CONFIG_DIR, do HOME/.claude/settings.json hooks fire?",
+        "live",
+        sorted({r["event"] for r in lab.records_for("claude-default")[start:]}),
+    )
+
+
 def probe_claude(lab, results):
     if shutil.which("claude") is None:
         results["claude"] = {"installed": False}
@@ -506,6 +561,7 @@ def probe_claude(lab, results):
         sorted(set(lab.files(home)) - set(before)),
         exit_code=code,
     )
+    probe_claude_default(lab, section, home)
 
     home = lab.dir("claude", "home")
     config = lab.dir("claude", "config")

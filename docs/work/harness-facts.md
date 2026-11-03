@@ -24,7 +24,7 @@ evidence for the CTO, not product code; nothing under `src/` changes.
 | Claude Code | 2.1.317 (native binary; the `claude` command is a symlink to `versions/2.1.317`) |
 | Codex | codex-cli 0.166.0 (static musl standalone release) |
 | Pi | `@earendil-works/pi-coding-agent` 1.5.0 (npm global) |
-| Probe | [`validation/harness_facts.py`](../../validation/harness_facts.py), sha256 `c7e5a64b35e63b0651ae38bf69b2f50e118362b106a9ff6c13e52054f2037b4f`; recorded run 2026-11-03T02:49Z, exit 0 |
+| Probe | [`validation/harness_facts.py`](../../validation/harness_facts.py), sha256 `fd45ad6003c70df591041d4ce17016fd02b5e789ba0820094ef3b3715f112ab3`; recorded run 2026-11-03T02:54Z, exit 0 |
 
 ## Method
 
@@ -34,7 +34,9 @@ evidence for the CTO, not product code; nothing under `src/` changes.
 
 The probe is local-only and Linux-only. Each harness gets a private root with
 its own HOME, XDG dirs, XDG_RUNTIME_DIR, TMPDIR, FLEET_DIR and one of
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `PI_CODING_AGENT_DIR`. The environment is
+`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `PI_CODING_AGENT_DIR`. Claude also runs
+once with only the private HOME and no `CLAUDE_CONFIG_DIR`, the layout the
+default install targets. The environment is
 built from scratch (only PATH, USER and locale are carried over), so no
 credential or API key reaches a harness.
 
@@ -84,16 +86,19 @@ below was answered with the synthetic provider.
 
 | Question | Answer | Label |
 | --- | --- | --- |
-| Does Claude load user MCP from `<config_dir>/settings.json` `mcpServers`? | **No.** An entry there is absent from `claude mcp list`, `claude mcp get` exits 1, and a session's init message does not list it. The same holds for `$HOME/.claude/settings.json`. | live |
+| Does Claude load user MCP from `$HOME/.claude/settings.json` `mcpServers` with `CLAUDE_CONFIG_DIR` unset (today's default install)? | **No.** With HOME pointing at a private dir and no `CLAUDE_CONFIG_DIR`, an entry shaped like the installer's `fleet` entry is absent from `claude mcp list`, `claude mcp get` exits 1 for it, and a `-p` session's stream-json init message does not list it. In the same runs a `claude mcp add --scope user` entry in `$HOME/.claude.json` is listed, `get` exits 0, and the session reports it `connected`; hooks in that same `settings.json` fired. | live |
+| Does Claude load user MCP from `<config_dir>/settings.json` `mcpServers` with `CLAUDE_CONFIG_DIR` set? | **No.** Same three checks, same result; the `.claude.json` entry in the config dir is listed and `connected`. | live |
 | Where does `claude mcp add --scope user` write? | `$CLAUDE_CONFIG_DIR/.claude.json` when the variable is set, otherwise `$HOME/.claude.json` (not `~/.claude/.claude.json`). Nothing is written to HOME when the variable is set. | live |
 | Does a session load that entry? | **Yes.** The stream-json init message reports the `.claude.json` server as `connected`. | live |
-| Does `CLAUDE_CONFIG_DIR` relocate settings.json hooks too? | **Yes.** All six hooks in `<config_dir>/settings.json` fired; hooks in `$HOME/.claude/settings.json` never fired. | live |
+| Does `CLAUDE_CONFIG_DIR` relocate settings.json hooks too? | **Yes.** All six hooks in `<config_dir>/settings.json` fired; hooks in `$HOME/.claude/settings.json` never fired. Without the variable, the `$HOME/.claude/settings.json` hooks fire (above). | live |
 
 Consequence: today's `cmd_install` writes the fleet MCP entry to
-`~/.claude/settings.json` `mcpServers`, which Claude Code 2.1.317 ignores.
-On 2.1.317 the Fleet MCP tools are therefore silently unavailable in Claude
-sessions configured by the current code. Hook registration in `settings.json` is
-correct.
+`~/.claude/settings.json` `mcpServers`. The default-case leg above reproduces
+that configuration (no `CLAUDE_CONFIG_DIR`, entry in
+`$HOME/.claude/settings.json`) and Claude Code 2.1.317 ignored it in both the
+CLI and a session. On 2.1.317 the Fleet MCP tools are therefore silently
+unavailable in Claude sessions configured by the current code. Hook
+registration in `settings.json` is correct in both cases.
 
 Side observation (live): `claude mcp list` and `claude mcp get` fire the
 `SessionEnd` hook from the config dir's `settings.json`, without a session
