@@ -1,10 +1,13 @@
 """Cross-platform focus service for Fleet sessions."""
 
+import os
 import sys
 
 from tongs_agents.discovery import read_session_records, resolve_session_process
 from tongs_agents.models import FocusOperation, FocusResult
+from tongs_agents.multiplexers import MultiplexerError, PaneRef, get_multiplexer
 from tongs_agents.terminal_apis import find_terminal_api
+from tongs_agents.terminal_apis._env import is_decimal_id
 
 _DETAILS_LIMIT = 120
 _GENERIC_DETAILS = frozenset({"tab or pane selection", "window activation"})
@@ -112,6 +115,54 @@ def focus_notification(result: FocusResult, repo: str) -> tuple[str, str]:
     return message, severity
 
 
+def _in_session_focus(session) -> FocusResult | None:
+    """Select the record's pane when the caller runs in the same zellij session.
+
+    Keyed on the captured pane id rather than the process, so records from
+    wrappers whose process identity is unresolved still focus. Returns None
+    whenever the record is not provably in the caller's session.
+    """
+    if not os.environ.get("ZELLIJ"):
+        return None
+    target = session.get("focus_target")
+    if not isinstance(target, dict):
+        target = {}
+    if target.get("kind") == "desktop":
+        return None
+    terminal_env = target.get("terminal_env") or session.get("terminal_env")
+    if not isinstance(terminal_env, dict):
+        return None
+    name = terminal_env.get("ZELLIJ_SESSION_NAME")
+    pane_id = terminal_env.get("ZELLIJ_PANE_ID")
+    if (
+        not isinstance(name, str)
+        or not name
+        or name != os.environ.get("ZELLIJ_SESSION_NAME")
+        or not is_decimal_id(pane_id)
+    ):
+        return None
+    socket_dir = terminal_env.get("ZELLIJ_SOCKET_DIR") or None
+    if socket_dir is not None and socket_dir != os.environ.get("ZELLIJ_SOCKET_DIR"):
+        return None
+    try:
+        multiplexer = get_multiplexer("zellij", socket_dir=socket_dir)
+        panes = multiplexer.list_panes(name)
+    except MultiplexerError:
+        return None
+    if not any(pane.ref.pane_id == pane_id for pane in panes):
+        return None
+    try:
+        return multiplexer.focus(PaneRef("zellij", name, pane_id, socket_dir))
+    except MultiplexerError as error:
+        return FocusResult(
+            state="failed",
+            reason="zellij pane selection failed",
+            backend="zellij",
+            target_found=True,
+            selection=FocusOperation(True, False, error.detail),
+        )
+
+
 def focus_session(query) -> FocusResult:
     matches = _matching_sessions(query)
     if not matches:
@@ -126,6 +177,9 @@ def focus_session(query) -> FocusResult:
             reason=f"multiple sessions match '{query}': {identities}",
         )
     session = _public_record(matches[0])
+    in_session = _in_session_focus(session)
+    if in_session is not None:
+        return in_session
     process = resolve_session_process(session)
     if process is None:
         return FocusResult(
