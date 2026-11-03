@@ -83,9 +83,10 @@ The target pane then goes through the full verification of
 [driving agent panes](control.md#what-is-verified). `agents_spawn` waits up to
 5 seconds for the new pane to claim its launch and reports `state` as
 `running` or still `pending`; status and wait refuse a pending launch until
-its pane claims it. When Zellij could not put the pane into the
-[agent stack](workspace.md#one-agent-at-a-time) because the stack is gone,
-the reply also has `notices`, a list of messages saying so.
+its pane claims it. When the Zellij
+[home pane](workspace.md#one-agent-at-a-time) is gone and the new pane covers
+part of the sidebar, the reply also has `notices`, a list of messages saying
+so.
 
 ## Replies
 

@@ -261,13 +261,22 @@ control. The run checks, on the real Zellij server:
   the real `SidebarApp` selects that pane for the second client. This covers a
   pi hook row, the Claude hook row and a launch row, each confirmed by
   `list-clients` and by keystrokes reaching the fixture. Activation is
-  reported as skipped, and the recorded parent-terminal lookups stay empty.
+  reported as skipped, and the recorded parent-terminal lookups stay empty;
+- in the default `single` layout every agent pane is floating at exactly the
+  home pane's geometry and `dump-layout` reports each floating pane pinned;
+  a selected row's pane is the last agent frame the first client draws, and
+  stays so after the sidebar is focused again;
+- widening both clients, then the sidebar (`resize increase right`), moves
+  every launched agent pane onto the new home geometry (the real sidebar
+  pane's `align_agents`);
+- after the home pane is closed, a spawn through the adapter opens no new
+  home pane and floats with the sidebar's rows, right of it or, with the
+  covered-sidebar notice, over its right three quarters.
 
 The sidebar for the row checks runs headless in the validator process with the
 sidebar pane's Zellij identity, so that step is instrumented rather than a
-keystroke into the sidebar pane. With Zellij's default `stacked_resize`, the
-first client follows when its pane shares the target's stack. This is recorded
-(`first_client_unchanged`), not asserted. Without `--no-write` the run replaces its
+keystroke into the sidebar pane. Whether the first client's focus moves is
+recorded (`first_client_unchanged`), not asserted. Without `--no-write` the run replaces its
 Zellij version's entry in [the evidence](evidence/workspace-linux-x86_64.json),
 which keeps one run per pin with source hashes. The maintainer's live run with
 real profiles is separate; see the

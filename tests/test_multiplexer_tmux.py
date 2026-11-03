@@ -80,6 +80,11 @@ def test_registered_and_satisfies_the_protocol():
     assert mux.socket == SOCKET
 
 
+def test_align_agents_is_a_no_op(fake, mux):
+    assert mux.align_agents("agents", ["%3", "%4"]) == []
+    assert fake.calls == []
+
+
 def test_every_call_targets_the_socket_with_stdin_closed(fake, mux):
     fake.answer("display-message", "$1\n")
     mux.session_state("agents")

@@ -261,6 +261,20 @@ class WorkspaceFeed(SessionFeed):
             )
         return None
 
+    def launched_panes(self) -> list[str]:
+        """Pane ids of this session's launches, with the checks of ``launch_rows``.
+
+        Records replaced by a later claim, of another socket dir, or of an
+        earlier session of the same name are left out, so a pane id that now
+        runs something else is never named.
+        """
+        panes = []
+        for row in self.launch_rows(()):
+            pane_id = row.terminal_env.get("ZELLIJ_PANE_ID")
+            if pane_id and pane_id not in panes:
+                panes.append(pane_id)
+        return panes
+
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":
             return record.pane_id

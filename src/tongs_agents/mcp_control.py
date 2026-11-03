@@ -293,8 +293,8 @@ class McpControl:
     def spawn(self, profile_name: str) -> dict:
         """Start ``profile_name`` in a new pane of the running workspace session.
 
-        Placement notices (a Zellij agent stack that is gone) are returned
-        under ``notices``.
+        Placement notices (a Zellij agent area that lost its home pane) are
+        returned under ``notices``.
         """
         record = None
         notices: list[str] = []

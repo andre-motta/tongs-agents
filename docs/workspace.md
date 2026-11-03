@@ -27,18 +27,22 @@ palette `New agent` entry and the Add agent dialog bring that agent into the
 main area; the others keep running out of view, keep reporting status, and
 `send`, `read`, `wait` and chat still reach them.
 
-- **Zellij**: the main area is a stacked column headed by a
-  `tongs-agents-home` pane that shows a short hint. Every agent joins the
-  stack; the one in view is expanded and the others are collapsed to their
-  title lines (framed on 0.44.2, a compact list marked with `>` on 0.45.1),
-  which you can also click or reach with Zellij's own pane keys. The home
-  pane anchors the stack. If you close it, the next agent started brings it
-  back: the home pane is opened again and stacked onto an agent of the
-  column (when that does not work, the agent pane itself anchors the stack).
-  Only when every pane of the column is gone too does the new agent open
-  side by side, with a notice saying so (a warning in the sidebar, a
-  `notice:` line under its command line, a line on stderr for `run`,
-  `notices` in an MCP `agents_spawn` reply).
+- **Zellij**: the main area is a `tongs-agents-home` pane that shows a short
+  hint. Every agent opens as a pinned floating pane laid exactly over it, so
+  agents overlap there and the one you select is raised to the top; the
+  sidebar's rows are the only list of them, and no title lines take rows
+  from the agent. A pinned pane stays shown while the sidebar has the focus
+  (Zellij's status bar says `FLOATING PANES VISIBLE`); `Ctrl p` `w` hides
+  them all until you select an agent again. The sidebar is a normal tiled
+  pane, a quarter of the width to start with: resize it (or the terminal)
+  and the agents it started move along with the home pane. If you close the
+  home pane, new agents float right of the sidebar, or, when the sidebar
+  then fills the tab, over its right three quarters, with a notice saying
+  so (a warning in the sidebar, a `notice:` line under its command line, a
+  line on stderr for `run`, `notices` in an MCP `agents_spawn` reply). A
+  session created by 0.10.1 still has its stacked column; agents started
+  there float over the whole column. Start a new workspace session to get
+  the new view.
 - **tmux**: the sidebar's window holds the sidebar and one agent, the main
   slot. Every other agent is parked in its own window (shown in the status
   bar under the agent's name) and is swapped into the main slot when you
@@ -58,14 +62,12 @@ argument once the home pane is closed; tmux reads the session option
 `@tongs_agents_layout`. Changing the setting affects the next new session;
 a session created by an older tongs-agents, or a Zellij or tmux session the
 workspace did not create, keeps placing panes side by side. On Zellij, MCP
-`agents_spawn` panes join the stack like any other, and on tmux they are
-parked without changing the view.
+`agents_spawn` panes float over the home pane like any other, and on tmux
+they are parked without changing the view.
 
-A Zellij stack fits the window's height minus five agents (16 in a 24-row
-terminal, the home pane included). When it is full, `run`, the dialog and
-the palette refuse with `the agent stack is full`; close an agent pane or
-make the terminal taller. A pane that Zellij does not place in the stack is
-closed again rather than left elsewhere.
+There is no limit on the number of Zellij agents. A new pane that Zellij
+does not list as floating in the home pane's tab is closed again rather than
+left elsewhere.
 
 ## Adding agents: run
 
@@ -210,9 +212,9 @@ created 0600 without following or replacing anything:
 - `layouts/<token>.kdl`: rendered from the packaged `layouts/agents.kdl.tmpl`.
   Only the Python interpreter path, the session name, the token and the
   `tongs` path are substituted, as escaped KDL strings; control characters are
-  refused. The template's `single` block (the sidebar, 40 columns wide and
-  started with `--layout single`, beside a `stacked=true` column holding the
-  home pane, which runs `<python> -m tongs_agents.workspace_spawn home`) or
+  refused. The template's `single` block (the sidebar, a resizable 25% of
+  the width and started with `--layout single`, beside the tiled home pane,
+  which runs `<python> -m tongs_agents.workspace_spawn home`) or
   its `split` block (the sidebar alone) is kept, as `[workspace].layout`
   says. The sidebar deletes
   it on start.
@@ -237,7 +239,7 @@ created 0600 without following or replacing anything:
 
 `tongs-agents sidebar [--spawn-request TOKEN] [--compact] [--layout {single,split}]`
 (started by the layout as `python -m tongs_agents.commands.sidebar`; the
-`single` layout passes `--layout single` so the agent stack can be found
+`single` layout passes `--layout single` so the agent area can be found
 again without its home pane, and a sidebar re-added by `run`, `workspace` or
 the tongs plugin gets the same argument when the session has a home pane or
 an earlier marked sidebar, or records `single` on tmux) runs the compact agents
@@ -268,8 +270,10 @@ earlier session with the same name are not shown: a claimed record whose
 process is gone while its pane runs something else is skipped.
 
 Enter or a click focuses the row's pane in the same session: on Zellij the
-pane is expanded in the stack, on tmux a parked pane is swapped into the main
-slot. Hook rows go through the same focus path as `tongs-agents focus`;
+agent is raised over the others, on tmux a parked pane is swapped into the
+main slot. When the sidebar's own pane changes size, it moves the panes it
+launched in its session (never other floating panes) back over the home
+pane, half a second after the resizing stops. Hook rows go through the same focus path as `tongs-agents focus`;
 hookless rows select their pane directly after checking that it is still
 listed. Spawn failures appear as notifications.
 
@@ -375,8 +379,10 @@ included, against real tmux servers on private sockets (a
 `-L tongs-<token>` socket and the default socket under a private
 `TMUX_TMPDIR`), and `.github/workflows/tmux-mux.yml` runs it on Ubuntu's apt
 tmux and records the version. `validation/workspace.py` checks the Zellij
-stack on each pinned release: every agent joins it, a row selection expands
-its pane alone, and a full stack is refused with no pane left behind.
+view on each pinned release: every agent floats pinned over the home pane, a
+row selection raises its pane and it stays shown with the sidebar focused,
+resizing the terminal and then the sidebar moves the agents along, and a
+spawn after closing the home pane floats beside the sidebar.
 
 ## Doctor
 
@@ -404,11 +410,15 @@ hides the harness are reported by the core doctor checks and by
 - On tmux the sidebar keeps its width when an agent is swapped in, but not
   when the terminal is resized: tmux then spreads the change over both
   panes. Parked agents show up as windows in tmux's status bar.
-- Closing the Zellij home pane and every agent pane of the stack leaves the
-  session placing new panes side by side, as a split session does, with a
-  notice; start a new workspace session to get the stack back. A session
+- Closing the Zellij home pane usually lets the sidebar fill the tab; new
+  agents then cover its right three quarters, with a notice; start a new
+  workspace session to get the agent area beside the sidebar back. A session
   created before the sidebar carried `--layout single` places new panes side
   by side as soon as its home pane is closed.
+- Zellij agents follow a resize only through the sidebar, which moves the
+  panes of this session's launch records. Without a sidebar pane, and for
+  floating panes that are not launches (the palette's chat pane, panes you
+  open yourself), nothing moves them back over the home pane.
 - A launch that fails before the launcher claims it shows in the sidebar only
   when that sidebar spawned it.
 - Zellij restores layouts, not agent processes; resurrecting an EXITED

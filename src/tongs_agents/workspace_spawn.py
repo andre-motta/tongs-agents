@@ -23,7 +23,7 @@ is up either way.
 
 The ``tongs-agents-home`` pane of a ``single`` Zellij layout runs
 ``python -m tongs_agents.workspace_spawn home``: a short hint that stays up
-so the agent stack always has its anchor.
+so the agent area beside the sidebar always has its anchor.
 
 A request nobody consumes (a printed command that was never run, or the
 tongs plugin's modal opened and closed) expires after
@@ -64,7 +64,7 @@ HOME_TEXT = (
     "tongs-agents",
     "",
     "Agents show here, one at a time. Select one in the sidebar to bring it",
-    "up; the others keep running, collapsed to their title lines.",
+    "up; the others keep running behind it.",
     "",
     "Add an agent with + in the sidebar, or run: tongs-agents run PROFILE [DIR]",
 )
@@ -203,7 +203,8 @@ def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False,
     """Start the launcher for a pending record in a new pane of its session.
 
     With ``show`` the new pane is then brought into view (``show_pane``).
-    Placement notices (a Zellij stack that is gone) go to ``report_notices``.
+    Placement notices (a Zellij agent area that lost its home pane) go to
+    ``report_notices``.
     """
     ref = mux.spawn(
         record.session,
@@ -278,7 +279,7 @@ def ensure_sidebar(mux: Multiplexer, session: str) -> PaneRef | None:
     """Add a sidebar pane unless one is listed; return the new pane, if any.
 
     The new sidebar carries the session's layout (``session_layout``), so a
-    ``single`` Zellij session can still rebuild its stack after its home
+    ``single`` Zellij session can still find its agent area after its home
     pane is closed.
     """
     if has_sidebar(mux, session):
@@ -542,7 +543,7 @@ def spawn_requested(
 
 
 def home(text: tuple[str, ...] = HOME_TEXT) -> int:
-    """Print the home hint and stay up, so the agent stack keeps its anchor."""
+    """Print the home hint and stay up, so the agent area keeps its anchor."""
     if hasattr(signal, "SIGINT"):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
     print("\n".join(text), flush=True)

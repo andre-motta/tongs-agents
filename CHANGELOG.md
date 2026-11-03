@@ -2,6 +2,8 @@
 
 ## 0.10.2 (experimental)
 
+Fixes from using the one-agent view of 0.10.1 with many agents.
+
 ### Added
 
 - Rename an agent from the sidebar: `R` on a row opens a prompt prefilled
@@ -12,6 +14,23 @@
   It never changes the profile, harness, session id or command. Rows not
   started in this workspace, and agents still starting, are refused. A
   resume from the sidebar keeps the name (#130).
+
+### Fixed
+
+- The Zellij one-agent view no longer lists every agent as a title line above
+  the one in view. Agents now open as pinned floating panes laid exactly over
+  the `tongs-agents-home` pane: the selected one is raised and stays shown
+  while the sidebar has the focus, the sidebar is the only list, and there is
+  no longer a limit on the number of agents (`the agent stack is full` is
+  gone). If the home pane is closed, agents float right of the sidebar, or
+  over its right three quarters with a notice when the sidebar fills the tab.
+  A session created by 0.10.1 keeps its stacked column and new agents float
+  over it; start a new workspace session to get the new view (#124).
+- The Zellij sidebar can be resized again: it starts at a quarter of the
+  width instead of a fixed 40 columns. When its pane changes size (the
+  sidebar or the terminal was resized), it moves the agents it launched back
+  over the home pane.
+- Typed text in the sidebar `:` command line is visible again (#129).
 
 ## 0.10.1 (experimental)
 

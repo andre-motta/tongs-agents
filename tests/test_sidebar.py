@@ -473,3 +473,102 @@ async def test_sidebar_applies_the_theme_and_shows_the_shared_shell():
         assert app.sub_title == SESSION
         messages = [str(n.message) for n in app._notifications]
         assert "broken file; using defaults" in messages
+
+
+class AligningMux(FakeMux):
+    """A FakeMux that records align_agents calls and can fail them."""
+
+    def __init__(self, *, fail=False, **options):
+        super().__init__(**options)
+        self.aligned = []
+        self.fail = fail
+        self.event = threading.Event()
+
+    def align_agents(self, session, pane_ids):
+        self.aligned.append((session, list(pane_ids)))
+        self.event.set()
+        if self.fail:
+            raise MultiplexerError("zellij action change-floating-pane-coordinates failed")
+        return list(pane_ids)
+
+
+async def _aligned(mux, pilot, timeout=5.0):
+    for _ in range(int(timeout / 0.05)):
+        if mux.event.is_set():
+            return True
+        await pilot.pause(0.05)
+    return mux.event.is_set()
+
+
+@pytest.mark.asyncio
+async def test_a_resize_aligns_only_the_panes_launched_here_once_settled():
+    records = _launch_records(["alpha", "beta"])
+    token = workspace_spawn.write_spawn_request(SESSION, [r.launch_id for r in records])
+    mux = AligningMux()
+    workspace_feed = WorkspaceFeed(SESSION, mux, lambda: [])
+    app = sidebar.SidebarApp(mux, SESSION, token=token, feed=workspace_feed,
+                             refresh_interval=60, align_delay=0.5)
+    async with app.run_test(size=(40, 20)) as pilot:
+        await _settle(app, pilot)
+        await pilot.pause(0.2)
+        await app.workers.wait_for_complete()
+        mux.aligned.clear()
+        mux.event.clear()
+        for width in (44, 48, 52):
+            await pilot.resize_terminal(width, 20)
+        assert await _aligned(mux, pilot)
+        await pilot.pause(0.2)
+        await app.workers.wait_for_complete()
+        assert [(session, sorted(panes)) for session, panes in mux.aligned] == [
+            (SESSION, ["1", "2"])]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_alignment_never_reaches_the_sidebar():
+    records = _launch_records(["alpha"])
+    token = workspace_spawn.write_spawn_request(SESSION, [records[0].launch_id])
+    mux = AligningMux(fail=True)
+    app = sidebar.SidebarApp(mux, SESSION, token=token,
+                             feed=WorkspaceFeed(SESSION, mux, lambda: []),
+                             refresh_interval=60, align_delay=0.01)
+    async with app.run_test(size=(40, 20)) as pilot:
+        await _settle(app, pilot)
+        mux.event.clear()
+        await pilot.resize_terminal(50, 20)
+        assert await _aligned(mux, pilot)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+        assert not any("change-floating" in str(note.message) for note in app._notifications)
+
+
+@pytest.mark.asyncio
+async def test_a_multiplexer_without_alignment_is_left_alone():
+    mux = FakeMux()
+    app = _app(mux)
+    async with app.run_test(size=(40, 20)) as pilot:
+        await pilot.resize_terminal(50, 20)
+        await pilot.pause(0.6)
+        await app.workers.wait_for_complete()
+        assert app.is_running
+
+
+def test_launched_panes_lists_this_sessions_live_launch_panes():
+    records = [
+        record("a", "alpha", pane_id="3"),
+        record("b", "beta", pane_id="4", socket_dir="/run/elsewhere"),
+        record("c", "gamma", state="pending"),
+        record("d", "delta", state="pending"),
+        record("e", "eps", pane_id="5"),
+        record("f", "phi", pane_id="6"),
+        record("g", "gone", pane_id="7"),
+        record("h", "held", pane_id="8"),
+        record("i", "again", pane_id="9", replaces="f" * 32),
+    ]
+    panes = [pane(pane_id, socket_dir="/run/zj") for pane_id in ("3", "4", "5", "6", "9")]
+    panes += [pane("10"), pane("8", exited=True, exit_status=1)]
+    stale = {"e" * 32, "h" * 32}
+    workspace_feed, _ = feed(records, panes, socket_dir="/run/zj",
+                             alive=lambda item: item.launch_id not in stale)
+    workspace_feed.note_spawned("d" * 32, PaneRef("zellij", SESSION, "10", None))
+    assert sorted(workspace_feed.launched_panes(), key=int) == ["3", "8", "9", "10"]

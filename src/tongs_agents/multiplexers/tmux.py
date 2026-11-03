@@ -450,6 +450,10 @@ class TmuxMultiplexer:
         value = (result.stdout or "").strip()
         return value if value in LAYOUTS else None
 
+    def align_agents(self, session: str, pane_ids) -> list[str]:
+        """Nothing to align: tmux tiles every pane itself."""
+        return []
+
     def session_of(self, pane: str) -> str:
         """The name of the session that holds ``pane`` on this server."""
         output = self._tmux(None, "display-message", "-p", "-t", _pane_id(pane),

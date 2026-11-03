@@ -20,13 +20,17 @@ sidebar pane's Zellij identity, while parent terminal lookups are recorded to
 prove no window activation is attempted; that step is instrumented, not a
 keystroke into the sidebar pane.
 
-The workspace uses the default ``single`` layout (#124): the home pane heads
-a stacked column beside the sidebar. The run checks that every agent pane
-joined that stack (same tab, column and width as the home pane), that a row
-selection expands its pane and collapses the others, that a spawn after
-closing the home pane opens a new home pane in the agent column and joins
-the stack, and, after shrinking both clients, that spawning fills the stack
-up to its capacity and then is refused with no pane added.
+The workspace uses the default ``single`` layout (#124): agent panes open as
+pinned floating panes over the tiled home pane beside the sidebar. The run
+checks that every agent pane is floating at the home pane's geometry (and
+``dump-layout`` reports the floating panes pinned), that a row selection
+raises its pane to the top (the last pane frame the first client drew is
+the target's) and that it stays shown when the sidebar is focused again,
+that resizing the clients and then the sidebar moves the launched agent
+panes onto the new home geometry (the real sidebar's ``align_agents``), and
+that a spawn after closing the home pane opens no new home pane and floats
+beside the sidebar, or over its right three quarters with a notice when the
+sidebar fills the tab.
 """
 
 import argparse
@@ -66,9 +70,8 @@ from tongs_agents.commands import sidebar
 from tongs_agents.multiplexers import HOME_PANE_NAME, MultiplexerError
 from tongs_agents.multiplexers.zellij import (
     ACTIVATION_SKIPPED,
-    STACK_MARGIN_ROWS,
+    SIDEBAR_COVERED,
     ZellijMultiplexer,
-    stack_capacity,
 )
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.terminal_apis import tmux
@@ -141,10 +144,13 @@ CURSOR_ROW_RE = re.compile(rb"\x1b\[\d*(?:;\d*)?[Hf]")
 RERUN_STDERR = "rerun.stderr"
 # exec keeps the rerun the pane's own process; only its stderr goes to the file.
 STDERR_TO_FILE = 'exec "$@" 2>"$0"'
-CAPACITY_HEADROOM = 2
-CAPACITY_COLUMNS = 120
-CHROME_ROWS = 3
+CLIENT_ROWS = 40
+CLIENT_COLUMNS = 120
+WIDER_COLUMNS = 150
 RESIZE_WAIT = 10.0
+LAYOUT_WAIT = 5.0
+FRAME_TITLE_RE = re.compile(r"\u250c ([^\u2500\u2502\u2510\u250c\n]+?) \u2500")
+PINNED_RE = re.compile(r"^\s*pinned true\s*$", re.M)
 IDLE_PANE = "import sys, time; time.sleep(600)"
 
 
@@ -423,15 +429,15 @@ def exercise(root, session, tracker, observations):
         spawn_request_consumed(session, token, target, observations)
         first = hook_rows(session, feed, target, FIRST_PROFILES,
                           observations.pop("_panes_ready_at"), observations, "first_profiles")
-        stack_membership(target, FIRST_PROFILES, observations, "stack_first")
+        overlay_membership(target, FIRST_PROFILES, observations, "overlay_first")
         rerun_in_session(root, session, tongs_bin, target, tracker, observations)
         rerun_rows(session, feed, target, observations)
-        stack_membership(target, (*FIRST_PROFILES, *RERUN_PROFILES), observations,
-                         "stack_after_rerun")
+        overlay_membership(target, (*FIRST_PROFILES, *RERUN_PROFILES), observations,
+                           "overlay_after_rerun")
         agent_env(io_dir, session, target, observations)
         row_focus(session, env, target, tracker, io_dir, first, observations)
+        resize_alignment(target, observations)
         home_recovery(root, session, target, tracker, observations)
-        capacity(root, session, target, tracker, observations)
 
 
 def install(root, env, tongs_bin, observations):
@@ -673,155 +679,183 @@ def hook_rows(session, feed, target, profiles, since, observations, key):
     return {name: found[name][2] for name in profiles}
 
 
-def column(pane):
-    return pane.get("tab_id"), pane.get("pane_x"), pane.get("pane_columns")
+def box(pane):
+    return tuple(pane.get(key) for key in ("tab_id", "pane_x", "pane_y", "pane_columns",
+                                           "pane_rows"))
 
 
-def stack_of(panes):
-    """The home pane and the tiled panes sharing its tab, column and width."""
-    home = next((pane for pane in panes if pane.get("title") == HOME_PANE_NAME), None)
+def overlay_of(panes):
+    """The tiled home pane and the floating panes at exactly its tab and geometry."""
+    home = next((pane for pane in panes if pane.get("title") == HOME_PANE_NAME
+                 and not pane.get("is_floating")), None)
     if home is None:
         return None, []
-    return home, [pane for pane in panes
-                  if not pane.get("is_floating") and column(pane) == column(home)]
+    return home, [pane for pane in panes if pane.get("is_floating") and box(pane) == box(home)]
 
 
-def stack_membership(target, profiles, observations, key):
-    """Every profile pane sits in the home pane's stacked column, the sidebar does not."""
+def pinned_panes(target, expected):
+    """How many floating panes ``dump-layout`` reports pinned (list-panes has no field).
+
+    zellij 0.44.2 now and then answers with no layout (#72), so the count is
+    read again until it reaches ``expected`` or the wait ends.
+    """
+    seen = []
+
+    def count():
+        code, out, _ = target.action("dump-layout")
+        if code == 0 and out.strip():
+            seen.append(len(PINNED_RE.findall(out)))
+        return seen and seen[-1] == expected
+
+    wait_until(count, LAYOUT_WAIT)
+    return seen[-1] if seen else None
+
+
+def overlay_membership(target, profiles, observations, key):
+    """Every profile pane floats pinned over the home pane; the sidebar stays tiled."""
     panes = target.panes()
-    home, members = stack_of(panes)
+    home, members = overlay_of(panes)
     titles = sorted(pane.get("title", "") for pane in members)
     sidebar_pane = next((pane for pane in panes
                          if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME), {})
+    floating = sum(1 for pane in panes if pane.get("is_floating"))
     observations[key] = {
         "home_pane": home is not None,
         "member_titles": titles,
-        "profiles_stacked": all(name in titles for name in profiles),
-        "sidebar_outside_stack": bool(sidebar_pane) and home is not None
-        and column(sidebar_pane) != column(home),
-        "suppressed_members": sum(1 for pane in members if pane.get("is_suppressed")),
-        "collapsed_members": sum(1 for pane in members if pane.get("pane_rows") == 1),
+        "profiles_over_home": all(name in titles for name in profiles),
+        "sidebar_tiled": bool(sidebar_pane) and not sidebar_pane.get("is_floating"),
+        "floating_panes": floating,
+        "pinned_panes": pinned_panes(target, floating),
         "all_listed": len(panes),
     }
     facts = observations[key]
     expect(facts["home_pane"], "the workspace has no home pane")
-    expect(facts["profiles_stacked"], f"profile panes are not stacked: {titles}")
-    expect(facts["sidebar_outside_stack"], "the sidebar is in the agent stack")
+    expect(facts["profiles_over_home"], f"profile panes are not over the home pane: {titles}")
+    expect(facts["sidebar_tiled"], "the sidebar is not a tiled pane")
+    expect(facts["pinned_panes"] == floating,
+           f"{facts['pinned_panes']} of {floating} floating panes are pinned")
+
+
+def frame_titles(client):
+    """Pane frame titles in the order the client drew them, oldest first."""
+    return FRAME_TITLE_RE.findall(client.screen())
+
+
+def top_title(client, candidates, wait=1.0):
+    """The last of ``candidates`` the client drew as a pane frame title, once settled.
+
+    A floating pane brought to the top is redrawn whole, frame included; a
+    hidden floating layer redraws the home pane's frame instead.
+    """
+    time.sleep(wait)
+    titles = [title for title in frame_titles(client) if title in candidates]
+    return titles[-1] if titles else None
 
 
 def home_recovery(root, session, target, tracker, observations):
-    """Close the home pane, spawn through the adapter, expect the stack rebuilt.
+    """Close the home pane, spawn through the adapter, expect it beside the sidebar.
 
     The sidebar of a ``single`` layout runs with ``--layout single``, so the
-    spawn opens a new home pane in the agent column and stacks the new pane
-    onto it, with no placement notice.
+    spawn floats right of the sidebar with the sidebar's rows, or over the
+    sidebar's right three quarters with a notice when the sidebar now fills
+    the tab. No home pane is opened again.
     """
-    home, members = stack_of(target.panes())
+    home, _ = overlay_of(target.panes())
     expect(home is not None, "the workspace has no home pane")
     code, _, _ = target.action("close-pane", "--pane-id", f"terminal_{home.get('id')}")
-    closed = wait_until(lambda: stack_of(target.panes())[0] is None, RESIZE_WAIT)
+    closed = wait_until(lambda: overlay_of(target.panes())[0] is None, RESIZE_WAIT)
     mux = ZellijMultiplexer()
     ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)], name="recovered")
     tracker.sweep()
-    new_home, after = stack_of(target.panes())
+    panes = target.panes()
+    sidebar_pane = next((pane for pane in panes
+                         if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME), {})
+    pane = next((item for item in panes if str(item.get("id")) == ref.pane_id), {})
+    notices = mux.take_notices()
+    right = (sidebar_pane.get("pane_x") or 0) + (sidebar_pane.get("pane_columns") or 0)
     observations["home_recovery"] = {
         "home_closed": bool(closed) and code == 0,
-        "home_reopened": new_home is not None and new_home.get("id") != home.get("id"),
-        "same_column": new_home is not None and column(new_home) == column(home),
-        "spawn_stacked": any(str(pane.get("id")) == ref.pane_id for pane in after),
-        "members_before": len(members),
-        "members_after": len(after),
-        "notices": mux.take_notices(),
+        "home_reopened": any(item.get("title") == HOME_PANE_NAME for item in panes),
+        "spawn_floating_in_sidebar_tab": bool(pane.get("is_floating"))
+        and pane.get("tab_id") == sidebar_pane.get("tab_id"),
+        "rows_match_sidebar": (pane.get("pane_y"), pane.get("pane_rows"))
+        == (sidebar_pane.get("pane_y"), sidebar_pane.get("pane_rows")),
+        "beside_sidebar": pane.get("pane_x") == right,
+        "covers_sidebar_right": (pane.get("pane_x") or 0) > (sidebar_pane.get("pane_x") or 0)
+        and pane.get("pane_x") < right,
+        "sidebar_geometry": [sidebar_pane.get(key) for key in
+                             ("pane_x", "pane_y", "pane_columns", "pane_rows")],
+        "spawn_geometry": [pane.get(key) for key in
+                           ("pane_x", "pane_y", "pane_columns", "pane_rows")],
+        "notices": notices,
     }
     facts = observations["home_recovery"]
     expect(facts["home_closed"], "the home pane could not be closed")
-    expect(facts["home_reopened"] and facts["same_column"],
-           f"the home pane was not reopened in the agent column: {facts}")
-    expect(facts["spawn_stacked"] and facts["members_after"] == len(members) + 1,
-           f"the spawn after closing the home pane did not join the stack: {facts}")
-    expect(not facts["notices"], f"a rebuilt stack reported notices: {facts['notices']}")
+    expect(not facts["home_reopened"], "a home pane was opened again")
+    expect(facts["spawn_floating_in_sidebar_tab"] and facts["rows_match_sidebar"],
+           f"the spawn after closing the home pane is not in the agent area: {facts}")
+    expect((facts["beside_sidebar"] and not notices)
+           or (facts["covers_sidebar_right"] and notices == [SIDEBAR_COVERED]),
+           f"the spawn after closing the home pane is misplaced: {facts}")
 
 
-def expanded(pane):
-    return not pane.get("is_suppressed") and (pane.get("pane_rows") or 0) > 1
-
-
-def resize(ptys, rows, columns=CAPACITY_COLUMNS):
+def resize(ptys, rows, columns):
     for client in ptys:
         fcntl.ioctl(client.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
 
 
-def viewport_rows(target, tab_id):
-    code, out, _ = target.action("list-tabs", "--json")
-    if code != 0 or not out:
-        return None
-    try:
-        tabs = json.loads(out)
-    except ValueError:
-        return None
-    return next((tab.get("viewport_rows") for tab in tabs
-                 if isinstance(tab, dict) and tab.get("tab_id") == tab_id), None)
+def launched_agents_aligned(target, session):
+    """``(home, aligned)``: whether every launched pane sits at the home geometry."""
+    panes = {str(pane.get("id")): pane for pane in target.panes()}
+    home, _ = overlay_of(list(panes.values()))
+    ids = [record.pane_id for record in records_by_profile(session).values()]
+    if home is None or not ids:
+        return home, False
+    return home, all(box(panes.get(pane_id, {})) == box(home) for pane_id in ids)
 
 
-def capacity(root, session, target, tracker, observations):
-    """Shrink the clients, fill the stack through the adapter, then expect a refusal."""
-    home, members = stack_of(target.panes())
+def resize_alignment(target, observations):
+    """Widen the clients, then the sidebar; the sidebar moves its agents along.
+
+    The real sidebar pane gets each resize and calls ``align_agents`` for the
+    panes of its session's launch records.
+    """
+    session = target.name
+    home, _ = overlay_of(target.panes())
     expect(home is not None, "the workspace has no home pane")
-    before = len(members)
-    rows = before + CAPACITY_HEADROOM + STACK_MARGIN_ROWS + CHROME_ROWS
-    resize(observations["_ptys"], rows)
+    before = box(home)
+    resize(observations["_ptys"], CLIENT_ROWS, WIDER_COLUMNS)
 
-    def shrunk():
-        value = viewport_rows(target, home.get("tab_id"))
-        return value if value is not None and value < rows else None
+    def realigned(previous):
+        def check():
+            moved, aligned = launched_agents_aligned(target, session)
+            return moved is not None and box(moved) != previous and aligned
+        return check
 
-    viewport = wait_until(shrunk, RESIZE_WAIT)
-    expect(viewport is not None, f"the clients did not shrink to {rows} rows")
-    limit = stack_capacity(viewport)
-    mux = ZellijMultiplexer()
-    spawned = []
-    refusal = None
-    listed_before_refusal = None
-    for index in range(max(limit - before, 0) + 1):
-        listed = len(target.panes())
-        try:
-            ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)],
-                            name=f"fill-{index}")
-        except MultiplexerError as error:
-            refusal = error.detail
-            listed_before_refusal = listed
-            break
-        spawned.append(ref.pane_id)
-    tracker.sweep()
-    _, after = stack_of(target.panes())
-    observations["capacity"] = {
-        "client_rows": rows,
-        "viewport_rows": viewport,
-        "capacity": limit,
-        "members_before": before,
-        "spawned": len(spawned),
-        "refused": refusal is not None,
-        "refusal": refusal,
-        "members_after": len(after),
-        "spawned_all_stacked": {str(pane.get("id")) for pane in after} >= set(spawned),
-        "panes_unchanged_by_refusal": len(target.panes()) == listed_before_refusal,
-        "outside_stack": sorted(pane.get("title", "") for pane in target.panes()
-                                if pane.get("title", "").startswith("fill-")
-                                and pane not in after),
+    after_clients = wait_until(realigned(before), RESIZE_WAIT)
+    home_now, _ = overlay_of(target.panes())
+    widened = box(home_now) if home_now else None
+    sidebar_pane = next(str(pane.get("id")) for pane in target.panes()
+                        if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME)
+    target.action("focus-pane-id", f"terminal_{sidebar_pane}")
+    target.action("resize", "increase", "right")
+    after_sidebar = wait_until(realigned(widened), RESIZE_WAIT)
+    home_last, _ = overlay_of(target.panes())
+    observations["resize_alignment"] = {
+        "home_before": list(before),
+        "home_after_clients": list(widened) if widened else None,
+        "home_after_sidebar": list(box(home_last)) if home_last else None,
+        "aligned_after_clients": bool(after_clients),
+        "aligned_after_sidebar": bool(after_sidebar),
     }
-    facts = observations["capacity"]
-    if facts["spawned"] != max(limit - before, 0) or not facts["refused"]:
-        facts["geometry"] = [
-            [pane.get("title"), pane.get("tab_id"), pane.get("pane_x"), pane.get("pane_y"),
-             pane.get("pane_columns"), pane.get("pane_rows"), pane.get("is_suppressed")]
-            for pane in target.panes()]
-    expect(facts["spawned"] == max(limit - before, 0),
-           f"spawned {facts['spawned']} panes before the refusal, expected {limit - before}")
-    expect(facts["refused"] and "agent stack is full" in refusal,
-           f"a full stack was not refused: {refusal}")
-    expect(facts["panes_unchanged_by_refusal"], "the refused spawn left a pane behind")
-    expect(facts["members_after"] == max(limit, before) and facts["spawned_all_stacked"]
-           and not facts["outside_stack"], f"the stack did not hold every spawn: {facts}")
+    facts = observations["resize_alignment"]
+    if not (after_clients and after_sidebar):
+        facts["geometry"] = [[pane.get("title"), *box(pane), pane.get("is_floating")]
+                             for pane in target.panes()]
+    expect(facts["aligned_after_clients"],
+           f"the agents did not follow the home pane after a terminal resize: {facts}")
+    expect(facts["aligned_after_sidebar"],
+           f"the agents did not follow the home pane after a sidebar resize: {facts}")
 
 
 def rerun_in_session(root, session, tongs_bin, target, tracker, observations):
@@ -1003,6 +1037,7 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
     sidebar_pane = next(str(pane.get("id")) for pane in target.panes()
                         if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME)
     records = records_by_profile(session)
+    first = observations["_ptys"][0]
     os.write(second.fd, DOWN_ARROW)
     time.sleep(0.3)
     start = target.clients().get(second_id)
@@ -1045,9 +1080,13 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
             result = asyncio.run(select_row(app, identity))
             after = target.clients()
             panes = {str(pane.get("id")): pane for pane in target.panes()}
-            _, members = stack_of(list(panes.values()))
-            others = [pane for pane in members if str(pane.get("id")) != record.pane_id]
+            _, members = overlay_of(list(panes.values()))
+            frames = {HOME_PANE_NAME, *(pane.get("title") for pane in members)}
+            shown = top_title(first, frames)
             routed = typed_target(second, io_dir, f"rowfocus{index}")
+            target.action("focus-pane-id", f"terminal_{sidebar_pane}")
+            kept = top_title(first, frames)
+            sidebar_focused = target.clients().get(second_id) == f"terminal_{sidebar_pane}"
             steps.append({
                 "profile": name,
                 "row": kind,
@@ -1065,9 +1104,11 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
                 "clients_before": {role(key): value for key, value in before.items()},
                 "clients_after": {role(key): value for key, value in after.items()},
                 "keystroke_routed_to": routed,
-                "target_expanded": expanded(panes.get(record.pane_id, {})),
-                "other_members_collapsed": sum(1 for pane in others if not expanded(pane)),
-                "other_members": len(others),
+                "target_over_home": any(str(pane.get("id")) == record.pane_id
+                                        for pane in members),
+                "top_frame": shown,
+                "sidebar_focused_after": sidebar_focused,
+                "top_frame_after_sidebar_focus": kept,
             })
     observations["row_focus"] = {
         "driver": ("SidebarApp run headless in the validator with the sidebar pane's "
@@ -1078,9 +1119,8 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
         "first_client": "workspace creator, sent no input",
         "second_client": "zellij attach, the most recent input client",
         "first_client_rule": (
-            "not asserted: with Zellij's default stacked_resize, a client sitting on a pane "
-            "in the target's stack follows the expanded pane; first_client_unchanged records "
-            "what happened"),
+            "not asserted: first_client_unchanged records what happened; the first client's "
+            "screen shows which agent frame was drawn last (top_frame)"),
         "parent_activation_calls": calls,
         "steps": steps,
     }
@@ -1093,9 +1133,11 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
                f"list-clients readback did not confirm {step['profile']}")
         expect(step["keystroke_routed_to"] == [step["profile"]],
                f"keystrokes did not reach {step['profile']}: {step['keystroke_routed_to']}")
-        expect(step["target_expanded"]
-               and step["other_members_collapsed"] == step["other_members"],
-               f"selecting {step['profile']} did not expand it alone in the stack: {step}")
+        expect(step["target_over_home"] and step["top_frame"] == step["profile"],
+               f"selecting {step['profile']} did not raise it over the home pane: {step}")
+        expect(step["sidebar_focused_after"]
+               and step["top_frame_after_sidebar_focus"] == step["profile"],
+               f"{step['profile']} was not kept shown with the sidebar focused: {step}")
 
 
 def cleanup(root, sessions, tracker):

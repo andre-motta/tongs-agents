@@ -327,9 +327,9 @@ class AppShell:
                               workspace_spawn.take_notices(self.palette_multiplexer))
 
     def notify_placement(self, notices) -> None:
-        """Show placement notices from the multiplexer (a Zellij stack that is gone)."""
+        """Show placement notices from the multiplexer (a Zellij home pane that is gone)."""
         for message in notices:
-            self.notify(message[0].upper() + message[1:], title="Agent stack",
+            self.notify(message[0].upper() + message[1:], title="Agent area",
                         severity="warning", timeout=15)
 
     def _palette_spawned(self, message: str, notices=()) -> None:
