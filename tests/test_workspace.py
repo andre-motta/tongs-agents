@@ -14,7 +14,7 @@ from tests.test_workspace_spawn import FakeMux, runtime_dir, write_profiles  # n
 from tongs_agents import cli, launches, workspace_spawn
 from tongs_agents.commands import workspace
 from tongs_agents.launches import LaunchError
-from tongs_agents.multiplexers import SESSION_EXITED, PaneInfo, PaneRef
+from tongs_agents.multiplexers import HOME_PANE_NAME, SESSION_EXITED, PaneInfo, PaneRef
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME
 
 ZELLIJ = "/opt/zellij/bin/zellij"
@@ -424,7 +424,10 @@ def test_render_layout_escapes_quotes_and_backslashes():
     text = workspace.render_layout(hostile, "agents", TOKEN, '/opt/"t"/tongs')
     assert 'command="/opt/a \\"b\\" {c} \\\\d @SESSION@/python"' in text
     assert 'command="/opt/\\"t\\"/tongs"' in text
-    assert text.count("@SESSION@") == 1
+    # The sidebar and the home pane both run the interpreter.
+    assert text.count("@SESSION@") == 2
+    split = workspace.render_layout(hostile, "agents", TOKEN, None, layout="split")
+    assert split.count("@SESSION@") == 1
     assert "@PYTHON@" not in text and "@TOKEN@" not in text and "@TONGS@" not in text
 
 
@@ -444,7 +447,37 @@ def test_template_names_the_sidebar_and_its_module():
     assert f'"-m" "{workspace_spawn.SIDEBAR_MODULE}"' in text
     assert set(re.findall(r"@([A-Z_]+)@", text)) == {
         "PYTHON", "SESSION", "TOKEN", "TONGS", "TONGS_TAB_BEGIN", "TONGS_TAB_END",
+        "SINGLE_BEGIN", "SINGLE_END", "SPLIT_BEGIN", "SPLIT_END",
     }
+
+
+def test_single_layout_stacks_a_home_pane_beside_the_sidebar():
+    text = workspace.render_layout("/usr/bin/python3", "agents", TOKEN, None)
+    assert "BEGIN@" not in text and "END@" not in text
+    assert text.count(f'pane name="{SIDEBAR_PANE_NAME}"') == 1
+    assert 'pane split_direction="vertical"' in text
+    assert "pane stacked=true {" in text
+    stack = text[text.index("pane stacked=true"):]
+    assert f'pane name="{HOME_PANE_NAME}" command="/usr/bin/python3"' in stack
+    assert f'"-m" "{workspace_spawn.HOME_MODULE}" "{workspace_spawn.HOME_COMMAND}"' in stack
+    assert text.index(SIDEBAR_PANE_NAME) < text.index(HOME_PANE_NAME)
+    assert f"--spawn-request\" \"{TOKEN}\"" in text
+    assert text.count("{") == text.count("}")
+
+
+def test_split_layout_is_the_sidebar_alone():
+    text = workspace.render_layout("/usr/bin/python3", "agents", TOKEN, TONGS, layout="split")
+    assert "BEGIN@" not in text and "END@" not in text
+    assert text.count(f'pane name="{SIDEBAR_PANE_NAME}"') == 1
+    assert HOME_PANE_NAME not in text and "stacked" not in text
+    assert "split_direction" not in text
+    assert 'tab name="tongs"' in text
+    assert text.count("{") == text.count("}")
+
+
+def test_render_layout_refuses_an_unknown_layout():
+    with pytest.raises(workspace.LayoutError, match="layout"):
+        workspace.render_layout("/usr/bin/python3", "agents", TOKEN, None, layout="tabs")
 
 
 def test_exec_failure_is_reported(env, monkeypatch, capsys):
@@ -574,3 +607,49 @@ def test_print_alias_keeps_an_explicit_tongs_flag(env, capsys):
     assert _run("--print-alias", "--tongs") == 0
     out = capsys.readouterr().out
     assert out == "alias agents='/opt/venv/bin/tongs-agents workspace --tongs'\n"
+
+
+def _write_layout_config(tmp_path, layout):
+    path = tmp_path / "config" / "config.toml"
+    path.write_text(path.read_text() + f'\n[workspace]\nlayout = "{layout}"\n')
+
+
+def test_new_session_defaults_to_the_single_layout(env, runtime_dir):  # noqa: F811
+    assert _run("--profile", "alpha") == "exec"
+    (layout,) = (runtime_dir / "layouts").iterdir()
+    text = layout.read_text()
+    assert f'pane name="{HOME_PANE_NAME}"' in text and "stacked=true" in text
+
+
+def test_layout_split_in_the_config_renders_the_split_layout(
+    env, tmp_path, runtime_dir,  # noqa: F811
+):
+    _write_layout_config(tmp_path, "split")
+    assert _run("--profile", "alpha") == "exec"
+    (layout,) = (runtime_dir / "layouts").iterdir()
+    text = layout.read_text()
+    assert HOME_PANE_NAME not in text and "stacked" not in text
+    assert f'pane name="{SIDEBAR_PANE_NAME}"' in text
+
+
+def test_an_unknown_layout_in_the_config_is_refused(env, tmp_path, capsys):
+    mux, execs, _ = env
+    _write_layout_config(tmp_path, "tabs")
+    assert _run("--profile", "alpha") == 1
+    assert "workspace.layout: must be one of single, split" in capsys.readouterr().err
+    assert execs.calls == [] and mux.spawned == []
+
+
+def test_profiles_spawned_into_a_running_session_are_shown(env):
+    mux, _, _ = env
+    mux.exists = True
+    assert _run("--profile", "alpha", "--profile", "beta", "--session", "work") == "exec"
+    assert [ref.pane_id for ref in mux.shown] == ["1", "2"]
+    assert mux.focused == []
+
+
+def test_inside_zellij_shows_each_new_profile(env, monkeypatch):
+    mux, _, _ = env
+    _inside(monkeypatch, mux)
+    assert _run("--profile", "alpha") == 0
+    assert [ref.pane_id for ref in mux.shown] == ["1"]

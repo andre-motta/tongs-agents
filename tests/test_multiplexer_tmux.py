@@ -69,6 +69,9 @@ def ref(pane="%3", session="agents"):
     return PaneRef("tmux", session, pane, SOCKET)
 
 
+LAYOUT_QUERY = ["show-options", "-q", "-v", "-t", "=agents:", tmux_mux.LAYOUT_OPTION]
+
+
 def test_registered_and_satisfies_the_protocol():
     mux = get_multiplexer("tmux", socket_dir=SOCKET)
     assert isinstance(mux, TmuxMultiplexer)
@@ -163,6 +166,7 @@ def test_spawn_splits_the_current_window_of_a_running_session(fake, mux):
     assert pane.pane_id == "%5"
     assert fake.tails() == [
         ["has-session", "-t", "=agents"],
+        LAYOUT_QUERY,
         ["split-window", "-h", "-d", "-t", "=agents:", "-P", "-F", "#{pane_id}",
          "--", "python", "-m", "x"],
         ["set-option", "-p", "-t", "%5", tmux_mux.NAME_OPTION, "alpha"],
@@ -173,7 +177,7 @@ def test_spawn_splits_the_current_window_of_a_running_session(fake, mux):
 def test_spawn_with_focus_does_not_pass_detached(fake, mux):
     fake.answer("split-window", "%5\n")
     mux.spawn("agents", ["python", "-m", "x"], focus=True)
-    split = fake.tails()[1]
+    split = fake.tails()[2]
     assert split[0] == "split-window" and "-d" not in split
 
 
@@ -181,9 +185,9 @@ def test_spawn_opens_a_new_window_when_the_split_fails(fake, mux):
     fake.answer("split-window", "", 1)
     fake.answer("new-window", "%6\n")
     assert mux.spawn("agents", ["python", "-m", "x"]).pane_id == "%6"
-    assert [tail[0] for tail in fake.tails()] == ["has-session", "split-window",
-                                                   "new-window"]
-    assert fake.tails()[2][:4] == ["new-window", "-d", "-t", "=agents:"]
+    assert [tail[0] for tail in fake.tails()] == ["has-session", "show-options",
+                                                   "split-window", "new-window"]
+    assert fake.tails()[3][:4] == ["new-window", "-d", "-t", "=agents:"]
 
 
 def test_spawn_raises_when_no_pane_can_be_added(fake, mux):
@@ -202,7 +206,7 @@ def test_spawn_refuses_an_unparsed_pane_id(fake, mux):
 def test_single_argument_argv_never_reaches_the_shell(fake, mux):
     fake.answer("split-window", "%5\n")
     mux.spawn("agents", ["claude"])
-    assert fake.tails()[1][-4:] == ["--", "env", "--", "claude"]
+    assert fake.tails()[2][-4:] == ["--", "env", "--", "claude"]
 
 
 @pytest.mark.parametrize("argv", [[], [""], ["-x", "y"], ["a\0b", "c"], ["A=b"], "python"])
@@ -369,6 +373,7 @@ def test_focus_selects_window_and_pane_and_reads_back(fake, mux):
     assert fake.tails() == [
         ["display-message", "-p", "-t", "=agents:", "#{session_id}"],
         ["display-message", "-p", "-t", "%3", "#{session_id}\t#{window_id}"],
+        LAYOUT_QUERY,
         ["display-message", "-p", "-t", "=agents:", "#{pane_id}"],
         ["select-window", "-t", "=agents:@2"],
         ["select-pane", "-t", "%3"],
@@ -515,3 +520,187 @@ def test_in_session_needs_a_valid_tmux_identity(fake, monkeypatch, env):
 
 def test_attach_argv_names_socket_and_exact_session(mux):
     assert mux.attach_argv("work") == [*TMUX_PREFIX, "attach-session", "-t", "=work"]
+
+
+# One agent at a time (#124): a single session parks agents and swaps them in.
+
+def _slots(*rows):
+    return "".join("\t".join(row) + "\n" for row in rows)
+
+
+SIDEBAR_ROW = ("%0", "@0", tmux_mux.SIDEBAR_PANE_NAME, "0", "160")
+
+
+def test_set_layout_records_the_session_option(fake, mux):
+    mux.set_layout("agents", "single")
+    assert fake.tails() == [
+        ["set-option", "-t", "=agents:", tmux_mux.LAYOUT_OPTION, "single"],
+    ]
+    with pytest.raises(MultiplexerError, match="layout"):
+        mux.set_layout("agents", "tabs")
+
+
+@pytest.mark.parametrize("stdout, expected", [
+    ("single\n", "single"), ("split\n", "split"), ("", None), ("tabs\n", None),
+])
+def test_layout_reads_the_session_option(fake, mux, stdout, expected):
+    fake.answer("show-options", stdout)
+    assert mux.layout("agents") == expected
+
+
+def test_spawn_in_a_single_session_parks_the_pane_in_a_detached_window(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("new-window", "%7\n")
+    pane = mux.spawn("agents", ["python", "-m", "x"], name="alpha", cwd="/")
+    assert pane.pane_id == "%7"
+    assert fake.tails() == [
+        ["has-session", "-t", "=agents"],
+        LAYOUT_QUERY,
+        ["new-window", "-d", "-t", "=agents:", "-n", "alpha", "-P", "-F", "#{pane_id}",
+         "-c", "/", "--", "python", "-m", "x"],
+        ["set-option", "-p", "-t", "%7", tmux_mux.NAME_OPTION, "alpha"],
+    ]
+
+
+def test_a_failed_park_is_an_error_not_a_split(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("new-window", "", 1)
+    with pytest.raises(MultiplexerError, match="could not park"):
+        mux.spawn("agents", ["python", "-m", "x"], name="alpha")
+    assert "split-window" not in [tail[0] for tail in fake.tails()]
+
+
+def test_the_sidebar_is_never_parked(fake, mux):
+    fake.answer("split-window", "%2\n")
+    mux.spawn("agents", ["python", "-m", "x"], name=tmux_mux.SIDEBAR_PANE_NAME)
+    assert [tail[0] for tail in fake.tails()] == [
+        "has-session", "split-window", "set-option", "select-layout"]
+
+
+def test_show_swaps_a_parked_pane_into_the_main_slot(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "beta\n")
+    fake.answer("display-message", "@0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%5", "@0", "beta", "1", "160"),
+                                     ("%3", "@4", "alpha", "1", "80")))
+    result = mux.show(ref())
+    assert result.selection.succeeded and result.selection.detail == "swapped into the main slot"
+    assert not result.activation.attempted
+    assert fake.tails()[3:] == [
+        ["list-panes", "-s", "-t", "=agents", "-F", tmux_mux.SLOT_FORMAT],
+        ["swap-pane", "-d", "-s", "%3", "-t", "%5"],
+        ["display-message", "-p", "-t", "%5", "#{" + tmux_mux.NAME_OPTION + "}"],
+        ["rename-window", "-t", "@4", "beta"],
+        ["select-window", "-t", "=agents:@0"],
+        ["select-pane", "-t", "%3"],
+        ["display-message", "-p", "-t", "%3", "#{window_id}"],
+        ["display-message", "-p", "-t", "=agents:", "#{pane_id}"],
+    ]
+
+
+def test_show_joins_beside_the_sidebar_when_the_main_slot_is_empty(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "@0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%3", "@4", "alpha", "1", "80")))
+    result = mux.show(ref())
+    assert result.selection.detail == "joined into the empty main slot"
+    assert ["join-pane", "-h", "-d", "-l", "119", "-s", "%3", "-t", "%0"] in fake.tails()
+    assert "swap-pane" not in [tail[0] for tail in fake.tails()]
+
+
+def test_show_of_the_pane_in_the_main_slot_only_selects_it(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%3", "@0", "alpha", "1", "160")))
+    result = mux.show(ref())
+    assert result.selection.detail == tmux_mux.ALREADY_SELECTED
+    assert not {"swap-pane", "join-pane"} & {tail[0] for tail in fake.tails()}
+
+
+def test_show_fails_when_the_pane_did_not_move(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "@4\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%3", "@4", "alpha", "1", "80")))
+    result = mux.show(ref())
+    assert result.state == "failed"
+    assert "did not move pane %3 into the main slot" in result.selection.detail
+
+
+def test_show_in_a_split_session_leaves_the_active_pane_alone(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@2\n")
+    result = mux.show(ref())
+    assert result.selection.succeeded
+    assert [tail[0] for tail in fake.tails()] == [
+        "display-message", "display-message", "show-options"]
+
+
+def test_focus_of_a_parked_pane_in_a_single_session_swaps_it_in(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "\n")
+    fake.answer("display-message", "@0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%5", "@0", "", "1", "160"),
+                                     ("%3", "@4", "alpha", "1", "80")))
+    result = mux.focus(ref())
+    assert result.selection.detail == "swapped into the main slot"
+    assert "rename-window" not in [tail[0] for tail in fake.tails()]
+    assert ["select-window", "-t", "=agents:@4"] not in fake.tails()
+
+
+def test_a_single_session_without_a_sidebar_selects_as_before(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "%0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(("%3", "@4", "alpha", "1", "80")))
+    result = mux.focus(ref())
+    assert result.selection.detail == "window and pane selection"
+    assert ["select-window", "-t", "=agents:@4"] in fake.tails()
+
+
+def test_an_unparsed_slot_listing_fails_the_show(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", "%0\t@0\tsidebar\n")
+    result = mux.show(ref())
+    assert result.state == "failed" and "unrecognized" in result.selection.detail
+
+
+@pytest.mark.parametrize("width, columns", [(160, 119), (81, 40), (80, 40), (30, 15), (1, 1)])
+def test_main_columns_keep_the_sidebar_about_forty_wide(width, columns):
+    assert tmux_mux._main_columns(width) == columns
+
+
+def test_session_of_names_the_session_holding_a_pane(fake, mux):
+    fake.answer("display-message", "agents\n")
+    assert mux.session_of("%3") == "agents"
+    assert fake.tails() == [["display-message", "-p", "-t", "%3", "#{session_name}"]]
+    with pytest.raises(MultiplexerError, match="pane id"):
+        mux.session_of("3")
+
+
+def test_a_focused_spawn_in_a_single_session_shows_the_parked_pane(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("new-window", "%7\n")
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "@0\n")
+    fake.answer("display-message", "%7\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%7", "@4", "chat", "1", "80")))
+    mux.spawn("agents", ["python", "-m", "x"], name="chat", focus=True)
+    assert ["join-pane", "-h", "-d", "-l", "119", "-s", "%7", "-t", "%0"] in fake.tails()

@@ -15,6 +15,16 @@ sidebar renames it away before reading, so a second sidebar with the same
 token spawns nothing. The rendered layout for that session lives beside it in
 ``runtime_dir()/layouts/<token>.kdl``.
 
+A spawn the maintainer asked for (``workspace``, ``run``, the sidebar's spawn
+request, palette and Add agent dialog) then shows the new pane through
+``Multiplexer.show``: in a ``single`` workspace that brings it into the main
+area. An MCP spawn does not move the view. Showing is best effort; the pane
+is up either way.
+
+The ``tongs-agents-home`` pane of a ``single`` Zellij layout runs
+``python -m tongs_agents.workspace_spawn home``: a short hint that stays up
+so the agent stack always has its anchor.
+
 A request nobody consumes (a printed command that was never run, or the
 tongs plugin's modal opened and closed) expires after
 ``REQUEST_MAX_AGE`` seconds: writing a new request first removes expired
@@ -27,6 +37,7 @@ import json
 import os
 import re
 import secrets
+import signal
 import stat
 import sys
 import time
@@ -36,12 +47,26 @@ from pathlib import Path
 
 from tongs_agents import launches, paths
 from tongs_agents.launches import LaunchError, LaunchRecord
-from tongs_agents.multiplexers.base import Multiplexer, MultiplexerError, PaneRef
+from tongs_agents.multiplexers.base import (
+    SIDEBAR_PANE_NAME,
+    Multiplexer,
+    MultiplexerError,
+    PaneRef,
+)
 from tongs_agents.profiles import Profile, folder_problem
 
 LAUNCH_MODULE = "tongs_agents.launch"
 SIDEBAR_MODULE = "tongs_agents.commands.sidebar"
-SIDEBAR_PANE_NAME = "tongs-agents-sidebar"
+HOME_MODULE = "tongs_agents.workspace_spawn"
+HOME_COMMAND = "home"
+HOME_TEXT = (
+    "tongs-agents",
+    "",
+    "Agents show here, one at a time. Select one in the sidebar to bring it",
+    "up; the others keep running, collapsed to their title lines.",
+    "",
+    "Add an agent with + in the sidebar, or run: tongs-agents run PROFILE [DIR]",
+)
 REQUEST_SCHEMA = 1
 REQUESTS_DIR = "requests"
 LAYOUTS_DIR = "layouts"
@@ -72,6 +97,10 @@ def new_token() -> str:
 
 def launcher_argv(profile: str, launch_id: str) -> list[str]:
     return [sys.executable, "-m", LAUNCH_MODULE, profile, "--launch-id", launch_id]
+
+
+def home_argv() -> list[str]:
+    return [sys.executable, "-m", HOME_MODULE, HOME_COMMAND]
 
 
 def sidebar_argv(token: str | None = None) -> list[str]:
@@ -130,14 +159,28 @@ def create_launches(
     return records
 
 
-def spawn_launch(mux: Multiplexer, record: LaunchRecord) -> PaneRef:
-    """Start the launcher for a pending record in a new pane of its session."""
-    return mux.spawn(
+def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False) -> PaneRef:
+    """Start the launcher for a pending record in a new pane of its session.
+
+    With ``show`` the new pane is then brought into view (``show_pane``).
+    """
+    ref = mux.spawn(
         record.session,
         launcher_argv(record.profile, record.launch_id),
         name=record.profile,
         focus=False,
     )
+    if show:
+        show_pane(mux, ref)
+    return ref
+
+
+def show_pane(mux: Multiplexer, ref: PaneRef) -> bool:
+    """Bring ``ref`` into the main area; False, never an error, when that fails."""
+    try:
+        return mux.show(ref).successful
+    except MultiplexerError:
+        return False
 
 
 def spawn_profiles(
@@ -147,7 +190,8 @@ def spawn_profiles(
     """Create a pending record and spawn one launcher pane per profile, in order.
 
     ``folder`` and ``args`` (see ``check_launch``) apply to every profile and
-    are checked for all of them before any pane starts. Raises the first
+    are checked for all of them before any pane starts. Each pane is shown
+    once it is up, so the last one ends in view. Raises the first
     MultiplexerError or LaunchError; panes spawned before it stay up, and the
     record of the pane that failed to start is discarded.
     """
@@ -160,7 +204,7 @@ def spawn_profiles(
             profile, session, mux.name, folder=folder, args=args,
         )
         try:
-            spawn_launch(mux, record)
+            spawn_launch(mux, record, show=True)
         except BaseException:
             discard_launches([record])
             raise
@@ -434,7 +478,7 @@ def spawn_requested(
             failures.append(f"launch {launch_id}: belongs to another session")
             continue
         try:
-            ref = spawn_launch(mux, record)
+            ref = spawn_launch(mux, record, show=True)
         except (MultiplexerError, LaunchError) as error:
             detail = getattr(error, "detail", None) or str(error)
             failures.append(f"profile {record.profile}: {detail}")
@@ -442,3 +486,24 @@ def spawn_requested(
         if on_spawned is not None:
             on_spawned(record.launch_id, ref)
     return failures
+
+
+def home(text: tuple[str, ...] = HOME_TEXT) -> int:
+    """Print the home hint and stay up, so the agent stack keeps its anchor."""
+    if hasattr(signal, "SIGINT"):
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    print("\n".join(text), flush=True)
+    while True:
+        time.sleep(3600)
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv == [HOME_COMMAND]:
+        return home()
+    print(f"usage: python -m {HOME_MODULE} {HOME_COMMAND}", file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

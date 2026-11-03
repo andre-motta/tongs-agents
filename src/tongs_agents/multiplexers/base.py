@@ -5,6 +5,15 @@ and pastes into, sends keys to and captures a pane. It sits beside
 TerminalAPI, which focuses an existing agent from outside: a Multiplexer never
 activates an emulator window. Adapters hold no policy: which panes may be
 driven is decided by ``tongs_agents.control`` alone.
+
+A workspace session shows one agent at a time (layout ``single``, #124) or
+every agent side by side (``split``). The session itself records which: a
+Zellij session has a ``tongs-agents-home`` pane heading a stacked column,
+a tmux session has the ``@tongs_agents_layout`` option set to ``single``.
+Adapters read that marker, so every spawner (the workspace and run
+commands, the sidebar, the palette, MCP) places panes the same way, and a
+session created before the marker existed keeps the split behaviour. A pane
+named ``tongs-agents-sidebar`` is never stacked or parked.
 """
 
 from __future__ import annotations
@@ -17,6 +26,11 @@ from tongs_agents.models import FocusResult
 
 SESSION_RUNNING = "running"
 SESSION_EXITED = "exited"
+SIDEBAR_PANE_NAME = "tongs-agents-sidebar"
+HOME_PANE_NAME = "tongs-agents-home"
+LAYOUT_SINGLE = "single"
+LAYOUT_SPLIT = "split"
+LAYOUTS: tuple[str, ...] = (LAYOUT_SINGLE, LAYOUT_SPLIT)
 
 
 @dataclass(frozen=True)
@@ -78,6 +92,15 @@ class Multiplexer(Protocol):
     def list_panes(self, session: str) -> list[PaneInfo]: ...
 
     def focus(self, ref: PaneRef) -> FocusResult: ...
+
+    def show(self, ref: PaneRef) -> FocusResult:
+        """Bring ref's pane into the main area the way the session's layout does.
+
+        Zellij expands it in its stack (a pane selection); tmux swaps a parked
+        pane into the main slot of a ``single`` session and leaves a ``split``
+        session's active pane alone.
+        """
+        ...
 
     def paste(self, ref: PaneRef, text: str) -> None:
         """Paste text into the pane as one bracketed paste; never submits it."""

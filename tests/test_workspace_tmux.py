@@ -10,9 +10,9 @@ from pathlib import Path
 import pytest
 
 from tests.test_workspace_spawn import FakeMux, runtime_dir, write_profiles  # noqa: F401
-from tongs_agents import cli, launch, launches
+from tongs_agents import cli, focus, launch, launches
 from tongs_agents.commands import sidebar, workspace
-from tongs_agents.multiplexers import PaneRef
+from tongs_agents.multiplexers import MultiplexerError, PaneRef
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -363,3 +363,90 @@ def test_recorded_evidence_passes_and_holds_no_private_paths():
         assert run["cleanup"]["survivors"] == 0
     for marker in ("/home/", "/tmp/", "/run/user/", "/Users/"):
         assert marker not in text
+
+
+def test_new_tmux_session_records_the_single_layout_before_spawning(env):
+    mux, _, _ = env
+    assert _run("--multiplexer", "tmux", "--profile", "alpha", "--profile", "beta") == "exec"
+    assert mux.layouts == [("agents", "single")]
+    assert [ref.pane_id for ref in mux.shown] == ["2", "3"]
+
+
+def test_layout_split_in_the_config_is_recorded_on_a_new_tmux_session(env, tmp_path):
+    mux, _, _ = env
+    _config(tmp_path, '\n[workspace]\nlayout = "split"\n')
+    assert _run("--multiplexer", "tmux", "--profile", "alpha") == "exec"
+    assert mux.layouts == [("agents", "split")]
+
+
+def test_a_running_tmux_session_keeps_its_own_layout(env):
+    mux, _, _ = env
+    mux.exists = True
+    assert _run("--multiplexer", "tmux", "--profile", "alpha") == "exec"
+    assert mux.layouts == []
+    assert [ref.pane_id for ref in mux.shown] == ["1"]
+
+
+class _FakeTmuxAPI(focus.TmuxAPI):
+    def __init__(self, target="$1:@4.%3", error=None):
+        self.target = target
+        self.error = error
+
+    def find_tab(self, pid, terminal_env):
+        if self.error is not None:
+            raise self.error
+        return self.target
+
+
+class _ShowingMux:
+    def __init__(self, session="agents", fail=False):
+        self.session = session
+        self.fail = fail
+        self.shown = []
+
+    def session_of(self, pane):
+        if self.fail:
+            raise MultiplexerError("no server")
+        return self.session
+
+    def show(self, ref):
+        self.shown.append(ref)
+
+
+@pytest.fixture
+def showing(monkeypatch):
+    muxes = []
+
+    def get(name, socket_dir=None):
+        mux = _ShowingMux()
+        muxes.append((name, socket_dir, mux))
+        return mux
+
+    monkeypatch.setattr(focus, "get_multiplexer", get)
+    return muxes
+
+
+def test_terminal_focus_of_a_tmux_agent_shows_its_pane_first(showing):
+    focus._show_parked_tmux_pane(_FakeTmuxAPI(), 4242, {"TMUX": f"{SOCKET},1,0"})
+    ((name, socket, mux),) = showing
+    assert (name, socket) == ("tmux", SOCKET)
+    assert mux.shown == [PaneRef("tmux", "agents", "%3", SOCKET)]
+
+
+@pytest.mark.parametrize("api, terminal_env", [
+    (_FakeTmuxAPI(), {}),
+    (_FakeTmuxAPI(), {"TMUX": "relative,1,0"}),
+    (_FakeTmuxAPI(target=None), {"TMUX": f"{SOCKET},1,0"}),
+    (_FakeTmuxAPI(error=RuntimeError("boom")), {"TMUX": f"{SOCKET},1,0"}),
+    (object(), {"TMUX": f"{SOCKET},1,0"}),
+])
+def test_terminal_focus_skips_the_show_without_a_tmux_pane(showing, api, terminal_env):
+    focus._show_parked_tmux_pane(api, 4242, terminal_env)
+    assert all(not mux.shown for _, _, mux in showing)
+
+
+def test_a_tmux_error_while_showing_never_stops_the_focus(monkeypatch):
+    mux = _ShowingMux(fail=True)
+    monkeypatch.setattr(focus, "get_multiplexer", lambda name, socket_dir=None: mux)
+    focus._show_parked_tmux_pane(_FakeTmuxAPI(), 4242, {"TMUX": f"{SOCKET},1,0"})
+    assert mux.shown == []

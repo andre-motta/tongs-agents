@@ -19,10 +19,18 @@ Row selection runs the real SidebarApp headless in this process with the
 sidebar pane's Zellij identity, while parent terminal lookups are recorded to
 prove no window activation is attempted; that step is instrumented, not a
 keystroke into the sidebar pane.
+
+The workspace uses the default ``single`` layout (#124): the home pane heads
+a stacked column beside the sidebar. The run checks that every agent pane
+joined that stack (same tab, column and width as the home pane), that a row
+selection expands its pane and collapses the others, and, after shrinking
+both clients, that spawning fills the stack up to its capacity and then is
+refused with no pane added.
 """
 
 import argparse
 import asyncio
+import fcntl
 import hashlib
 import json
 import os
@@ -30,8 +38,10 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import struct
 import sys
 import tempfile
+import termios
 import threading
 import time
 import traceback
@@ -52,7 +62,13 @@ from probe_terminals import (
 
 from tongs_agents import focus, launches, paths, workspace_spawn
 from tongs_agents.commands import sidebar
-from tongs_agents.multiplexers.zellij import ACTIVATION_SKIPPED, ZellijMultiplexer
+from tongs_agents.multiplexers import HOME_PANE_NAME, MultiplexerError
+from tongs_agents.multiplexers.zellij import (
+    ACTIVATION_SKIPPED,
+    STACK_MARGIN_ROWS,
+    ZellijMultiplexer,
+    stack_capacity,
+)
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.terminal_apis import tmux
 from tongs_agents.terminal_apis import zellij as zellij_terminal
@@ -73,6 +89,7 @@ HASHED = (
     "src/tongs_agents/launch.py",
     "src/tongs_agents/launches.py",
     "src/tongs_agents/layouts/agents.kdl.tmpl",
+    "src/tongs_agents/multiplexers/base.py",
     "src/tongs_agents/multiplexers/zellij.py",
     "src/tongs_agents/profiles.py",
     "src/tongs_agents/sessions_feed.py",
@@ -123,6 +140,11 @@ CURSOR_ROW_RE = re.compile(rb"\x1b\[\d*(?:;\d*)?[Hf]")
 RERUN_STDERR = "rerun.stderr"
 # exec keeps the rerun the pane's own process; only its stderr goes to the file.
 STDERR_TO_FILE = 'exec "$@" 2>"$0"'
+CAPACITY_HEADROOM = 2
+CAPACITY_COLUMNS = 120
+CHROME_ROWS = 3
+RESIZE_WAIT = 10.0
+IDLE_PANE = "import sys, time; time.sleep(600)"
 
 
 class Check(Exception):
@@ -400,10 +422,14 @@ def exercise(root, session, tracker, observations):
         spawn_request_consumed(session, token, target, observations)
         first = hook_rows(session, feed, target, FIRST_PROFILES,
                           observations.pop("_panes_ready_at"), observations, "first_profiles")
+        stack_membership(target, FIRST_PROFILES, observations, "stack_first")
         rerun_in_session(root, session, tongs_bin, target, tracker, observations)
         rerun_rows(session, feed, target, observations)
+        stack_membership(target, (*FIRST_PROFILES, *RERUN_PROFILES), observations,
+                         "stack_after_rerun")
         agent_env(io_dir, session, target, observations)
         row_focus(session, env, target, tracker, io_dir, first, observations)
+        capacity(root, session, target, tracker, observations)
 
 
 def install(root, env, tongs_bin, observations):
@@ -507,6 +533,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
     argv += ["--no-tongs", "--session", session]
     started = time.monotonic()
     client = CapturingClient(argv, env, str(root / "work"), tracker, "client")
+    observations.setdefault("_ptys", []).append(client)
     created = wait_until(lambda: session in target.sessions(), SESSION_CEILING)
     session_seconds = round(time.monotonic() - started, 2)
     timing = {
@@ -524,7 +551,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
         }
     expect(created, f"workspace did not create the session within {SESSION_CEILING} s "
                     "(see workspace.client_screen)")
-    expected = len(FIRST_PROFILES) + 1
+    expected = len(FIRST_PROFILES) + 2
     early = {}
 
     def panes_ready():
@@ -541,6 +568,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
     panes = target.panes()
     sidebar_panes = [pane for pane in panes
                      if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME]
+    home_panes = [pane for pane in panes if pane.get("title") == HOME_PANE_NAME]
     command = (sidebar_panes[0].get("terminal_command") or "") if sidebar_panes else ""
     match = TOKEN_RE.search(command)
     observations["workspace"] = {
@@ -553,6 +581,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
         "expected_terminal_panes": expected,
         "pane_titles": pane_titles(target),
         "sidebar_panes": len(sidebar_panes),
+        "home_panes": len(home_panes),
     }
     if not ready or len(panes) != expected:
         observations["workspace"]["sidebar_screen"] = early.get("screen") or pane_screen(
@@ -564,6 +593,7 @@ def create_workspace(root, session, env, tongs_bin, target, tracker, observation
            f"budget {SESSION_BUDGET} s)")
     expect(ready and len(panes) == expected, f"expected {expected} panes, got {len(panes)}")
     expect(len(sidebar_panes) == 1, "the workspace does not have exactly one sidebar pane")
+    expect(len(home_panes) == 1, "the workspace does not have exactly one home pane")
     expect(match is not None, "the sidebar pane does not name a spawn request")
     return match.group(1)
 
@@ -639,6 +669,124 @@ def hook_rows(session, feed, target, profiles, since, observations, key):
                f"profile {name} row does not match its launch record")
         expect(item["status"] != "discovered", f"profile {name} row is only discovered")
     return {name: found[name][2] for name in profiles}
+
+
+def column(pane):
+    return pane.get("tab_id"), pane.get("pane_x"), pane.get("pane_columns")
+
+
+def stack_of(panes):
+    """The home pane and the tiled panes sharing its tab, column and width."""
+    home = next((pane for pane in panes if pane.get("title") == HOME_PANE_NAME), None)
+    if home is None:
+        return None, []
+    return home, [pane for pane in panes
+                  if not pane.get("is_floating") and column(pane) == column(home)]
+
+
+def stack_membership(target, profiles, observations, key):
+    """Every profile pane sits in the home pane's stacked column, the sidebar does not."""
+    panes = target.panes()
+    home, members = stack_of(panes)
+    titles = sorted(pane.get("title", "") for pane in members)
+    sidebar_pane = next((pane for pane in panes
+                         if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME), {})
+    observations[key] = {
+        "home_pane": home is not None,
+        "member_titles": titles,
+        "profiles_stacked": all(name in titles for name in profiles),
+        "sidebar_outside_stack": bool(sidebar_pane) and home is not None
+        and column(sidebar_pane) != column(home),
+        "suppressed_members": sum(1 for pane in members if pane.get("is_suppressed")),
+        "collapsed_members": sum(1 for pane in members if pane.get("pane_rows") == 1),
+        "all_listed": len(panes),
+    }
+    facts = observations[key]
+    expect(facts["home_pane"], "the workspace has no home pane")
+    expect(facts["profiles_stacked"], f"profile panes are not stacked: {titles}")
+    expect(facts["sidebar_outside_stack"], "the sidebar is in the agent stack")
+
+
+def expanded(pane):
+    return not pane.get("is_suppressed") and (pane.get("pane_rows") or 0) > 1
+
+
+def resize(ptys, rows, columns=CAPACITY_COLUMNS):
+    for client in ptys:
+        fcntl.ioctl(client.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
+
+
+def viewport_rows(target, tab_id):
+    code, out, _ = target.action("list-tabs", "--json")
+    if code != 0 or not out:
+        return None
+    try:
+        tabs = json.loads(out)
+    except ValueError:
+        return None
+    return next((tab.get("viewport_rows") for tab in tabs
+                 if isinstance(tab, dict) and tab.get("tab_id") == tab_id), None)
+
+
+def capacity(root, session, target, tracker, observations):
+    """Shrink the clients, fill the stack through the adapter, then expect a refusal."""
+    home, members = stack_of(target.panes())
+    expect(home is not None, "the workspace has no home pane")
+    before = len(members)
+    rows = before + CAPACITY_HEADROOM + STACK_MARGIN_ROWS + CHROME_ROWS
+    resize(observations["_ptys"], rows)
+
+    def shrunk():
+        value = viewport_rows(target, home.get("tab_id"))
+        return value if value is not None and value < rows else None
+
+    viewport = wait_until(shrunk, RESIZE_WAIT)
+    expect(viewport is not None, f"the clients did not shrink to {rows} rows")
+    limit = stack_capacity(viewport)
+    mux = ZellijMultiplexer()
+    spawned = []
+    refusal = None
+    listed_before_refusal = None
+    for index in range(max(limit - before, 0) + 1):
+        listed = len(target.panes())
+        try:
+            ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)],
+                            name=f"fill-{index}")
+        except MultiplexerError as error:
+            refusal = error.detail
+            listed_before_refusal = listed
+            break
+        spawned.append(ref.pane_id)
+    tracker.sweep()
+    _, after = stack_of(target.panes())
+    observations["capacity"] = {
+        "client_rows": rows,
+        "viewport_rows": viewport,
+        "capacity": limit,
+        "members_before": before,
+        "spawned": len(spawned),
+        "refused": refusal is not None,
+        "refusal": refusal,
+        "members_after": len(after),
+        "spawned_all_stacked": {str(pane.get("id")) for pane in after} >= set(spawned),
+        "panes_unchanged_by_refusal": len(target.panes()) == listed_before_refusal,
+        "outside_stack": sorted(pane.get("title", "") for pane in target.panes()
+                                if pane.get("title", "").startswith("fill-")
+                                and pane not in after),
+    }
+    facts = observations["capacity"]
+    if facts["spawned"] != max(limit - before, 0) or not facts["refused"]:
+        facts["geometry"] = [
+            [pane.get("title"), pane.get("tab_id"), pane.get("pane_x"), pane.get("pane_y"),
+             pane.get("pane_columns"), pane.get("pane_rows"), pane.get("is_suppressed")]
+            for pane in target.panes()]
+    expect(facts["spawned"] == max(limit - before, 0),
+           f"spawned {facts['spawned']} panes before the refusal, expected {limit - before}")
+    expect(facts["refused"] and "agent stack is full" in refusal,
+           f"a full stack was not refused: {refusal}")
+    expect(facts["panes_unchanged_by_refusal"], "the refused spawn left a pane behind")
+    expect(facts["members_after"] == max(limit, before) and facts["spawned_all_stacked"]
+           and not facts["outside_stack"], f"the stack did not hold every spawn: {facts}")
 
 
 def rerun_in_session(root, session, tongs_bin, target, tracker, observations):
@@ -812,6 +960,7 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
     before_attach = target.clients()
     second = PtyClient([str(Path(env["PATH"].split(os.pathsep)[0]) / "zellij"), "attach",
                         session], env, env["HOME"], tracker, "client")
+    observations.setdefault("_ptys", []).append(second)
     attached = wait_until(lambda: len(target.clients()) == 2, 10)
     expect(attached, "the second client did not attach")
     second_id = next(key for key in target.clients() if key not in before_attach)
@@ -860,6 +1009,9 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
             app = ProbeSidebar(ZellijMultiplexer(), session, compact=True)
             result = asyncio.run(select_row(app, identity))
             after = target.clients()
+            panes = {str(pane.get("id")): pane for pane in target.panes()}
+            _, members = stack_of(list(panes.values()))
+            others = [pane for pane in members if str(pane.get("id")) != record.pane_id]
             routed = typed_target(second, io_dir, f"rowfocus{index}")
             steps.append({
                 "profile": name,
@@ -878,6 +1030,9 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
                 "clients_before": {role(key): value for key, value in before.items()},
                 "clients_after": {role(key): value for key, value in after.items()},
                 "keystroke_routed_to": routed,
+                "target_expanded": expanded(panes.get(record.pane_id, {})),
+                "other_members_collapsed": sum(1 for pane in others if not expanded(pane)),
+                "other_members": len(others),
             })
     observations["row_focus"] = {
         "driver": ("SidebarApp run headless in the validator with the sidebar pane's "
@@ -903,6 +1058,9 @@ def row_focus(session, env, target, tracker, io_dir, first_rows, observations):
                f"list-clients readback did not confirm {step['profile']}")
         expect(step["keystroke_routed_to"] == [step["profile"]],
                f"keystrokes did not reach {step['profile']}: {step['keystroke_routed_to']}")
+        expect(step["target_expanded"]
+               and step["other_members_collapsed"] == step["other_members"],
+               f"selecting {step['profile']} did not expand it alone in the stack: {step}")
 
 
 def cleanup(root, sessions, tracker):

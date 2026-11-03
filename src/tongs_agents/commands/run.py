@@ -201,9 +201,11 @@ def _outside(args, settings, profile, options) -> int:
         return _error(getattr(error, "detail", None) or str(error))
     plain = argparse.Namespace(resurrect=False, print_command=False, tongs=None)
     if name == "tmux":
-        return workspace._outside_tmux(mux, plain, session, [profile], [profile], options)
+        return workspace._outside_tmux(mux, plain, session, [profile], [profile], options,
+                                       layout=settings.layout)
     return workspace._outside(
-        mux, plain, session, [profile], [profile], settings.tongs_tab, options
+        mux, plain, session, [profile], [profile], settings.tongs_tab, options,
+        layout=settings.layout,
     )
 
 

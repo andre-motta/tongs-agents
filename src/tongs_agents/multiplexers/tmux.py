@@ -17,6 +17,15 @@ window is ever raised. tmux keeps no EXITED sessions, so there is nothing to
 delete or resurrect, and it has no render stream, so ``subscribe`` is
 unsupported. The adapter holds no policy: ``tongs_agents.control`` decides
 which panes may be driven.
+
+A ``single`` workspace session (#124, session option ``@tongs_agents_layout``)
+shows the sidebar and one agent in its first window, the main slot. Every
+other pane is parked in its own detached window (``new-window -d``), and
+showing one swaps it into the main slot with ``swap-pane`` (``join-pane``
+beside the sidebar when the slot is empty), then selects it; the parked
+window is renamed after the pane it now holds. Pane ids move with their
+process, so control, capture and readback keep working on parked panes, and
+``focus`` of a parked pane shows it rather than selecting its window.
 """
 
 from __future__ import annotations
@@ -31,7 +40,10 @@ from collections.abc import Iterator
 
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
+    LAYOUT_SINGLE,
+    LAYOUTS,
     SESSION_RUNNING,
+    SIDEBAR_PANE_NAME,
     MultiplexerError,
     PaneInfo,
     PaneRef,
@@ -43,6 +55,8 @@ NAME = "tmux"
 TMUX = "tmux"
 TMUX_FLOOR = (3, 2)
 NAME_OPTION = "@tongs_agents_name"
+LAYOUT_OPTION = "@tongs_agents_layout"
+SIDEBAR_COLUMNS = 40
 BUFFER_PREFIX = "tongs-agents-"
 COMMAND_TIMEOUT = 5
 DEFAULT_TMPDIR = "/tmp"
@@ -84,6 +98,10 @@ _PANE_FIELDS = (
     "#{pane_title}",
 )
 PANE_FORMAT = "\t".join(_PANE_FIELDS)
+SLOT_FORMAT = "\t".join((
+    "#{pane_id}", "#{window_id}", "#{" + NAME_OPTION + "}", "#{pane_active}",
+    "#{window_width}",
+))
 
 
 def _has_control(value: str) -> bool:
@@ -323,6 +341,13 @@ def _pane_info(line: str, session: str, socket: str) -> PaneInfo:
     )
 
 
+def _main_columns(window_width: int) -> int:
+    """The main pane's width beside a sidebar of about SIDEBAR_COLUMNS columns."""
+    if window_width >= 2 * SIDEBAR_COLUMNS + 1:
+        return window_width - SIDEBAR_COLUMNS - 1
+    return max(window_width // 2, 1)
+
+
 class TmuxMultiplexer:
     name = NAME
 
@@ -401,6 +426,31 @@ class TmuxMultiplexer:
             "is never deleted)"
         )
 
+    def set_layout(self, session: str, layout: str) -> None:
+        """Record ``layout`` on the running session; ``spawn`` and ``show`` follow it."""
+        session = _session(session)
+        if layout not in LAYOUTS:
+            raise MultiplexerError(f"refused workspace layout {layout!r:.40}")
+        self._tmux(None, "set-option", "-t", f"={session}:", LAYOUT_OPTION, layout)
+
+    def layout(self, session: str) -> str | None:
+        """The layout recorded on the session, or None (a split session)."""
+        return self._layout(None, _session(session))
+
+    def _layout(self, socket: str | None, session: str) -> str | None:
+        result = _run_tmux(self._command(
+            socket, "show-options", "-q", "-v", "-t", f"={session}:", LAYOUT_OPTION))
+        if result is None:
+            return None
+        value = (result.stdout or "").strip()
+        return value if value in LAYOUTS else None
+
+    def session_of(self, pane: str) -> str:
+        """The name of the session that holds ``pane`` on this server."""
+        output = self._tmux(None, "display-message", "-p", "-t", _pane_id(pane),
+                            "#{session_name}")
+        return _session(output.rstrip("\n"))
+
     def _session_id(self, socket: str | None, session: str) -> str:
         output = self._tmux(socket, "display-message", "-p", "-t", f"={session}:",
                             "#{session_id}").strip()
@@ -419,11 +469,13 @@ class TmuxMultiplexer:
     ) -> PaneRef:
         """Start argv in a new pane of ``session``; create the session if absent.
 
-        A new session starts detached with argv as its first pane. Otherwise
-        the active pane of the session's current window is split side by
-        side and the row is spread evenly, or a new window is opened when it
-        has no room. ``focus`` False keeps the
-        current pane active.
+        A new session starts detached with argv as its first pane. In a
+        ``single`` session any pane but the sidebar is parked in a new
+        detached window (``show`` brings it into view, at once with
+        ``focus``). Otherwise the active
+        pane of the session's current window is split side by side and the
+        row is spread evenly, or a new window is opened when it has no room.
+        ``focus`` False keeps the current pane active.
         """
         session = _session(session)
         command = _argv(argv)
@@ -434,6 +486,7 @@ class TmuxMultiplexer:
         socket = self.socket
         detached = [] if focus else ["-d"]
         split = False
+        parked = False
         result = None
         if self.session_state(session) != SESSION_RUNNING:
             _session(session, create=True)
@@ -441,6 +494,18 @@ class TmuxMultiplexer:
                 socket, "new-session", "-d", "-s", session, *options, "--", *command))
             if result is None and self.session_state(session) != SESSION_RUNNING:
                 raise MultiplexerError(f"tmux new-session {session} failed")
+        if result is None and pane_name != SIDEBAR_PANE_NAME and (
+            self._layout(socket, session) == LAYOUT_SINGLE
+        ):
+            named = [] if pane_name is None else ["-n", pane_name]
+            result = _run_tmux(self._command(
+                socket, "new-window", "-d", "-t", f"={session}:", *named, *options, "--",
+                *command))
+            if result is None:
+                raise MultiplexerError(
+                    f"tmux could not park a new window in session {session!r}"
+                )
+            parked = True
         if result is None:
             target = f"={session}:"
             result = _run_tmux(self._command(
@@ -463,7 +528,10 @@ class TmuxMultiplexer:
         if split:
             # Spread the new pane and its neighbours evenly; a failure leaves sizes as they are.
             _run_tmux(self._command(socket, "select-layout", "-t", pane, "-E"))
-        return PaneRef(NAME, session, pane, socket)
+        ref = PaneRef(NAME, session, pane, socket)
+        if parked and focus:
+            self.show(ref)
+        return ref
 
     def list_panes(self, session: str) -> list[PaneInfo]:
         session = _session(session)
@@ -478,7 +546,22 @@ class TmuxMultiplexer:
         ]
 
     def focus(self, ref: PaneRef) -> FocusResult:
-        """Select ref's window and pane in its session and read it back; never raise."""
+        """Select ref's pane in its session and read it back; never raise.
+
+        In a ``single`` session a parked pane is shown (swapped into the main
+        slot) rather than selected in its own window.
+        """
+        return self._bring(ref, park_aware=True)
+
+    def show(self, ref: PaneRef) -> FocusResult:
+        """Swap ref's pane into the main slot of a ``single`` session and select it.
+
+        A ``split`` session is left as it is: every pane there is already laid
+        out, and spawning keeps the current pane active.
+        """
+        return self._bring(ref, park_aware=False)
+
+    def _bring(self, ref: PaneRef, *, park_aware: bool) -> FocusResult:
         try:
             session, pane, socket = _target(ref)
             session_id = self._session_id(socket, session)
@@ -490,6 +573,12 @@ class TmuxMultiplexer:
                 or _WINDOW_ID.match(located[1]) is None
             ):
                 return _failed(f"pane {pane} is not in session {session!r}")
+            if self._layout(socket, session) == LAYOUT_SINGLE:
+                slot = self._slot(socket, session)
+                if slot is not None and located[1] != slot[1]:
+                    return self._swap_in(socket, session, pane, located[1], slot)
+            elif not park_aware:
+                return _selected("split layout: every pane is already laid out")
             if self._active(socket, session) == pane:
                 return _selected(ALREADY_SELECTED)
             self._tmux(socket, "select-window", "-t", f"={session}:{located[1]}")
@@ -499,6 +588,57 @@ class TmuxMultiplexer:
         except MultiplexerError as error:
             return _failed(error.detail)
         return _failed(f"tmux did not make pane {pane} the active pane")
+
+    def _slot(self, socket: str | None, session: str):
+        """``(sidebar pane, its window, window width, main pane or None)``.
+
+        None when the session has no live sidebar. The main pane is the
+        window's active pane unless that is the sidebar, else its first
+        other pane.
+        """
+        output = self._tmux(socket, "list-panes", "-s", "-t", f"={session}", "-F",
+                            SLOT_FORMAT)
+        rows = []
+        for line in output.splitlines():
+            parts = line.split("\t")
+            if (
+                len(parts) != 5
+                or _PANE_ID.match(parts[0]) is None
+                or _WINDOW_ID.match(parts[1]) is None
+                or parts[3] not in {"0", "1"}
+                or not parts[4].isdigit()
+            ):
+                raise MultiplexerError("unrecognized tmux list-panes output")
+            rows.append(parts)
+        sidebar = next((row for row in rows if row[2] == SIDEBAR_PANE_NAME), None)
+        if sidebar is None:
+            return None
+        others = [row for row in rows if row[1] == sidebar[1] and row[0] != sidebar[0]]
+        main = next((row for row in others if row[3] == "1"), others[0] if others else None)
+        return sidebar[0], sidebar[1], int(sidebar[4]), main[0] if main else None
+
+    def _swap_in(self, socket, session: str, pane: str, parked_window: str, slot):
+        sidebar, window, width, main = slot
+        if main is not None:
+            self._tmux(socket, "swap-pane", "-d", "-s", pane, "-t", main)
+            name = _run_tmux(self._command(
+                socket, "display-message", "-p", "-t", main, "#{" + NAME_OPTION + "}"))
+            shown = (name.stdout or "").strip() if name is not None else ""
+            if _text(shown, MAX_NAME_BYTES):
+                # Best effort: the status bar names the pane the window now holds.
+                _run_tmux(self._command(socket, "rename-window", "-t", parked_window, shown))
+            detail = "swapped into the main slot"
+        else:
+            self._tmux(socket, "join-pane", "-h", "-d", "-l", str(_main_columns(width)),
+                       "-s", pane, "-t", sidebar)
+            detail = "joined into the empty main slot"
+        self._tmux(socket, "select-window", "-t", f"={session}:{window}")
+        self._tmux(socket, "select-pane", "-t", pane)
+        moved = self._tmux(socket, "display-message", "-p", "-t", pane,
+                           "#{window_id}").strip()
+        if moved == window and self._active(socket, session) == pane:
+            return _selected(detail)
+        return _failed(f"tmux did not move pane {pane} into the main slot")
 
     def _active(self, socket: str | None, session: str) -> str:
         return self._tmux(socket, "display-message", "-p", "-t", f"={session}:",

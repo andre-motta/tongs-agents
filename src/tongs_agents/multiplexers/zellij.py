@@ -15,6 +15,23 @@ the process list while the call runs), `send-keys`,
 and unlinked, and a bounded `subscribe --format json` stream. `action` exits 0
 for an unknown pane id, so callers verify the pane first (control.py); the
 adapter holds no policy.
+
+A ``single`` workspace session (#124) has a ``tongs-agents-home`` pane at the
+head of a ``stacked=true`` column beside the sidebar. Every pane but the
+sidebar is then opened in that pane's tab with ``new-pane --tab-id N
+--floating`` and tiled into the stack with ``stack-panes``. ``new-pane
+--stacked`` is never used: it stacks onto whichever pane is focused. Nor is a
+tiled ``new-pane``: it splits the tab's focused pane and, when that pane is
+too small to split (a short sidebar, a held one-row pane), silently vanishes
+with its process still running, while a floating pane always has room.
+``stack-panes`` exits 0 even when it did nothing, so membership is read back
+(same ``tab_id``, ``pane_x`` and ``pane_columns`` as the home pane) and a pane
+that did not join is closed again. A stack fits ``viewport_rows`` minus five
+members; past that zellij leaves new panes out of it, so a full stack is
+refused before anything starts. Selecting a stacked pane is the ordinary
+``focus-pane-id``, which expands it and collapses the rest. Collapsed panes
+keep running and stay listed (0.45.1 reports them ``is_suppressed``, which
+never means hidden or gone here).
 """
 
 from __future__ import annotations
@@ -32,8 +49,10 @@ from collections.abc import Iterator
 from tongs_agents import paths
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
+    HOME_PANE_NAME,
     SESSION_EXITED,
     SESSION_RUNNING,
+    SIDEBAR_PANE_NAME,
     MultiplexerError,
     PaneInfo,
     PaneRef,
@@ -75,6 +94,7 @@ SUBSCRIBE_SECONDS = 60.0
 STOP_TIMEOUT = 2.0
 CAPTURE_DIR = "capture"
 MAX_DUMP_POLLS = 20
+STACK_MARGIN_ROWS = 5
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]*\Z")
 _NEW_PANE = re.compile(r"terminal_([0-9]{1,12})")
 _SESSION_LINE = re.compile(r" \[Created [^\]\n]*\](?: \([^()\n]*\))*")
@@ -185,6 +205,58 @@ def _pane_info(entry, session: str, socket_dir: str | None) -> PaneInfo | None:
         focused=entry["is_focused"],
         exit_status=exit_status if _int(exit_status) else None,
     )
+
+
+def _geometry(entry: dict) -> tuple[int, int, int]:
+    """``(tab_id, pane_x, pane_columns)``: the column a tiled pane sits in."""
+    values = tuple(entry.get(key) for key in ("tab_id", "pane_x", "pane_columns"))
+    if not all(_int(value) for value in values) or not isinstance(
+        entry.get("is_floating"), bool
+    ):
+        raise MultiplexerError("unrecognized zellij list-panes entry: no pane geometry")
+    return values
+
+
+def _home_anchor(entries: list[dict]) -> dict | None:
+    """The tiled ``tongs-agents-home`` pane with the lowest id, if any."""
+    anchors = [
+        entry for entry in entries
+        if not entry["is_plugin"]
+        and entry["title"] == HOME_PANE_NAME
+        and entry.get("is_floating") is False
+    ]
+    return min(anchors, key=lambda entry: entry["id"]) if anchors else None
+
+
+def _stack_members(entries: list[dict], anchor: dict) -> list[dict]:
+    column = _geometry(anchor)
+    return [
+        entry for entry in entries
+        if not entry["is_plugin"]
+        and entry.get("is_floating") is False
+        and _geometry(entry) == column
+    ]
+
+
+def _viewport_rows(output: str, tab_id: int) -> int:
+    try:
+        tabs = json.loads(output or "")
+    except ValueError as error:
+        raise MultiplexerError("unrecognized zellij list-tabs output (not JSON)") from error
+    if not isinstance(tabs, list):
+        raise MultiplexerError("unrecognized zellij list-tabs output")
+    for tab in tabs:
+        if isinstance(tab, dict) and tab.get("tab_id") == tab_id:
+            rows = tab.get("viewport_rows")
+            if _int(rows) and rows >= 0:
+                return rows
+            raise MultiplexerError("unrecognized zellij list-tabs entry: field 'viewport_rows'")
+    raise MultiplexerError(f"zellij list-tabs does not list tab {tab_id}")
+
+
+def stack_capacity(viewport_rows: int) -> int:
+    """How many panes, the home pane included, a stack may hold in that viewport."""
+    return max(viewport_rows - STACK_MARGIN_ROWS, 1)
 
 
 def _running_sessions(output: str) -> dict[str, bool]:
@@ -354,7 +426,11 @@ class ZellijMultiplexer:
 
         zellij moves the spawning client to the new pane on every supported
         version and 0.44.2 rejects `--no-focus`, so `focus` is not passed on
-        (M1-0 recommendation).
+        (M1-0 recommendation). In a session with a home pane every pane but
+        the sidebar joins the agent stack (see the module docstring); a full
+        stack is refused and a pane that does not join is closed again. A
+        floating pane does not take the focus, so with ``focus`` the stacked
+        pane is selected afterwards (best effort).
         """
         session = _session(session)
         command = _argv(argv)
@@ -363,7 +439,19 @@ class ZellijMultiplexer:
             options += ["--name", _pane_name(name)]
         if cwd is not None:
             options += ["--cwd", _cwd(cwd)]
+        if name != SIDEBAR_PANE_NAME:
+            entries = self._pane_entries(session)
+            anchor = _home_anchor(entries)
+            if anchor is not None:
+                members = _stack_members(entries, anchor)
+                ref = self._spawn_stacked(session, anchor, members, options, command)
+                if focus:
+                    self.focus(ref)
+                return ref
         result = self._new_pane(session, *options, "--", *command)
+        return self._new_ref(session, result)
+
+    def _new_ref(self, session: str, result) -> PaneRef:
         match = _NEW_PANE.fullmatch((result.stdout or "").strip())
         if match is None:
             raise MultiplexerError(
@@ -371,6 +459,64 @@ class ZellijMultiplexer:
                 "(unknown or EXITED session?)"
             )
         return PaneRef(NAME, session, match.group(1), self._effective_socket_dir())
+
+    def _spawn_stacked(
+        self, session: str, anchor: dict, members: list[dict], options: list[str],
+        command: list[str],
+    ) -> PaneRef:
+        """Open the pane in the home pane's tab, stack it there and read it back."""
+        tab_id = _geometry(anchor)[0]
+        rows = _viewport_rows(
+            self._answered(session, None, "list-tabs", "--json").stdout, tab_id
+        )
+        capacity = stack_capacity(rows)
+        if len(members) >= capacity:
+            raise MultiplexerError(
+                f"the agent stack is full: {len(members)} panes fill a {rows}-row "
+                "window; close an agent pane or make the terminal taller"
+            )
+        result = self._new_pane(
+            session, "--tab-id", str(tab_id), "--floating", *options, "--", *command
+        )
+        ref = self._new_ref(session, result)
+        try:
+            self._action(
+                session, None, "stack-panes", "--",
+                f"terminal_{anchor['id']}", f"terminal_{ref.pane_id}",
+            )
+            if self._joined_stack(session, anchor["id"], ref.pane_id):
+                return ref
+            problem = "it did not join the agent stack"
+        except MultiplexerError as error:
+            problem = error.detail
+        self._close_quietly(session, ref.pane_id)
+        raise MultiplexerError(
+            f"closed new pane {ref.pane_id}: {problem} (zellij places panes past a "
+            "full stack elsewhere; close an agent pane or make the terminal taller)"
+        )
+
+    def _joined_stack(self, session: str, anchor_id: int, pane_id: str) -> bool:
+        """Read back that the pane sits in the anchor's column of the anchor's tab."""
+        for attempt in range(READBACK_ATTEMPTS):
+            entries = self._pane_entries(session)
+            anchor = next(
+                (entry for entry in entries
+                 if not entry["is_plugin"] and entry["id"] == anchor_id),
+                None,
+            )
+            if anchor is not None and any(
+                str(entry["id"]) == pane_id for entry in _stack_members(entries, anchor)
+            ):
+                return True
+            if attempt + 1 < READBACK_ATTEMPTS:
+                time.sleep(READBACK_INTERVAL)
+        return False
+
+    def _close_quietly(self, session: str, pane_id: str) -> None:
+        try:
+            self._action(session, None, "close-pane", "--pane-id", f"terminal_{pane_id}")
+        except MultiplexerError:
+            pass
 
     def _new_pane(self, session: str, *args: str):
         """Run new-pane, asking again only after a transient no-active-session.
@@ -387,8 +533,8 @@ class ZellijMultiplexer:
                 time.sleep(READBACK_INTERVAL)
         return self._action(session, None, "new-pane", *args)
 
-    def list_panes(self, session: str) -> list[PaneInfo]:
-        session = _session(session)
+    def _pane_entries(self, session: str) -> list[dict]:
+        """The raw list-panes entries, each checked for the fields PaneInfo needs."""
         result = self._answered(session, None, "list-panes", "--json")
         try:
             entries = json.loads(result.stdout or "")
@@ -399,6 +545,14 @@ class ZellijMultiplexer:
             ) from error
         if not isinstance(entries, list):
             raise MultiplexerError("unrecognized zellij list-panes output")
+        for entry in entries:
+            _pane_info(entry, session, None)
+        return entries
+
+    def list_panes(self, session: str) -> list[PaneInfo]:
+        """Every pane, collapsed stack members and exited panes included."""
+        session = _session(session)
+        entries = self._pane_entries(session)
         socket_dir = self._effective_socket_dir()
         panes = [_pane_info(entry, session, socket_dir) for entry in entries]
         return [pane for pane in panes if pane is not None]
@@ -453,7 +607,16 @@ class ZellijMultiplexer:
                 return _failed("no attached zellij client")
             if all(shown == expected for shown in before.values()):
                 return _selected(ALREADY_FOCUSED)
-            self._action(session, socket_dir, "focus-pane-id", expected)
+            try:
+                self._action(session, socket_dir, "focus-pane-id", expected)
+            except _NoActiveSession:
+                raise
+            except MultiplexerError as error:
+                # focus-pane-id exits non-zero when the most recent client
+                # already shows the pane; the readback below decides.
+                refused = error.detail
+            else:
+                refused = None
             for attempt in range(READBACK_ATTEMPTS):
                 after = self._clients(session, socket_dir)
                 if any(
@@ -461,11 +624,19 @@ class ZellijMultiplexer:
                     for client, shown in before.items()
                 ):
                     return _selected("tab or pane selection")
+                if refused is not None and expected in after.values():
+                    return _selected(ALREADY_FOCUSED)
                 if attempt + 1 < READBACK_ATTEMPTS:
                     time.sleep(READBACK_INTERVAL)
+            if refused is not None:
+                return _failed(refused)
         except MultiplexerError as error:
             return _failed(error.detail)
         return _failed(f"no zellij client moved to pane {pane}")
+
+    def show(self, ref: PaneRef) -> FocusResult:
+        """Selecting a pane expands it in its stack, so showing is focusing."""
+        return self.focus(ref)
 
     def paste(self, ref: PaneRef, text: str) -> None:
         """Paste text into the pane; bracketed when the program asked for it."""

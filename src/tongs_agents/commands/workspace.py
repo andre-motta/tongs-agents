@@ -19,8 +19,12 @@ first pane and spawns the profiles through ``workspace_spawn``; then it execs
 Zellij, so agent panes never inherit a Zellij pane identity.
 
 ``[workspace]`` in the config file supplies the session name, the
-multiplexer, whether to add the tongs tab, and the profiles a new session
-starts with when no ``--profile`` is given; the flags override it. A bare
+multiplexer, whether to add the tongs tab, the profiles a new session
+starts with when no ``--profile`` is given, and the layout of a new session
+(#124): ``single`` (default) shows one agent at a time beside the sidebar, a
+Zellij stack headed by a ``tongs-agents-home`` pane or a tmux session whose
+other agents are parked in their own windows; ``split`` lays agents out side
+by side. The flags override it. A bare
 ``tongs-agents`` runs this verb with ``empty`` set: no profiles, not even the
 default ones, so the workspace opens with only the sidebar (and the tongs
 tab). ``tongs-agents run`` reuses the same paths with a launch folder and
@@ -40,6 +44,7 @@ from importlib import resources
 
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import (
+    DEFAULT_LAYOUT,
     DEFAULT_SESSION,
     MULTIPLEXERS,
     SESSION_RE,
@@ -49,6 +54,8 @@ from tongs_agents.app_config import (
 from tongs_agents.commands.doctor import Check
 from tongs_agents.launches import LaunchError
 from tongs_agents.multiplexers import (
+    LAYOUT_SINGLE,
+    LAYOUTS,
     SESSION_EXITED,
     SESSION_RUNNING,
     MultiplexerError,
@@ -74,10 +81,13 @@ EXIT_ERROR = 1
 EXIT_USAGE = 2
 TEMPLATE = "agents.kdl.tmpl"
 _PLACEHOLDER = re.compile(r"@(PYTHON|SESSION|TOKEN|TONGS)@")
-_TONGS_BLOCK = re.compile(
-    r"^[ \t]*// @TONGS_TAB_BEGIN@\n(.*?)^[ \t]*// @TONGS_TAB_END@\n",
-    re.MULTILINE | re.DOTALL,
-)
+_BLOCKS = {
+    name: re.compile(
+        rf"^[ \t]*// @{name}_BEGIN@\n(.*?)^[ \t]*// @{name}_END@\n",
+        re.MULTILINE | re.DOTALL,
+    )
+    for name in ("TONGS_TAB", "SINGLE", "SPLIT")
+}
 CREATOR_ENV_DROP = ("TMUX", "TMUX_PANE", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID")
 TEMP_DIRS = ("/tmp", "/var/tmp")
 LABELS = {"zellij": ("Zellij", "ZELLIJ"), "tmux": ("tmux", "TMUX")}
@@ -161,8 +171,13 @@ def load_template() -> str:
 
 
 def render_layout(python: str, session: str, token: str, tongs: str | None,
-                  template: str | None = None) -> str:
-    """The workspace layout with only the four validated values substituted."""
+                  template: str | None = None, layout: str = DEFAULT_LAYOUT) -> str:
+    """The workspace layout with only the four validated values substituted.
+
+    ``layout`` keeps the template's single or split block and drops the other.
+    """
+    if layout not in LAYOUTS:
+        raise LayoutError(f"refused workspace layout {layout!r:.40}")
     if not valid_session(session):
         raise LayoutError(f"refused session name {session!r:.80}")
     if not workspace_spawn.is_token(token):
@@ -174,8 +189,13 @@ def render_layout(python: str, session: str, token: str, tongs: str | None,
         "TONGS": _absolute(tongs, "tongs") if tongs is not None else "",
     }
     text = load_template() if template is None else template
-    keep = tongs is not None
-    text = _TONGS_BLOCK.sub(lambda match: match.group(1) if keep else "", text)
+    kept = {
+        "TONGS_TAB": tongs is not None,
+        "SINGLE": layout == LAYOUT_SINGLE,
+        "SPLIT": layout != LAYOUT_SINGLE,
+    }
+    for name, block in _BLOCKS.items():
+        text = block.sub(lambda match, keep=kept[name]: match.group(1) if keep else "", text)
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], text)
 
 
@@ -271,7 +291,8 @@ def _notice(message: str) -> None:
 
 
 def _prepare_new_session(mux, zellij: str, session: str, profiles,
-                         tongs_tab: bool, launch_options=None) -> tuple[list[str], str, list]:
+                         tongs_tab: bool, launch_options=None,
+                         layout: str = DEFAULT_LAYOUT) -> tuple[list[str], str, list]:
     """Write the pending launches, the spawn request and the layout.
 
     Everything written here is removed again when a later step fails.
@@ -286,8 +307,8 @@ def _prepare_new_session(mux, zellij: str, session: str, profiles,
             session, [record.launch_id for record in records]
         )
         tongs = shutil.which("tongs") if tongs_tab else None
-        layout = render_layout(sys.executable, session, token, tongs)
-        path = workspace_spawn.write_layout(token, layout)
+        text = render_layout(sys.executable, session, token, tongs, layout=layout)
+        path = workspace_spawn.write_layout(token, text)
     except BaseException:
         _discard_new_session(token, records)
         raise
@@ -314,8 +335,11 @@ def _profile_names(profiles) -> str:
 
 
 def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool,
-             launch_options=None) -> int:
-    """``profiles`` go into a running session, ``new_profiles`` into a new one."""
+             launch_options=None, layout: str = DEFAULT_LAYOUT) -> int:
+    """``profiles`` go into a running session, ``new_profiles`` into a new one.
+
+    ``layout`` shapes a new session only; a running one keeps its own.
+    """
     launch_options = launch_options or {}
     token = None
     records = []
@@ -360,7 +384,7 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool,
                 )
                 mux.delete_session(session)
             argv, token, records = _prepare_new_session(
-                mux, zellij, session, new_profiles, tongs_tab, launch_options
+                mux, zellij, session, new_profiles, tongs_tab, launch_options, layout
             )
     except (MultiplexerError, LaunchError, SpawnRequestError, LayoutError,
             UnsafePathError, OSError) as error:
@@ -382,12 +406,14 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool,
 
 
 def _outside_tmux(mux, args, session: str, profiles, new_profiles,
-                  launch_options=None) -> int:
+                  launch_options=None, layout: str = DEFAULT_LAYOUT) -> int:
     """Spawn into a running tmux session, or create it detached; then attach.
 
-    A new session's first pane is the sidebar; the profiles are split into
-    its window. Nothing is cleaned up on failure: the session stays and can
-    be attached to.
+    A new session's first pane is the sidebar and the session records
+    ``layout``: ``single`` parks each profile in its own window and shows the
+    last one beside the sidebar, ``split`` splits them into the sidebar's
+    window. Nothing is cleaned up on failure: the session stays and can be
+    attached to.
     """
     launch_options = launch_options or {}
     if args.resurrect:
@@ -413,6 +439,7 @@ def _outside_tmux(mux, args, session: str, profiles, new_profiles,
                 workspace_spawn.check_launch(profile, **launch_options)
             mux.spawn(session, workspace_spawn.sidebar_argv(),
                       name=SIDEBAR_PANE_NAME, focus=False)
+            mux.set_layout(session, layout)
             workspace_spawn.spawn_profiles(mux, session, new_profiles, **launch_options)
             if args.print_command:
                 _notice(
@@ -432,7 +459,8 @@ def _outside_tmux(mux, args, session: str, profiles, new_profiles,
     return EXIT_ERROR
 
 
-def _run_tmux_workspace(args, session, profiles, default_profiles) -> int:
+def _run_tmux_workspace(args, session, profiles, default_profiles,
+                        layout: str = DEFAULT_LAYOUT) -> int:
     if os.environ.get("ZELLIJ") is not None:
         return _error(
             "refusing --multiplexer tmux inside Zellij; run it outside Zellij",
@@ -444,7 +472,8 @@ def _run_tmux_workspace(args, session, profiles, default_profiles) -> int:
         return _error(f"{detail}; run 'tongs-agents doctor' for details")
     if os.environ.get("TMUX"):
         return _inside(mux, args, profiles)
-    return _outside_tmux(mux, args, session, profiles, profiles or default_profiles)
+    return _outside_tmux(mux, args, session, profiles, profiles or default_profiles,
+                         layout=layout)
 
 
 def run(args) -> int:
@@ -474,14 +503,16 @@ def run(args) -> int:
         return 0
     multiplexer = getattr(args, "multiplexer", None) or settings.multiplexer
     if multiplexer == "tmux":
-        return _run_tmux_workspace(args, session, profiles, default_profiles)
+        return _run_tmux_workspace(args, session, profiles, default_profiles,
+                                   settings.layout)
     mux = get_multiplexer("zellij")
     available, detail = mux.available()
     if not available:
         return _error(f"{detail}; run 'tongs-agents doctor' for details")
     if os.environ.get("ZELLIJ") is not None:
         return _inside(mux, args, profiles)
-    return _outside(mux, args, session, profiles, profiles or default_profiles, tongs_tab)
+    return _outside(mux, args, session, profiles, profiles or default_profiles, tongs_tab,
+                    layout=settings.layout)
 
 
 def _zellij_checks(binary) -> list[Check]:
