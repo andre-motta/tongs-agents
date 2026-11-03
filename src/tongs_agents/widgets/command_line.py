@@ -554,7 +554,7 @@ class CommandLine(Widget):
         padding: 0 0 0 1;
         color: $accent;
     }
-    CommandLine Input {
+    CommandLine Input, CommandLine Input:focus {
         border: none;
         height: 1;
         padding: 0;

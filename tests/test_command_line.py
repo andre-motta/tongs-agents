@@ -407,3 +407,26 @@ def test_the_run_verb_shares_the_cli_parser_and_checks():
     assert verb.add_arguments is run_command.add_arguments
     assert verb.passthrough
     assert verb.completions == (command_line.COMPLETE_PROFILE, command_line.COMPLETE_FOLDER)
+
+
+@pytest.mark.asyncio
+async def test_typed_keys_reach_the_prompt_not_the_sidebar_bindings(projects):
+    mux = FakeMux()
+    app = _app(mux)
+    fired = []
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        for name in ("refresh", "quit", "add_agent", "resume_selected",
+                     "next_attention", "toggle_chat", "review_access"):
+            setattr(app, f"action_{name}", lambda name=name: fired.append(name))
+        await pilot.press("colon")
+        await pilot.pause()
+        await pilot.press(*"run alpha qumna", "plus", "slash", "s", "d", "o", "c", "1", "0")
+        await pilot.pause()
+        field = app.command_line.input
+        assert field.value == "run alpha qumna+/sdoc10"
+        assert app.focused is field
+        # Input:focus sets a tall border; on a one-row prompt it hid the text.
+        assert field.styles.border_top[0] in ("", "none")
+        assert field.content_region.height == 1
+    assert fired == []
