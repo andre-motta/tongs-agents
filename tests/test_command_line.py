@@ -93,7 +93,7 @@ def test_run_parses_like_the_cli_with_passthrough_arguments():
 
 
 @pytest.mark.parametrize(("line", "expected"), [
-    ("ls -la", "unknown command 'ls'; commands: run (shell commands are not run)"),
+    ("ls -la", "unknown command 'ls'; commands: resume, run (shell commands are not run)"),
     ("!make", "unknown command '!make'"),
     ("run alpha --resume", "run: unrecognized arguments: --resume"),
     ("run", "the following arguments are required: PROFILE"),
@@ -144,8 +144,8 @@ def _names():
 
 
 def test_completion_extends_verbs_profiles_and_folders(projects):
-    assert complete_line("", VERBS, _names) == ("run ", [])
-    assert complete_line("r", VERBS, _names) == ("run ", [])
+    assert complete_line("", VERBS, _names) == ("r", ["resume", "run"])
+    assert complete_line("ru", VERBS, _names) == ("run ", [])
     assert complete_line("run b", VERBS, _names) == ("run beta ", [])
     assert complete_line("run al", VERBS, _names) == ("run alp", ["alpha", "alpine"])
     assert complete_line("run alp", VERBS, _names) == ("run alp", ["alpha", "alpine"])

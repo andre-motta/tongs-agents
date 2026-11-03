@@ -13,9 +13,16 @@ folder with path completion and optional extra arguments, started through
 the same spawn path as ``tongs-agents run``.
 
 ``:`` (or the palette's Command line) opens the command line
-(``widgets.command_line``): ``run PROFILE [DIR] [-- ARGS]`` with the CLI's
-syntax and checks, in this session, with history and Tab completion; the
-result or the error shows under the prompt and Escape closes it.
+(``widgets.command_line``): ``run PROFILE [DIR] [-- ARGS]`` and
+``resume [ID] [--profile NAME]`` with the CLI's syntax and checks, in this
+session, with history and Tab completion; the result or the error shows
+under the prompt and Escape closes it.
+
+``R`` (or the palette's Resume in workspace) resumes the selected row's
+harness session in this session; the palette's Resume session… lists the
+recent sessions of the store to pick one (``commands.resume``). A session
+that still has a live process is resumed with a warning; that process is
+never stopped.
 
 Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
 the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
@@ -56,13 +63,26 @@ from tongs_agents.multiplexers import (
     PaneRef,
     get_multiplexer,
 )
-from tongs_agents.palette import COMMAND_LINE, AppShell, PaletteCommand
+from tongs_agents.commands import resume as resume_command
+from tongs_agents.palette import (
+    COMMAND_LINE,
+    RESUME_SELECTED,
+    RESUME_SESSION,
+    AppShell,
+    PaletteCommand,
+)
 from tongs_agents.profiles import load_profiles
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
 from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel
-from tongs_agents.widgets.command_line import CommandContext, CommandLine
+from tongs_agents.widgets.command_line import (
+    CommandContext,
+    CommandError,
+    CommandLine,
+    resume_into,
+)
+from tongs_agents.widgets.resume_picker import ResumePickerScreen
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 NAME = "sidebar"
@@ -127,6 +147,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         Binding("r", "refresh", "Refresh", show=True, priority=True),
         Binding("plus", "add_agent", "Add agent", show=True),
         Binding("colon", "command_line", "Command", show=True, key_display=":"),
+        Binding("R", "resume_selected", "Resume", show=False),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
         Binding("a", "review_access", "Access", show=True),
@@ -166,6 +187,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         )
         self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
+        self.command_context = CommandContext(multiplexer, session, load_profiles)
         self.init_approvals(self.feed, approval_interval)
 
     def compose(self) -> ComposeResult:
@@ -181,10 +203,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
                          refusal=self.chat_refusal, id=self.chat_panel_id)
         chat.display = False
         yield chat
-        yield CommandLine(
-            CommandContext(self.multiplexer, self.session, load_profiles),
-            id=self.command_line_id,
-        )
+        yield CommandLine(self.command_context, id=self.command_line_id)
         yield AppFooter()
 
     def on_mount(self) -> None:
@@ -206,7 +225,19 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
             f"Type a workspace verb (run PROFILE [DIR] [-- ARGS]) for session {self.session}",
             self.action_command_line,
         )
-        return [*commands[:at], entry, *self.approval_commands(), *commands[at:]]
+        resume = [
+            PaletteCommand(
+                RESUME_SELECTED,
+                f"Resume the selected agent's session in a new pane of session {self.session}",
+                self.action_resume_selected,
+            ),
+            PaletteCommand(
+                RESUME_SESSION,
+                f"Pick a recent session to resume in session {self.session}",
+                self.action_resume_session,
+            ),
+        ]
+        return [*commands[:at], entry, *resume, *self.approval_commands(), *commands[at:]]
 
     @property
     def command_line(self) -> CommandLine:
@@ -221,6 +252,63 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
 
     def on_command_line_closed(self, event: CommandLine.Closed) -> None:
         self.agents_panel.table.focus()
+
+    # -- Resume --
+
+    def action_resume_selected(self) -> None:
+        session = self.agents_panel.selected_session()
+        if session is None:
+            self.notify("No agent selected", timeout=2)
+            return
+        if (session.source == LAUNCH_SOURCE
+                or session.agent not in resume_command.RESUME_ARGS
+                or not resume_command.SESSION_ID_RE.match(session.session_id)):
+            self.notify(
+                f"{session.repo or session.agent}: no harness session to resume yet",
+                title="Resume", severity="warning", timeout=6,
+            )
+            return
+        self.resume_in_workspace(session.session_id)
+
+    @work(thread=True, exclusive=True, group="resume-list")
+    def action_resume_session(self) -> None:
+        sessions = resume_command.recent_sessions()
+        self.call_from_thread(self._pick_resume, sessions)
+
+    def _pick_resume(self, sessions: list[resume_command.Resumable]) -> None:
+        if not sessions:
+            self.notify("No sessions to resume in the session store", title="Resume",
+                        timeout=5)
+            return
+        self.push_screen(
+            ResumePickerScreen(sessions[:resume_command.LIST_LIMIT], self.session),
+            self._resume_chosen,
+        )
+
+    def _resume_chosen(self, session_id: str | None) -> None:
+        if session_id is not None:
+            self.resume_in_workspace(session_id)
+
+    @work(thread=True, group="resume")
+    def resume_in_workspace(self, session_id: str) -> None:
+        try:
+            plan, warning = resume_into(self.command_context, session_id)
+        except CommandError as error:
+            self.call_from_thread(self._resume_failed, str(error))
+            return
+        except Exception as error:  # noqa: BLE001 - report, never crash the sidebar
+            self.call_from_thread(self._resume_failed, f"{type(error).__name__}: {error}")
+            return
+        self.call_from_thread(self._resumed, plan.summary, warning)
+
+    def _resume_failed(self, message: str) -> None:
+        self.notify(message, title="Resume failed", severity="error", timeout=15)
+
+    def _resumed(self, summary: str, warning: str | None) -> None:
+        self.notify(f"Resumed {summary}", title="Resume", timeout=5)
+        if warning is not None:
+            self.notify(warning, title="Still running", severity="warning", timeout=20)
+        self.agents_panel.poll()
 
     @work(thread=True, exclusive=True, group="spawn-request")
     def consume_spawn_request(self) -> None:

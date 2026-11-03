@@ -9,6 +9,9 @@ offers through ``AppShell.palette_commands()``:
   one);
 - ``Command line`` (the sidebar only) opens its ``:`` prompt for workspace
   verbs (``widgets.command_line``);
+- ``Resume in workspace`` and ``Resume session…`` (the sidebar only) start
+  the selected row's harness session, or one picked from the recent sessions
+  in the store, in the sidebar's session (``commands.resume``);
 - ``New agent: <profile>`` spawns the profile with its own defaults the same
   way;
 - ``Open tongs tab`` starts ``tongs`` in a new pane of that session with
@@ -53,6 +56,8 @@ from tongs_agents.widgets.shell import apply_theme
 
 ADD_AGENT = "Add agent…"
 COMMAND_LINE = "Command line"
+RESUME_SELECTED = "Resume in workspace"
+RESUME_SESSION = "Resume session…"
 NEW_AGENT_PREFIX = "New agent: "
 OPEN_TONGS = "Open tongs tab"
 NEXT_ATTENTION = "Next needing attention"
