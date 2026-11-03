@@ -32,6 +32,8 @@ from tongs_agents.models import (
     validated_launch,
 )
 
+_CREATING_EVENTS = frozenset({"session-start", "prompt-submit", "fleet-event"})
+
 
 def _find_agent_pid(agent):
     process = resolve_process_identity(agent)
@@ -111,6 +113,24 @@ def _capture_launch():
         if valid_launch_value(key, value):
             launch[key] = value
     return launch or None
+
+
+def _record_launch(event, existing):
+    """The launch identity the record written for ``event`` carries.
+
+    The environment is read only when the event starts the session or creates
+    its record. Every other event, including ``session-end``, keeps the stored
+    identity: a shared Codex daemon runs a later session's late SessionEnd with
+    the first launch's environment, so that environment never names the
+    session being ended.
+    """
+    if event == "session-start" or (
+        existing is None and event in _CREATING_EVENTS
+    ):
+        return _capture_launch()
+    if existing is None:
+        return None
+    return validated_launch(existing.get("launch"))
 
 
 def _event_update(event, payload):
@@ -199,19 +219,14 @@ def _store_event(
         process_identity = "identified"
     if process is not None and existing is None and not supplied_instance:
         existing = _unresolved_record(agent, session_id)
-    if (
-        event not in {"session-start", "prompt-submit", "fleet-event"}
-        and existing is None
-    ):
+    if event not in _CREATING_EVENTS and existing is None:
         return False
 
     now = int(time.time()) if timestamp is None else timestamp
     terminal_info = None
     if existing is None or event == "session-start":
         terminal_info = _capture_terminal_info()
-        launch = _capture_launch()
-    else:
-        launch = validated_launch(existing.get("launch"))
+    launch = _record_launch(event, existing)
     terminal = (
         terminal_info["terminal"]
         if terminal_info is not None

@@ -174,7 +174,11 @@ environment to hook subprocesses (the Pi bridge spawns the hook with
 `process.env`), and so does Codex when run with `--no-daemon`. Under the
 shared Codex app-server daemon a later launch's hooks see the first launch's
 environment, so a Codex record may lack `launch` or carry another launch's
-values; see [harness-facts.md](work/harness-facts.md). Since the variables
+values; see [harness-facts.md](work/harness-facts.md). That daemon also
+runs a later session's `SessionEnd` about a minute late with the first
+launch's environment, so `session-end` never reads the launch variables: it
+creates no record, ends only the record keyed by its own native session id
+and process instance, and keeps that record's stored `launch`. Since the variables
 also leak to processes the agent starts, never treat `launch_id` alone as
 proof of a pane.
 
