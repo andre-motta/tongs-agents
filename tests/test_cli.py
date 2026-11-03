@@ -178,7 +178,7 @@ def test_legacy_hook_script_is_owned_by_resolved_path(tmp_path, monkeypatch):
 
 
 def test_windows_hook_command_is_owned(monkeypatch):
-    monkeypatch.setattr(cli.os, "name", "nt")
+    monkeypatch.setattr(cli, "_is_windows", lambda: True)
     command = '"C:\\Program Files\\Py\\Scripts\\tongs-agents-hook.EXE" stop --agent claude'
     assert cli._is_owned_hook({"command": command})
     assert not cli._is_owned_hook({"command": "notify.exe tongs-agents-hook"})

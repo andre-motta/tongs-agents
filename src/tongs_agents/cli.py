@@ -56,15 +56,19 @@ class ConfigError(Exception):
     """A harness config file that the installer must not modify."""
 
 
+def _is_windows():
+    return os.name == "nt"
+
+
 def _command_string(arguments):
-    if os.name == "nt":
+    if _is_windows():
         return subprocess.list2cmdline(arguments)
     return shlex.join(arguments)
 
 
 def _command_argv(command):
     try:
-        if os.name == "nt":
+        if _is_windows():
             return [part.strip('"') for part in shlex.split(command, posix=False)]
         return shlex.split(command)
     except ValueError:
