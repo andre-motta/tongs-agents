@@ -8,6 +8,7 @@ shapes. The Claude, Codex and Pi CLIs are fake scripts.
 import json
 import os
 import shlex
+import shutil
 import sys
 
 import pytest
@@ -62,15 +63,22 @@ FAKE_CLAUDE = """\
 import json, os, sys
 with open(os.environ["FAKE_CLAUDE_LOG"], "a") as stream:
     stream.write(json.dumps([sys.argv[1:], "CLAUDE_CONFIG_DIR" in os.environ]) + "\\n")
-path = os.path.join(os.environ["HOME"], ".claude.json")
+config_dir = os.environ.get("CLAUDE_CONFIG_DIR") or os.environ["HOME"]
+path = os.path.join(config_dir, ".claude.json")
 with open(path) as stream:
     data = json.load(stream)
 servers = data.setdefault("mcpServers", {{}})
 args = sys.argv[1:]
 if args[:4] == ["mcp", "add", "--scope", "user"] and args[5] == "--":
-    if args[4] in servers:
+    if args[4] in servers or "FAKE_CLAUDE_FAIL_ADD" in os.environ:
+        print("add failed", file=sys.stderr)
         sys.exit(1)
     servers[args[4]] = {{"type": "stdio", "command": args[6], "args": args[7:], "env": {{}}}}
+elif args[:4] == ["mcp", "add-json", "--scope", "user"] and len(args) == 6:
+    if args[4] in servers or "FAKE_CLAUDE_FAIL_ADD_JSON" in os.environ:
+        print("add-json failed", file=sys.stderr)
+        sys.exit(1)
+    servers[args[4]] = json.loads(args[5])
 elif args[:4] == ["mcp", "remove", "--scope", "user"]:
     if args[4] not in servers:
         sys.exit(1)
@@ -480,3 +488,48 @@ def test_malformed_json_exits_without_writing(upgrade, monkeypatch, capsys, comm
     assert upgrade.codex_calls() == []
     assert upgrade.claude_calls() == []
     assert not paths.state_dir().exists()
+
+
+OUTDATED_CLAUDE_MCP = {
+    "type": "stdio", "command": "/opt/old-venv/bin/python3", "args": CURRENT_MCP_ARGS,
+    "env": {"EXAMPLE": "1"},
+}
+
+
+def _write_claude_servers(config, servers):
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text(json.dumps({"numStartups": 7, "mcpServers": servers}))
+
+
+def test_failed_claude_mcp_update_restores_previous_entry(upgrade, monkeypatch, capsys):
+    _write_claude_servers(upgrade.claude_config, {"tongs-agents": OUTDATED_CLAUDE_MCP})
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL_ADD", "1")
+
+    cli._install_claude_mcp(shutil.which("claude"))
+
+    assert _claude_servers(upgrade) == {"tongs-agents": OUTDATED_CLAUDE_MCP}
+    assert [argv[:3] for argv, _ in upgrade.claude_calls()] == [
+        ["mcp", "remove", "--scope"], ["mcp", "add", "--scope"], ["mcp", "add-json", "--scope"],
+    ]
+    assert not any(with_config_dir for _, with_config_dir in upgrade.claude_calls())
+    output = capsys.readouterr().out
+    assert "Could not add Claude Code MCP server: add failed" in output
+    assert ("Restored the previous Claude Code MCP server tongs-agents; "
+            "run 'tongs-agents install --agent claude' to retry the update") in output
+
+
+def test_failed_claude_mcp_restore_in_config_dir_names_rerun(upgrade, tmp_path, monkeypatch,
+                                                             capsys):
+    config_dir = tmp_path / "claude-alt"
+    _write_claude_servers(config_dir / ".claude.json", {"tongs-agents": OUTDATED_CLAUDE_MCP})
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL_ADD", "1")
+    monkeypatch.setenv("FAKE_CLAUDE_FAIL_ADD_JSON", "1")
+
+    cli._install_claude_mcp(shutil.which("claude"), config_dir)
+
+    assert json.loads((config_dir / ".claude.json").read_text())["mcpServers"] == {}
+    assert all(with_config_dir for _, with_config_dir in upgrade.claude_calls())
+    rerun = cli._command_string(["tongs-agents", "install", "--claude-config-dir", str(config_dir)])
+    output = capsys.readouterr().out
+    assert "Could not restore Claude Code MCP server: add-json failed" in output
+    assert f"could not be restored; run '{rerun}' to register it again" in output

@@ -564,6 +564,23 @@ def _claude_servers_for(directory):
     return _claude_user_servers(directory / ".claude.json")
 
 
+def _restore_claude_mcp(claude_cmd, previous, directory=None):
+    """Re-add a replaced entry after a failed add, and say what to rerun."""
+    rerun = Target("claude", directory).install_command()
+    restored = _run_claude_mcp(
+        claude_cmd,
+        ["add-json", "--scope", "user", MCP_NAME, json.dumps(previous)],
+        "restore",
+        directory,
+    )
+    if restored:
+        print(f"  Restored the previous Claude Code MCP server {MCP_NAME}; "
+              f"run '{rerun}' to retry the update")
+    else:
+        print(f"  The previous Claude Code MCP server {MCP_NAME} was removed and could not "
+              f"be restored; run '{rerun}' to register it again")
+
+
 def _install_claude_mcp(claude_cmd, directory=None):
     servers = _claude_servers_for(directory)
     if _is_owned_mcp(servers.get(legacy.LEGACY_MCP_NAME)):
@@ -582,12 +599,14 @@ def _install_claude_mcp(claude_cmd, directory=None):
             claude_cmd, ["remove", "--scope", "user", MCP_NAME], "replace", directory
         ):
             return
-    _run_claude_mcp(
+    added = _run_claude_mcp(
         claude_cmd,
         ["add", "--scope", "user", MCP_NAME, "--", sys.executable, "-m", MCP_MODULE],
         "add",
         directory,
     )
+    if not added and existing is not None:
+        _restore_claude_mcp(claude_cmd, existing, directory)
 
 
 def _uninstall_claude_mcp(claude_cmd, directory=None):

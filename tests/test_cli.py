@@ -107,6 +107,58 @@ def test_install_claude_mcp_does_not_add_when_replace_fails(tmp_path, monkeypatc
     assert "Could not replace Claude Code MCP server" in capsys.readouterr().out
 
 
+def _claude_script(calls, results):
+    def fake_run(command, **kwargs):
+        calls.append((command[1:], kwargs.get("env")))
+        return SimpleNamespace(returncode=results.pop(0), stderr="failed")
+    return fake_run
+
+
+OUTDATED_CLAUDE = {**CURRENT, "command": "/old/python3", "env": {"EXAMPLE": "1"}}
+
+
+@pytest.mark.parametrize("restore_code, message", [
+    (0, "Restored the previous Claude Code MCP server tongs-agents; "
+        "run 'tongs-agents install --agent claude' to retry the update"),
+    (1, "was removed and could not be restored; "
+        "run 'tongs-agents install --agent claude' to register it again"),
+])
+def test_install_claude_mcp_restores_entry_when_add_fails(tmp_path, monkeypatch, capsys,
+                                                          restore_code, message):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(
+        tmp_path, {"tongs-agents": OUTDATED_CLAUDE}))
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _claude_script(calls, [0, 1, restore_code]))
+    cli._install_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == [
+        ["mcp", "remove", "--scope", "user", "tongs-agents"],
+        ADD_CLAUDE,
+        ["mcp", "add-json", "--scope", "user", "tongs-agents", json.dumps(OUTDATED_CLAUDE)],
+    ]
+    assert message in capsys.readouterr().out
+
+
+def test_install_claude_mcp_restore_uses_the_config_dir(tmp_path, monkeypatch, capsys):
+    config_dir = tmp_path / "claude-alt"
+    config_dir.mkdir()
+    _claude_servers(config_dir, {"tongs-agents": OUTDATED_CLAUDE})
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _claude_script(calls, [0, 1, 1]))
+    cli._install_claude_mcp("/usr/bin/claude", config_dir)
+    assert [env["CLAUDE_CONFIG_DIR"] for _, env in calls] == [str(config_dir)] * 3
+    rerun = cli._command_string(["tongs-agents", "install", "--claude-config-dir", str(config_dir)])
+    assert f"run '{rerun}' to register it again" in capsys.readouterr().out
+
+
+def test_install_claude_mcp_fresh_add_failure_does_not_restore(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "CLAUDE_USER_CONFIG", _claude_servers(tmp_path, {}))
+    calls = []
+    monkeypatch.setattr(cli.subprocess, "run", _claude_script(calls, [1]))
+    cli._install_claude_mcp("/usr/bin/claude")
+    assert [argv for argv, _ in calls] == [ADD_CLAUDE]
+    assert "restore" not in capsys.readouterr().out
+
+
 def test_unreadable_claude_config_still_registers(tmp_path, monkeypatch):
     config = tmp_path / ".claude.json"
     config.write_text("{not json")

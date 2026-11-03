@@ -1,6 +1,7 @@
 """Text-level contract for the release pipeline, so drift fails without a YAML parser."""
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,21 @@ def test_tests_workflow_runs_plugin_tests_with_tongs_extra():
     assert re.search(r"^\s+run: pytest", body, re.M)
 
 
+def test_tests_workflow_runs_lowest_textual_on_oldest_python():
+    dependencies = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    textual = [d for d in dependencies["project"]["dependencies"] if d.startswith("textual")]
+    floor = re.fullmatch(r"textual>=(\d+),<\d+", textual[0])
+    assert floor, textual
+    lowest = [
+        body for body in _jobs("test.yml").values()
+        if f'"textual=={floor.group(1)}.0.0"' in body
+    ]
+    assert len(lowest) == 1
+    assert 'python-version: "3.11"' in lowest[0]
+    assert 'pip install -e ".[dev]"' in lowest[0]
+    assert re.search(r"^\s+run: pytest", lowest[0], re.M)
+
+
 def test_publish_triggers_only_on_version_tags():
     triggers = _sections(_sections(_read("publish.yml"), 0)["on"], 2)
     assert set(triggers) == {"push"}
@@ -150,6 +166,29 @@ def test_publish_actions_are_pinned_by_full_sha():
         "actions/upload-artifact",
         "actions/download-artifact",
     } <= names
+
+
+@pytest.mark.parametrize("name", sorted(GATES.values()))
+def test_gate_actions_are_pinned_by_full_sha(name):
+    remote = [u for u in _uses(_read(name)) if not u.startswith("./")]
+    assert remote
+    for ref in remote:
+        assert FULL_SHA_PIN.match(ref), ref
+
+
+@pytest.mark.parametrize("name", [*sorted(GATES.values()), "publish.yml"])
+def test_checkouts_do_not_persist_credentials(name):
+    lines = _read(name).splitlines()
+    starts = [i for i, line in enumerate(lines) if re.match(r"^\s+- uses: actions/checkout@", line)]
+    assert starts
+    for start in starts:
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        step = [lines[start]]
+        for line in lines[start + 1:]:
+            if line.strip() and len(line) - len(line.lstrip()) <= indent:
+                break
+            step.append(line)
+        assert "persist-credentials: false" in {line.strip() for line in step}, lines[start]
 
 
 def test_publish_checkouts_keep_full_history():
