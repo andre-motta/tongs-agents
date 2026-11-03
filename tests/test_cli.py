@@ -712,7 +712,7 @@ def test_install_summary_names_what_was_installed(settings_file, monkeypatch, ca
     cli.cmd_install(SimpleNamespace(agent="all"))
     output = capsys.readouterr().out
     assert "Tongs Agents installed for Claude Code, Codex and Pi!" in output
-    for line in ("tongs-agents doctor", "tongs-agents workspace", "tongs-agents monitor"):
+    for line in ("tongs-agents doctor", "tongs-agents run PROFILE DIR", "tongs-agents monitor"):
         assert line in output
     assert "In Codex, review the installed hooks with /hooks." in output
 

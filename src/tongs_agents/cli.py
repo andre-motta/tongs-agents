@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 
-from tongs_agents import commands, legacy, owned, paths, session_store, toml_tables
+from tongs_agents import __version__, commands, legacy, owned, paths, session_store, toml_tables
 from tongs_agents.pi_install import (
     PI_CONFIG_NAME,
     install_pi,
@@ -897,7 +897,8 @@ def _print_install_summary(installed, with_mcp, mcp_failed=frozenset()):
     print()
     print("Next:")
     print("  tongs-agents doctor           # Check the installation")
-    print("  tongs-agents workspace        # Start the agent workspace")
+    print("  tongs-agents                  # Open the workspace (only the sidebar)")
+    print("  tongs-agents run PROFILE DIR  # Add an agent pane in a folder")
     print("  tongs-agents monitor          # TUI dashboard")
     if with_mcp:
         print(f"  (MCP tools available in {_names(with_mcp)} sessions)")
@@ -1119,6 +1120,36 @@ BUILTIN_COMMANDS = {
 }
 
 
+PASSTHROUGH_COMMANDS = ("run",)
+BARE_COMMAND = "workspace"
+
+
+def parse_args(parser, argv):
+    """Parse ``argv``; for ``run``, everything after the first ``--`` is ``args.extra``.
+
+    Those arguments belong to the harness, so argparse never sees them: an
+    option such as ``--resume`` or a value that looks like DIR stays in
+    ``extra`` exactly as typed.
+    """
+    argv = list(argv)
+    head, tail = argv, []
+    verb = next((item for item in argv if not item.startswith("-")), None)
+    if verb in PASSTHROUGH_COMMANDS and "--" in argv and argv.index(verb) < argv.index("--"):
+        index = argv.index("--")
+        head, tail = argv[:index], argv[index + 1:]
+    args = parser.parse_args(head)
+    if args.command in PASSTHROUGH_COMMANDS:
+        args.extra = tail
+    return args
+
+
+def bare_args(parser):
+    """The arguments a bare ``tongs-agents`` runs with: an empty workspace."""
+    args = parser.parse_args([BARE_COMMAND])
+    args.empty = True
+    return args
+
+
 def build_parser(modules=None):
     """The argument parser with built-in verbs and every command module.
 
@@ -1127,8 +1158,13 @@ def build_parser(modules=None):
     """
     parser = commands.CommandParser(
         prog="tongs-agents",
-        description="Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions",
+        description=(
+            "Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi "
+            "sessions. Without a command it opens the workspace with only the sidebar "
+            "(or attaches to it); add agents with 'tongs-agents run PROFILE [DIR]'."
+        ),
     )
+    parser.add_argument("--version", action="version", version=f"tongs-agents {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     p_install = sub.add_parser(
@@ -1204,12 +1240,11 @@ def build_parser(modules=None):
     return parser, handlers
 
 
-def main():
+def main(argv=None):
     parser, handlers = build_parser()
-    args = parser.parse_args()
+    args = parse_args(parser, sys.argv[1:] if argv is None else argv)
     if args.command is None:
-        parser.print_help()
-        sys.exit(1)
+        args = bare_args(parser)
 
     try:
         status = handlers[args.command](args)

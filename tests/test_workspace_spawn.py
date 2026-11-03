@@ -11,7 +11,7 @@ from tongs_agents import launches, workspace_spawn
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers import MultiplexerError, PaneInfo, PaneRef
 from tongs_agents.multiplexers.zellij import ACTIVATION_SKIPPED
-from tongs_agents.profiles import Profile
+from tongs_agents.profiles import Profile, SandboxSpec
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME
 
 POSIX_MODES = pytest.mark.skipif(os.name == "nt", reason="POSIX modes")
@@ -329,3 +329,49 @@ def test_prune_skips_a_shared_requests_dir(runtime_dir):
         assert path.exists()
     finally:
         path.parent.chmod(0o700)
+
+
+def _boxed(name="boxed", cwd=None):
+    return Profile(name=name, harness="claude", argv=("claude",), cwd=cwd,
+                   sandbox=SandboxSpec())
+
+
+def test_spawn_profiles_records_the_folder_and_args(tmp_path):
+    mux = FakeMux()
+    [record] = workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha")],
+                                              folder=str(tmp_path), args=["--resume"])
+    stored = launches.get(record.launch_id)
+    assert (stored.folder, stored.args) == (str(tmp_path), ("--resume",))
+    assert mux.spawned[0]["argv"][-3:] == ["alpha", "--launch-id", record.launch_id]
+
+
+def test_check_launch_refuses_missing_folders_before_any_pane(tmp_path):
+    mux = FakeMux()
+    with pytest.raises(workspace_spawn.LaunchOptionError, match="does not exist"):
+        workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha"), profile("beta")],
+                                       folder=str(tmp_path / "gone"))
+    with pytest.raises(workspace_spawn.LaunchOptionError, match="does not exist"):
+        workspace_spawn.create_launches("zellij", "agents", [profile("alpha")],
+                                        folder=str(tmp_path / "gone"))
+    assert mux.spawned == [] and launches.list_records() == []
+
+
+def test_check_launch_keeps_the_sandbox_upload_rules(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    project = home / "src" / "app"
+    project.mkdir(parents=True)
+    (home / ".ssh").mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for unsafe, reason in ((home, "your home folder"), (home / ".ssh", "hidden folder"),
+                           (tmp_path, "holds your home folder")):
+        with pytest.raises(workspace_spawn.LaunchOptionError, match=reason):
+            workspace_spawn.check_launch(_boxed(), str(unsafe))
+        assert workspace_spawn.check_launch(profile("plain"), str(unsafe))[0] == str(unsafe)
+    assert workspace_spawn.check_launch(_boxed(), str(project), ["-c"]) == (
+        str(project), ("-c",),
+    )
+
+
+def test_check_launch_refuses_a_string_for_args():
+    with pytest.raises(workspace_spawn.LaunchOptionError, match="list of strings"):
+        workspace_spawn.check_launch(profile("alpha"), None, "--resume")

@@ -3,8 +3,12 @@
 ``AgentCommands`` is a Textual command provider that lists what the host app
 offers through ``AppShell.palette_commands()``:
 
-- ``New agent: <profile>`` spawns the profile through ``workspace_spawn`` into
-  the Zellij session the app runs in (only offered inside one);
+- ``Add agent…`` opens the Add agent dialog (``widgets.add_agent``): a
+  profile, a folder and optional extra arguments, spawned through
+  ``workspace_spawn`` into the session the app runs in (only offered inside
+  one);
+- ``New agent: <profile>`` spawns the profile with its own defaults the same
+  way;
 - ``Open tongs tab`` starts ``tongs`` in a new pane of that session with
   ``Multiplexer.spawn`` (only offered when ``tongs`` is on PATH and
   ``[workspace].tongs_tab`` is not false);
@@ -24,6 +28,8 @@ threads, reporting the outcome as notifications.
 
 from __future__ import annotations
 
+import os
+import shlex
 import shutil
 import sys
 import threading
@@ -40,8 +46,10 @@ from tongs_agents.app_config import AppConfig
 from tongs_agents.launches import LaunchError
 from tongs_agents.multiplexers import Multiplexer, MultiplexerError
 from tongs_agents.profiles import Profile, ProfileError, load_profiles
+from tongs_agents.widgets.add_agent import AddAgentRequest, AddAgentScreen
 from tongs_agents.widgets.shell import apply_theme
 
+ADD_AGENT = "Add agent…"
 NEW_AGENT_PREFIX = "New agent: "
 OPEN_TONGS = "Open tongs tab"
 NEXT_ATTENTION = "Next needing attention"
@@ -160,6 +168,12 @@ class AppShell:
         commands = []
         if self._in_session():
             session = self.palette_session
+            commands.append(PaletteCommand(
+                ADD_AGENT,
+                f"Start a profile in a folder you pick, with optional arguments, "
+                f"in session {session}",
+                self.action_add_agent,
+            ))
             for name in self.ordered_profile_names():
                 commands.append(PaletteCommand(
                     f"{NEW_AGENT_PREFIX}{name}",
@@ -217,21 +231,56 @@ class AppShell:
             return
         self._do_focus(session)
 
+    def action_add_agent(self) -> None:
+        """Open the Add agent dialog for the session the app runs in."""
+        if not self._in_session():
+            self.notify("Run inside a workspace session to add agents", title="Add agent",
+                        timeout=4)
+            return
+        profiles = self.palette_profiles()
+        if self.palette_profile_error is not None:
+            self.notify(self.palette_profile_error, title="Profiles", severity="error",
+                        timeout=10)
+            return
+        if not profiles:
+            self.notify("No profiles yet; add a [profiles.<name>] table to the config file",
+                        title="Add agent", severity="warning", timeout=8)
+            return
+        try:
+            start = os.getcwd()
+        except OSError:
+            start = os.path.expanduser("~")
+        self.push_screen(
+            AddAgentScreen(profiles, self.ordered_profile_names(), start),
+            self._add_agent_chosen,
+        )
+
+    def _add_agent_chosen(self, request: AddAgentRequest | None) -> None:
+        if request is not None:
+            self.palette_new_agent(request.profile, request.folder, request.args)
+
     @work(thread=True, group="palette-spawn")
-    def palette_new_agent(self, name: str) -> None:
+    def palette_new_agent(self, name: str, folder: str | None = None,
+                          args: tuple[str, ...] = ()) -> None:
         profile = self.palette_profiles().get(name)
         if profile is None or not self._in_session():
             self.call_from_thread(self._palette_failed, name, "profile is no longer configured")
             return
         try:
             workspace_spawn.spawn_profiles(
-                self.palette_multiplexer, self.palette_session, [profile]
+                self.palette_multiplexer, self.palette_session, [profile],
+                folder=folder, args=args,
             )
         except (MultiplexerError, LaunchError, OSError) as error:
             detail = getattr(error, "detail", None) or str(error)
             self.call_from_thread(self._palette_failed, name, detail)
             return
-        self.call_from_thread(self._palette_spawned, f"Started {name}")
+        message = f"Started {name}"
+        if folder is not None:
+            message += f" in {folder}"
+        if args:
+            message += f" with {shlex.join(args)}"
+        self.call_from_thread(self._palette_spawned, message)
 
     @work(thread=True, group="palette-spawn")
     def palette_open_tongs(self) -> None:

@@ -1,10 +1,78 @@
 ---
 title: "Agent workspace"
-description: "Open a Zellij or tmux session with the tongs-agents sidebar and one pane per agent profile."
+description: "Open a Zellij or tmux session with the tongs-agents sidebar, then add agent panes in any folder with tongs-agents run or the sidebar."
 ---
 
+The workspace is a Zellij (or tmux) session with the tongs-agents sidebar.
+It starts empty; you add agents to it as you need them:
+
+```console
+tongs-agents                                        # open or attach: only the sidebar
+tongs-agents run claude-main ~/src/app              # add an agent pane in a folder
+tongs-agents run codex-review -- resume --last      # in the current directory, extra args
+```
+
+A bare `tongs-agents` runs `tongs-agents workspace` with no profiles, not even
+`[workspace].default_profiles`: a new session gets the sidebar (and the
+`tongs` tab when `tongs` is on `PATH` and `[workspace].tongs_tab` is not
+false), and a running one is attached to. In the sidebar, `+` opens the
+[Add agent](#add-agent-in-the-sidebar) dialog. `tongs-agents monitor` is still
+the fleet-wide view, and `tongs-agents --version` prints the version.
+
+## Adding agents: run
+
+```console
+tongs-agents run [--session NAME] [--multiplexer {zellij,tmux}] PROFILE [DIR] [-- ARGS ...]
+```
+
+A [profile](profiles.md) is a template: its command, harness, config dir,
+model arguments and environment. `run` picks the rest for this one launch:
+
+| Part | Meaning |
+| --- | --- |
+| `PROFILE` | The profile to start. Unknown names are refused (exit 2). |
+| `DIR` | The folder the agent starts in. Relative paths and `~` are resolved by `run`. Without it, the current directory; the profile's `cwd` is used only when the current directory cannot be read. The folder must exist and be a directory, and for a [sandboxed profile](sandbox.md) that uploads its workspace it must not be `/`, your home folder, a folder holding it or a hidden folder in it. |
+| `-- ARGS` | Everything after `--` is appended to the profile's command for this launch only, as separate arguments and never through a shell: `-- --resume`, `-- resume --last`, `-- "fix the failing test"`. At most 64 arguments of up to 4096 characters each (16384 in all), with no NUL. An option before `--`, such as `run claude-main --resume`, is a usage error. |
+| `--session`, `--multiplexer` | The session and multiplexer to use when `run` is started outside any workspace; the defaults come from `[workspace]`. Inside a session they must name that session and multiplexer or be left out. |
+
+The folder and arguments are written into the launch record (0600, in the
+state directory); the launcher checks the folder again before it starts the
+agent, changes to it and execs the profile command, then `--no-daemon` for
+Codex (unless present), the profile's `model_args` and `effort_args`, then
+the extra arguments. Launch identity, status, pane control and chat grants
+work as for any other pane. MCP `agents_spawn` never takes a folder or
+arguments: only `run` and the sidebar dialog, both run by you, set them.
+
+| Where you run it | Result |
+| --- | --- |
+| Inside Zellij or tmux | Adds the pane to the current session (and a sidebar if no live one is listed). It never nests or execs. |
+| Outside, the workspace session is running | Adds the pane to it and returns, so a terminal already attached shows it; the notice names the command that attaches. |
+| Outside, no session | Starts the workspace with the sidebar and this one pane, exactly like `tongs-agents workspace` would for a new session (an EXITED Zellij session of that name is deleted first), then attaches. |
+
+On Windows `run` prints that the workspace is unsupported and exits 2.
+
+## Add agent in the sidebar
+
+`+` in the sidebar, or `Add agent…` in its command palette (Ctrl+P), opens a
+dialog with:
+
+- a profile picker, `[workspace].default_profiles` first;
+- a folder field that starts at the profile's `cwd`, else the folder the
+  sidebar started in, and completes directory names as you type (Right arrow
+  accepts the suggestion);
+- an optional arguments field, split like a shell line (`--resume 'two
+  words'` is two arguments) but never run through a shell.
+
+Below the fields the dialog shows the command it will run and the folder.
+Start checks both with the same rules as `run`; a missing folder, a refused
+sandbox folder or unbalanced quotes keep the dialog open with the reason.
+Escape cancels. The palette's `New agent: <profile>` entries still start a
+profile with its own defaults in one step.
+
+## The workspace verb
+
 `tongs-agents workspace` opens a Zellij session with the tongs-agents sidebar
-and one pane per requested [profile](profiles.md). It needs Zellij 0.44.2 or
+and one pane per requested [profile](profiles.md), started in its `cwd`. It needs Zellij 0.44.2 or
 newer (0.45.1 is the newest validated release) on Linux or macOS; on Windows
 it prints that the workspace is unsupported and exits 2. With
 `--multiplexer tmux` it uses tmux 3.2 or newer instead; see
@@ -113,8 +181,8 @@ created 0600 without following or replacing anything:
 layout as `python -m tongs_agents.commands.sidebar`) runs the compact agents
 panel inside a Zellij pane named `tongs-agents-sidebar` (or a tmux pane, see
 [tmux](#tmux)). It refuses to start outside a Zellij or tmux session. It shares the monitor's header, footer, theme and command
-palette (`Ctrl+P`, with `New agent: <profile>` and `Open tongs tab` for its
-own session) and reads its refresh interval, notify level and theme from
+palette (`Ctrl+P`, with `Add agent…`, `New agent: <profile>` and
+`Open tongs tab` for its own session; `+` opens Add agent too) and reads its refresh interval, notify level and theme from
 `[ui]`; see [app settings](app.md).
 
 The sidebar is per-session; `tongs-agents monitor` remains the fleet-wide
@@ -214,6 +282,10 @@ hides the harness are reported by the core doctor checks and by
 
 ## Limits
 
+- A sandboxed profile uploads its folder only when its sandbox is created.
+  When the sandbox already exists it is reused as it is, so `run` with
+  another folder does not upload that folder; delete the sandbox, or give
+  the profile its own `sandbox.name`, to start from a different folder.
 - Zellij places new panes itself, so the sidebar shares the tab with the
   agent panes it spawns and its width depends on how many there are.
 - A launch that fails before the launcher claims it shows in the sidebar only

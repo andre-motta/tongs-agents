@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- A bare `tongs-agents` now opens the workspace with only the sidebar (and
+  the tongs tab), or attaches to it, instead of printing help. It never
+  starts agents, not even `[workspace].default_profiles`; the monitor stays
+  available as `tongs-agents monitor` (#123).
+- Profiles are templates: `cwd` is only the default folder of a profile.
+
+### Added
+
+- `tongs-agents run PROFILE [DIR] [-- ARGS...]` adds one agent pane to the
+  workspace: in the current Zellij or tmux session, in the running workspace
+  session from another terminal, or in a new workspace when none runs. DIR
+  defaults to the current directory, and everything after `--` (such as
+  `--resume`) is appended to the profile's command for that launch only. The
+  folder and arguments are kept in the launch record and checked again by
+  the launcher; sandboxed profiles keep their upload rules. MCP
+  `agents_spawn` still takes neither (#123).
+- The sidebar's Add agent dialog (`+`, or `Add agent…` in the command
+  palette): a profile picker, a folder field with directory completion and
+  an arguments field, with the resulting command shown before it starts.
+- `tongs-agents --version`.
+
 ## 0.10.0 (experimental)
 
 The first release of tongs-agents on PyPI, published as an experimental

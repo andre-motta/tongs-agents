@@ -4,13 +4,14 @@ Launch records, the config file and the audit log are real files in the
 private test dirs; no multiplexer, agent or model is started.
 """
 
+import inspect
 import json
 import os
 import stat
 
 import pytest
 
-from tongs_agents import control, discovery, launches, mcp_control, paths
+from tongs_agents import control, discovery, launches, mcp_control, mcp_server, paths
 from tongs_agents.multiplexers.base import (
     SESSION_EXITED,
     SESSION_RUNNING,
@@ -461,3 +462,14 @@ def test_an_agent_spawned_through_mcp_cannot_spawn_more(world):
     detail = refused(lambda: world.tools(env, pid=6000).spawn("worker"))
     assert "mcp_nested_spawn" in detail
     assert world.mux.spawned == []
+
+
+def test_mcp_spawn_takes_no_folder_or_arguments(world):
+    assert list(inspect.signature(mcp_server.agents_spawn).parameters) == ["profile"]
+    assert list(inspect.signature(mcp_control.McpControl.spawn).parameters) == [
+        "self", "profile_name",
+    ]
+    result = world.tools().spawn("worker")
+    record = launches.get(result["launch_id"])
+    assert (record.folder, record.args) == (None, ())
+    assert "folder" not in record.to_json() and "args" not in record.to_json()

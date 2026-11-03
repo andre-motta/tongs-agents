@@ -1,11 +1,26 @@
 ---
 title: "Agent profiles"
-description: "Define the agents tongs-agents starts, each with its own command, config dir, cwd, env and model arguments."
+description: "Define the agent templates tongs-agents starts: a command, config dir, env, model arguments and a default folder."
 ---
 
-A profile names a command that tongs-agents can start in a multiplexer pane.
-Any argv command can be a profile: a harness on `PATH`, a harness with its own
-config directory, or a wrapper script that execs the harness.
+A profile is a template for an agent that tongs-agents can start in a
+multiplexer pane: which command and harness, which account or config
+directory, which model and environment. Any argv command can be a profile: a
+harness on `PATH`, a harness with its own config directory, or a wrapper
+script that execs the harness.
+
+The folder and any extra arguments are chosen when you start it, so one
+profile serves every project:
+
+```console
+tongs-agents run claude-alt ~/src/app            # Claude Code with ~/.claude-alt, in ~/src/app
+tongs-agents run claude-alt ~/src/api -- --resume
+```
+
+`cwd` is only the default folder, used by `tongs-agents workspace --profile`,
+the palette's `New agent: <profile>` and as the starting value of the
+sidebar's Add agent dialog. See
+[adding agents](workspace.md#adding-agents-run).
 
 Profiles live in the `[profiles]` section of the tongs-agents config file:
 
@@ -67,8 +82,8 @@ command = ["example-agent", "--interactive"]
 | `harness` | `claude`, `codex`, `pi` or `other` | Inferred from the basename of `command[0]` when it is exactly `claude`, `codex` or `pi`; otherwise `other`. Set it for wrappers. |
 | `env` | table of strings | Extra environment. Names match `^[A-Z_][A-Z0-9_]*$`, values are under 4 KiB with no NUL, and `TONGS_AGENTS_*` names are reserved. Values are passed verbatim, with no `~` or `$VAR` expansion. |
 | `config_dir` | path | Sets `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `PI_CODING_AGENT_DIR` for the harness. Needs harness `claude`, `codex` or `pi` and must not also appear in `env`. |
-| `cwd` | path | Working directory for the agent. `tongs-agents doctor` warns when it is not a directory, because the pane cannot start there. |
-| `model_args`, `effort_args` | list of strings | Appended after `command`, in that order. |
+| `cwd` | path | The default folder for the agent, when no folder is chosen at launch (`tongs-agents run` uses the current directory unless you name one). `tongs-agents doctor` warns when it is not a directory, because the pane cannot start there. A sandboxed profile that uploads its workspace still needs it. |
+| `model_args`, `effort_args` | list of strings | Appended after `command`, in that order, before any arguments given at launch. |
 | `mcp_control` | boolean, default `false` | Lets the profile use, and be driven by, the MCP agent control tools; see [MCP agent control](mcp-control.md). |
 
 Profile names match `^[a-z0-9][a-z0-9_-]{0,31}$`. Paths must be absolute or
@@ -107,8 +122,10 @@ where the spawner has already written a pending launch record. The launcher:
    harness config-dir variable, then `TONGS_AGENTS_LAUNCH_ID` and
    `TONGS_AGENTS_PROFILE`; `TMUX` and `TMUX_PANE` are removed when `ZELLIJ`
    is set;
-4. changes to `cwd` and calls `os.execvpe`, so the agent keeps the launcher's
-   pid.
+4. changes to the launch folder (the one `run` or the Add agent dialog
+   recorded, else `cwd`; checked again first) and calls `os.execvpe` with
+   `command`, `--no-daemon` for Codex, `model_args`, `effort_args` and then
+   the launch's own arguments, so the agent keeps the launcher's pid.
 
 It exits 64 for a bad profile or launch id and 127 when the command cannot be
 executed, printing one line and, on a terminal, waiting for Enter so the pane

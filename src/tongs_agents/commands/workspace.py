@@ -20,7 +20,11 @@ Zellij, so agent panes never inherit a Zellij pane identity.
 
 ``[workspace]`` in the config file supplies the session name, the
 multiplexer, whether to add the tongs tab, and the profiles a new session
-starts with when no ``--profile`` is given; the flags override it.
+starts with when no ``--profile`` is given; the flags override it. A bare
+``tongs-agents`` runs this verb with ``empty`` set: no profiles, not even the
+default ones, so the workspace opens with only the sidebar (and the tongs
+tab). ``tongs-agents run`` reuses the same paths with a launch folder and
+extra arguments (``launch_options``).
 """
 
 from __future__ import annotations
@@ -234,7 +238,7 @@ def creator_env(base=None) -> dict[str, str]:
     return env
 
 
-def _inside(mux, args, profiles) -> int:
+def _inside(mux, args, profiles, launch_options=None) -> int:
     label, variable = LABELS[mux.name]
     here = mux.in_session()
     if here is None:
@@ -255,7 +259,7 @@ def _inside(mux, args, profiles) -> int:
     if args.resurrect:
         _notice(f"ignoring --resurrect: already inside running session {here.session!r}")
     try:
-        workspace_spawn.spawn_profiles(mux, here.session, profiles)
+        workspace_spawn.spawn_profiles(mux, here.session, profiles, **(launch_options or {}))
         workspace_spawn.ensure_sidebar(mux, here.session)
     except (MultiplexerError, LaunchError, OSError) as error:
         return _error(getattr(error, "detail", None) or str(error))
@@ -267,7 +271,7 @@ def _notice(message: str) -> None:
 
 
 def _prepare_new_session(mux, zellij: str, session: str, profiles,
-                         tongs_tab: bool) -> tuple[list[str], str, list]:
+                         tongs_tab: bool, launch_options=None) -> tuple[list[str], str, list]:
     """Write the pending launches, the spawn request and the layout.
 
     Everything written here is removed again when a later step fails.
@@ -275,7 +279,9 @@ def _prepare_new_session(mux, zellij: str, session: str, profiles,
     records = []
     token = None
     try:
-        records = workspace_spawn.create_launches(mux.name, session, profiles)
+        records = workspace_spawn.create_launches(
+            mux.name, session, profiles, **(launch_options or {})
+        )
         token = workspace_spawn.write_spawn_request(
             session, [record.launch_id for record in records]
         )
@@ -307,8 +313,10 @@ def _profile_names(profiles) -> str:
     return ", ".join(profile.name for profile in profiles)
 
 
-def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -> int:
+def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool,
+             launch_options=None) -> int:
     """``profiles`` go into a running session, ``new_profiles`` into a new one."""
+    launch_options = launch_options or {}
     token = None
     records = []
     try:
@@ -339,7 +347,7 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -
                         "(run without --print-command to start them)"
                     )
             else:
-                workspace_spawn.spawn_profiles(mux, session, profiles)
+                workspace_spawn.spawn_profiles(mux, session, profiles, **launch_options)
                 workspace_spawn.ensure_sidebar(mux, session)
             argv = [zellij, "attach", session]
         else:
@@ -352,7 +360,7 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -
                 )
                 mux.delete_session(session)
             argv, token, records = _prepare_new_session(
-                mux, zellij, session, new_profiles, tongs_tab
+                mux, zellij, session, new_profiles, tongs_tab, launch_options
             )
     except (MultiplexerError, LaunchError, SpawnRequestError, LayoutError,
             UnsafePathError, OSError) as error:
@@ -373,13 +381,15 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -
     return EXIT_ERROR
 
 
-def _outside_tmux(mux, args, session: str, profiles, new_profiles) -> int:
+def _outside_tmux(mux, args, session: str, profiles, new_profiles,
+                  launch_options=None) -> int:
     """Spawn into a running tmux session, or create it detached; then attach.
 
     A new session's first pane is the sidebar; the profiles are split into
     its window. Nothing is cleaned up on failure: the session stays and can
     be attached to.
     """
+    launch_options = launch_options or {}
     if args.resurrect:
         _notice("ignoring --resurrect: tmux keeps no EXITED sessions")
     if args.tongs:
@@ -394,14 +404,16 @@ def _outside_tmux(mux, args, session: str, profiles, new_profiles) -> int:
                         "(run without --print-command to start them)"
                     )
             else:
-                workspace_spawn.spawn_profiles(mux, session, profiles)
+                workspace_spawn.spawn_profiles(mux, session, profiles, **launch_options)
                 workspace_spawn.ensure_sidebar(mux, session)
         else:
             if isinstance(new_profiles, _Refused):
                 return _error(str(new_profiles), new_profiles.code)
+            for profile in new_profiles:
+                workspace_spawn.check_launch(profile, **launch_options)
             mux.spawn(session, workspace_spawn.sidebar_argv(),
                       name=SIDEBAR_PANE_NAME, focus=False)
-            workspace_spawn.spawn_profiles(mux, session, new_profiles)
+            workspace_spawn.spawn_profiles(mux, session, new_profiles, **launch_options)
             if args.print_command:
                 _notice(
                     f"started the detached tmux session {session!r}; run the command "
@@ -451,7 +463,8 @@ def run(args) -> int:
             f"refused session name {session!r:.80}; use letters, digits, '.', '_' or '-'",
             EXIT_USAGE,
         )
-    defaults = () if args.profiles else settings.default_profiles
+    empty = getattr(args, "empty", False)
+    defaults = () if args.profiles or empty else settings.default_profiles
     try:
         profiles, default_profiles = _profiles(args.profiles, defaults)
     except _Refused as refused:

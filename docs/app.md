@@ -24,7 +24,7 @@ Every key is optional; the values shown are the defaults except where noted.
 ```toml
 [workspace]
 session = "agents"              # Zellij session opened by `tongs-agents workspace`
-default_profiles = []           # profiles a new session starts, e.g. ["claude-alt"]
+default_profiles = []           # profiles `workspace` starts in a new session, e.g. ["claude-alt"]
 tongs_tab = true                # add a tongs tab when tongs is on PATH
 multiplexer = "zellij"          # "zellij" or "tmux"; see below
 
@@ -50,10 +50,10 @@ default.
 
 | Setting | Flag |
 | --- | --- |
-| `[workspace].session` | `workspace --session NAME` |
+| `[workspace].session` | `workspace --session NAME`, `run --session NAME` |
 | `[workspace].default_profiles` | any `workspace --profile NAME` replaces the whole list |
 | `[workspace].tongs_tab` | `workspace --tongs` / `--no-tongs` |
-| `[workspace].multiplexer` | `workspace --multiplexer zellij` / `tmux` |
+| `[workspace].multiplexer` | `workspace --multiplexer zellij` / `tmux`, `run --multiplexer` |
 | `[ui].refresh_interval` | `monitor --refresh SECONDS` |
 | `[ui].notify_level` | `monitor --notify LEVEL` |
 | `[ui].theme` | `monitor --theme NAME` |
@@ -70,6 +70,11 @@ default.
   never duplicates agents. An unknown default profile is a config error only
   when a new session would start it; attaching to a running session still
   works. See [workspace](workspace.md).
+- A bare `tongs-agents` is `tongs-agents workspace` without any profiles: it
+  uses `session`, `tongs_tab` and `multiplexer` but never `default_profiles`,
+  so the workspace opens with only the sidebar.
+- `tongs-agents run` uses `session` and `multiplexer` when it runs outside a
+  workspace, and `tongs_tab` when it has to start a new Zellij session.
 - `tongs-agents monitor` uses all of `[ui]`. An invalid file prints the error
   and the monitor starts with the default settings.
 - The sidebar uses `refresh_interval`, `notify_level` and `theme`, and
@@ -90,7 +95,8 @@ to Textual's own entries (theme switcher, keys, quit) it lists:
 
 | Command | When offered | What it does |
 | --- | --- | --- |
-| `New agent: <profile>` | inside a Zellij or tmux session, one per profile | Starts the profile in a new pane of the current session through the same launcher path as `tongs-agents workspace`. `[workspace].default_profiles` come first, then the rest alphabetically. |
+| `Add agent…` | inside a Zellij or tmux session | Opens the Add agent dialog (also `+` in the sidebar): a profile, a folder with path completion and optional extra arguments, started like `tongs-agents run`. See [Add agent in the sidebar](workspace.md#add-agent-in-the-sidebar). |
+| `New agent: <profile>` | inside a Zellij or tmux session, one per profile | Starts the profile with its own defaults in a new pane of the current session through the same launcher path as `tongs-agents workspace`. `[workspace].default_profiles` come first, then the rest alphabetically. |
 | `Open tongs tab` | inside a Zellij or tmux session, `tongs` on `PATH`, `tongs_tab` not false | Starts `tongs` in a new focused pane named `tongs` in the current session. |
 | `Next needing attention` | always | Same as the `n` key. |
 | `Focus session` | always | Focuses the selected agent, same as `Enter`. |

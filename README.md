@@ -49,8 +49,10 @@ tongs-agents` when tongs came from pipx). The hooks and MCP registrations that
 run `tongs-agents install` again if you move or recreate it. Contributors
 install from a clone instead; see [Contributing](#contributing).
 
-Describe the agents you want as profiles in
-`~/.config/tongs-agents/config.toml`:
+Describe the agents you use as profiles in
+`~/.config/tongs-agents/config.toml`. A profile is a template (harness,
+config dir, model, environment); you pick the folder and any extra arguments
+each time you start one:
 
 ```toml
 [profiles.claude-main]
@@ -67,18 +69,30 @@ command = ["codex"]
 command = ["pi", "--provider", "ollama", "--model", "qwen3-coder"]
 ```
 
-Then install the hooks, check the setup and open the workspace:
+Then install the hooks, check the setup, start the workspace and add agents:
 
 ```bash
 tongs-agents install             # hooks for Claude Code, Codex and every profile's config dir
 tongs-agents doctor              # what is missing, and how to fix it
 tongs-agents doctor --fix zellij # only if doctor says Zellij is missing (Linux x86_64)
-tongs-agents workspace --profile claude-main --profile codex-review
+tongs-agents                     # open the workspace: only the sidebar, no agents yet
 ```
 
+The workspace starts empty. Add agents from a shell in it, or from any other
+terminal:
+
+```bash
+tongs-agents run claude-main ~/src/app                  # Claude Code in ~/src/app
+tongs-agents run codex-review ~/src/api -- resume --last # extra arguments after --
+tongs-agents run claude-alt -- --resume                 # in the current directory
+```
+
+In the sidebar, `+` (or Ctrl+P, then `Add agent…`) does the same with a
+profile picker, a folder field with path completion and an arguments field.
 The sidebar lists each pane with its status. Enter jumps to the selected
 agent, `n` jumps to the next one that needs you. In Codex, review and trust
-the new hooks once with `/hooks`.
+the new hooks once with `/hooks`. `tongs-agents --version` prints the
+installed version.
 
 The [first workspace tutorial](https://github.com/andre-motta/tongs-agents/blob/main/docs/tutorials/first-workspace.md)
 walks through all of this step by step.
@@ -87,8 +101,8 @@ walks through all of this step by step.
 
 | Feature | Commands | Docs |
 | --- | --- | --- |
-| A workspace with one pane per agent and a status sidebar | `workspace`, `sidebar` | [workspace](https://github.com/andre-motta/tongs-agents/blob/main/docs/workspace.md) |
-| Profiles: any argv command, its own config dir, cwd, env and model arguments | `profiles` | [profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/profiles.md) |
+| A workspace with one pane per agent and a status sidebar; add agents in any folder, with extra arguments such as `--resume` | `tongs-agents`, `run`, `workspace`, `sidebar` | [workspace](https://github.com/andre-motta/tongs-agents/blob/main/docs/workspace.md) |
+| Profiles: templates for any argv command, with its own config dir, env, model arguments and a default folder | `profiles` | [profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/profiles.md) |
 | Status for scripts, builds and agents without hooks | `notify` | [profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/profiles.md#reporting-state-from-any-command) |
 | A fleet-wide session list, outside any workspace too | `monitor`, `status`, `focus` | [app settings](https://github.com/andre-motta/tongs-agents/blob/main/docs/app.md) |
 | One dotfiles directory for instructions, skills and MCP servers, emitted into every harness | `config status`, `config apply`, `config capture` | [config layer](https://github.com/andre-motta/tongs-agents/blob/main/docs/config.md) |
