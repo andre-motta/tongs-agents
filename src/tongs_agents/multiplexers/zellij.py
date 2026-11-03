@@ -363,7 +363,7 @@ class ZellijMultiplexer:
             options += ["--name", _pane_name(name)]
         if cwd is not None:
             options += ["--cwd", _cwd(cwd)]
-        result = self._action(session, None, "new-pane", *options, "--", *command)
+        result = self._new_pane(session, *options, "--", *command)
         match = _NEW_PANE.fullmatch((result.stdout or "").strip())
         if match is None:
             raise MultiplexerError(
@@ -371,6 +371,21 @@ class ZellijMultiplexer:
                 "(unknown or EXITED session?)"
             )
         return PaneRef(NAME, session, match.group(1), self._effective_socket_dir())
+
+    def _new_pane(self, session: str, *args: str):
+        """Run new-pane, asking again only after a transient no-active-session.
+
+        zellij 0.44.2's socket probe can briefly deny a running session (#72,
+        #107). That refusal comes before the request reaches the server, so no
+        pane was created and asking again cannot open a second one. Any other
+        failure, including a timeout, is not retried.
+        """
+        for _ in range(READBACK_ATTEMPTS - 1):
+            try:
+                return self._action(session, None, "new-pane", *args)
+            except _NoActiveSession:
+                time.sleep(READBACK_INTERVAL)
+        return self._action(session, None, "new-pane", *args)
 
     def list_panes(self, session: str) -> list[PaneInfo]:
         session = _session(session)

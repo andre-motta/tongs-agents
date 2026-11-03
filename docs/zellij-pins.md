@@ -10,6 +10,10 @@ Hosted CI downloads from it, and so does the managed download described
 below. The table's fields are documented in the
 [validation README](../validation/README.md#zellij-pin-table).
 
+Zellij 0.44.2 can briefly answer `There is no active session!` for a running
+session, so read-only queries and `new-pane` ask again up to five times, 0.1 s
+apart; a refused `new-pane` created no pane, and other failures are not retried.
+
 ## Managed download
 
 ```console
