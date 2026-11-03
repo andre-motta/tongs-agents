@@ -21,11 +21,17 @@ from tongs_agents.discovery import (
 )
 from tongs_agents.harnesses import ProcessIdentity, get_harness
 from tongs_agents.models import (
+    LAUNCH_ID_ENV,
+    PROFILE_ID_ENV,
     SCHEMA_VERSION,
     SessionStatus,
     UNRESOLVED_INSTANCE_ID,
     canonical_session_id,
+    valid_launch_value,
+    validated_launch,
 )
+
+MAX_LAUNCH_ENV_BYTES = 1024
 
 
 def _find_agent_pid(agent):
@@ -93,6 +99,33 @@ def _unresolved_record(harness_id, session_id):
 def _capture_terminal_info():
     from tongs_agents.terminal_apis import capture_terminal_info
     return capture_terminal_info()
+
+
+def _launch_env_value(name):
+    try:
+        value = os.environ.get(name)
+        if (
+            not isinstance(value, str)
+            or "\0" in value
+            or len(value.encode("utf-8")) > MAX_LAUNCH_ENV_BYTES
+        ):
+            return ""
+    except Exception:
+        return ""
+    return value
+
+
+def _capture_launch():
+    """Read the launcher's identity from this process env; never raises."""
+    launch = {}
+    for key, name in (
+        ("launch_id", LAUNCH_ID_ENV),
+        ("profile_id", PROFILE_ID_ENV),
+    ):
+        value = _launch_env_value(name)
+        if valid_launch_value(key, value):
+            launch[key] = value
+    return launch or None
 
 
 def _event_update(event, payload):
@@ -191,6 +224,9 @@ def _store_event(
     terminal_info = None
     if existing is None or event == "session-start":
         terminal_info = _capture_terminal_info()
+        launch = _capture_launch()
+    else:
+        launch = validated_launch(existing.get("launch"))
     terminal = (
         terminal_info["terminal"]
         if terminal_info is not None
@@ -243,6 +279,8 @@ def _store_event(
     }
     if sequence is not None:
         record["sequence"] = sequence
+    if launch is not None:
+        record["launch"] = launch
     written = write_session_record(record)
     if (
         written

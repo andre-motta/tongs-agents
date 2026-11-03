@@ -67,13 +67,7 @@ def test_search_matches_agent_repo_detail_and_status_case_insensitive():
 
 
 def test_search_matches_profile_id_when_present():
-    @dataclasses.dataclass(frozen=True)
-    class Profiled(FleetSession):
-        profile_id: str = ""
-
-    profiled = Profiled(**{
-        f.name: getattr(SESSIONS[0], f.name) for f in dataclasses.fields(FleetSession)
-    }, profile_id="reviewer")
+    profiled = dataclasses.replace(SESSIONS[0], profile_id="reviewer")
     assert search_sessions([profiled, SESSIONS[1]], "review") == [profiled]
 
 
