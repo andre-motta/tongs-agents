@@ -67,7 +67,7 @@ command = ["example-agent", "--interactive"]
 | `harness` | `claude`, `codex`, `pi` or `other` | Inferred from the basename of `command[0]` when it is exactly `claude`, `codex` or `pi`; otherwise `other`. Set it for wrappers. |
 | `env` | table of strings | Extra environment. Names match `^[A-Z_][A-Z0-9_]*$`, values are under 4 KiB with no NUL, and `TONGS_AGENTS_*` names are reserved. Values are passed verbatim, with no `~` or `$VAR` expansion. |
 | `config_dir` | path | Sets `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `PI_CODING_AGENT_DIR` for the harness. Needs harness `claude`, `codex` or `pi` and must not also appear in `env`. |
-| `cwd` | path | Working directory for the agent. |
+| `cwd` | path | Working directory for the agent. `tongs-agents doctor` warns when it is not a directory, because the pane cannot start there. |
 | `model_args`, `effort_args` | list of strings | Appended after `command`, in that order. |
 | `mcp_control` | boolean, default `false` | Lets the profile use, and be driven by, the MCP agent control tools; see [MCP agent control](mcp-control.md). |
 
@@ -121,8 +121,9 @@ in a 0700 directory), written atomically and read without following symlinks.
 ## Reporting state from any command
 
 Claude Code, Codex and Pi report their own state through hooks. A profile with
-harness `other` (a build, a test watcher, a script, an agent without hooks) can
-report its state with
+harness `other` (a build, a test watcher, a script, an agent without hooks) has
+no hooks, so `tongs-agents doctor` lists it as `INFO`; it can report its state
+with
 
 ```
 tongs-agents notify <state> [message ...]

@@ -120,7 +120,7 @@ def test_profiles_command_never_writes(config, monkeypatch, capsys):
 def test_doctor_checks(config):
     checks = {(check.level, check.message.split()[1]) for check in profiles_command.doctor_checks()}
     assert ("warn", "claude-sandbox") in checks
-    assert ("warn", "example-agent") in checks
+    assert ("info", "example-agent") in checks
     assert ("warn", "rel") in checks
     assert not any(name in ("claude-alt", "codex-review") for _, name in checks)
 
@@ -130,6 +130,26 @@ def test_doctor_checks_report_invalid_config(config):
     [check] = profiles_command.doctor_checks()
     assert check.level == "error"
     assert "invalid TOML" in check.message
+
+
+def test_other_harness_points_at_notify(config):
+    config.write_text('[profiles.tests]\ncommand = ["sh", "-c", "make test"]\n')
+    [check] = profiles_command.doctor_checks()
+    assert check.level == "info"
+    assert "tongs-agents notify" in check.message
+    assert check.remediation.startswith("Report status with tongs-agents notify")
+
+
+def test_missing_cwd_is_a_warning(config, tmp_path):
+    missing = tmp_path / "not-there"
+    config.write_text(
+        f'[profiles.a]\ncommand = ["claude"]\ncwd = "{missing}"\n'
+        f'[profiles.b]\ncommand = ["claude"]\ncwd = "{tmp_path}"\n'
+    )
+    [check] = profiles_command.doctor_checks()
+    assert check.level == "warn"
+    assert check.message.startswith(f"Profile a has cwd {missing}")
+    assert check.remediation == "Create that directory or change cwd in [profiles.a]"
 
 
 def test_codex_wrapper_without_home_is_info(config):

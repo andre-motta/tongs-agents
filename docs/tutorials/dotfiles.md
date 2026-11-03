@@ -141,19 +141,23 @@ while `[dotfiles] path` is set.
 Removing an item from `agentic.toml` makes its entry `orphaned`: the next
 `apply` removes a file tongs-agents owns when it is unchanged.
 
-## 6. Capture an existing setup
+## 6. Capture harness-side edits
 
-Already have instructions and MCP servers in one harness? Capture them into
-a new directory, review it, and copy what you want:
+Changed something that `apply` wrote, directly in a harness? Capture that
+harness's managed entries into a new directory, review it, and copy what you
+want back into your dotfiles directory:
 
 ```bash
 tongs-agents config capture claude --into ~/src/captured-claude
 ```
 
 `capture` reads the managed entries of that harness from every target and
-writes only inside `--into`. It never reads environment values: a server's
-environment entry becomes its variable name, and a literal value is skipped
-with a warning. A non-empty `--into` directory needs `--force`.
+writes only inside `--into`. It round-trips what tongs-agents applied; it does
+not import a setup you wrote by hand yet. Your own `CLAUDE.md`, skills and MCP
+servers are not read, so a harness that tongs-agents never managed gives an
+empty `agentic.toml`; describe those in `agentic.toml` yourself (step 1).
+It never reads environment values: a server's environment entry becomes its
+variable name, and a literal value is skipped with a warning. A non-empty `--into` directory needs `--force`.
 
 ## What you learned
 
@@ -161,7 +165,8 @@ with a warning. A non-empty `--into` directory needs `--force`.
   harness, without secrets.
 - `config status`, `config apply --dry-run` and `config apply` show, preview
   and write it; drift is reported, never silently overwritten.
-- `config capture` turns a harness setup into a dotfiles directory.
+- `config capture` copies the entries tongs-agents manages in a harness back
+  into a dotfiles directory.
 
 Reference: [config layer](../config.md).
 
