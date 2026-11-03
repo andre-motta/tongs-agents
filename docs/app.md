@@ -27,6 +27,7 @@ session = "agents"              # Zellij session opened by `tongs-agents workspa
 default_profiles = []           # profiles `workspace` starts in a new session, e.g. ["claude-alt"]
 tongs_tab = true                # add a tongs tab when tongs is on PATH
 multiplexer = "zellij"          # "zellij" or "tmux"; see below
+layout = "single"               # "single": one agent at a time; "split": side by side
 
 [ui]
 refresh_interval = 2            # seconds, 0.5 to 3600
@@ -61,8 +62,9 @@ default.
 
 ## Who reads what
 
-- `tongs-agents workspace` uses `session`, `tongs_tab`, `default_profiles`
-  and `multiplexer`.
+- `tongs-agents workspace` uses `session`, `tongs_tab`, `default_profiles`,
+  `multiplexer` and, for a new session, `layout` (see
+  [one agent at a time](workspace.md#one-agent-at-a-time)).
   The default profiles start only when the command creates a new session.
   Attaching to a running session, or running the command inside the
   workspace's multiplexer,
@@ -74,7 +76,8 @@ default.
   uses `session`, `tongs_tab` and `multiplexer` but never `default_profiles`,
   so the workspace opens with only the sidebar.
 - `tongs-agents run` uses `session` and `multiplexer` when it runs outside a
-  workspace, and `tongs_tab` when it has to start a new Zellij session.
+  workspace, `layout` when it has to start a new session, and `tongs_tab`
+  when that session is a Zellij one.
 - `tongs-agents monitor` uses all of `[ui]`. An invalid file prints the error
   and the monitor starts with the default settings.
 - The sidebar uses `refresh_interval`, `notify_level` and `theme`, and

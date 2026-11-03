@@ -301,8 +301,9 @@ def _workspace_panes():
     return [
         {"id": 0, "title": validator.workspace_spawn.SIDEBAR_PANE_NAME,
          "terminal_command": f"tongs-agents sidebar --spawn-request {TOKEN}"},
-        {"id": 1, "title": "f1"},
-        {"id": 2, "title": "f2"},
+        {"id": 1, "title": validator.HOME_PANE_NAME},
+        {"id": 2, "title": "f1"},
+        {"id": 3, "title": "f2"},
     ]
 
 
@@ -394,7 +395,7 @@ def test_missing_panes_record_the_client_and_sidebar_screens(monkeypatch, tmp_pa
     failure, observations, _ = _create(monkeypatch, tmp_path, target, session_after=1.0)
 
     assert isinstance(failure, validator.Check)
-    assert "expected 3 panes, got 2" in str(failure)
+    assert "expected 4 panes, got 2" in str(failure)
     workspace = observations["workspace"]
     assert workspace["client_screen"] == ["zellij: \x07could not start", "last line"]
     assert workspace["sidebar_screen"] == ["sidebar screen line"]
@@ -583,3 +584,57 @@ def test_hosted_workspace_job_runs_the_validator_on_every_pin():
     assert "python validation/workspace.py --no-write" in body
     assert 'test "$actual_sha256" = "$expected_sha256"' in body
     assert body.index("expected_sha256") < body.index("tar -xzf")
+
+
+def _geometry_pane(pane_id, title, x, columns=80, **extra):
+    return {"id": pane_id, "title": title, "tab_id": 0, "pane_x": x, "pane_columns": columns,
+            "pane_rows": 12, "is_floating": False, "is_suppressed": False, **extra}
+
+
+def _stacked_panes():
+    return [
+        _geometry_pane(0, validator.workspace_spawn.SIDEBAR_PANE_NAME, 0, 40),
+        _geometry_pane(1, validator.HOME_PANE_NAME, 40, is_suppressed=True),
+        _geometry_pane(2, "f1", 40, is_suppressed=True),
+        _geometry_pane(3, "f2", 40, pane_rows=1),
+    ]
+
+
+@linux_only
+def test_stack_membership_accepts_profiles_in_the_home_column():
+    observations = {}
+    validator.stack_membership(_Target(["s1"], _stacked_panes()), ("f1", "f2"),
+                               observations, "stack")
+    facts = observations["stack"]
+    assert facts["member_titles"] == ["f1", "f2", validator.HOME_PANE_NAME]
+    assert facts["sidebar_outside_stack"] and facts["suppressed_members"] == 2
+    assert facts["collapsed_members"] == 1
+
+
+@linux_only
+@pytest.mark.parametrize("stray", [
+    {"pane_x": 0, "pane_columns": 40}, {"tab_id": 1}, {"is_floating": True},
+])
+def test_stack_membership_refuses_a_profile_outside_the_stack(stray):
+    panes = _stacked_panes()
+    panes[3].update(stray)
+    with pytest.raises(validator.Check, match="not stacked"):
+        validator.stack_membership(_Target(["s1"], panes), ("f1", "f2"), {}, "stack")
+
+
+@linux_only
+def test_stack_membership_needs_a_home_pane():
+    panes = [pane for pane in _stacked_panes() if pane["title"] != validator.HOME_PANE_NAME]
+    with pytest.raises(validator.Check, match="no home pane"):
+        validator.stack_membership(_Target(["s1"], panes), ("f1",), {}, "stack")
+
+
+@linux_only
+@pytest.mark.parametrize("pane, shown", [
+    ({"is_suppressed": False, "pane_rows": 12}, True),
+    ({"is_suppressed": True, "pane_rows": 12}, False),
+    ({"is_suppressed": False, "pane_rows": 1}, False),
+    ({}, False),
+])
+def test_expanded_reads_both_zellij_stack_shapes(pane, shown):
+    assert validator.expanded(pane) is shown

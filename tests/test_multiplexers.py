@@ -124,6 +124,16 @@ def _mux(socket_dir=SOCKET_DIR):
     return ZellijMultiplexer(socket_dir=socket_dir, binary=ZELLIJ)
 
 
+def _split_session(fake):
+    """A session without a home pane: spawns open plain panes (layout split)."""
+    fake.responses["list-panes"] = (0, json.dumps(LIST_PANES["0.45.1"]), "")
+    return fake
+
+
+def _calls(fake, subcommand):
+    return [call for call in fake.calls if FakeZellij._key(call[0]) == subcommand]
+
+
 def test_get_multiplexer_returns_the_zellij_protocol_adapter():
     mux = get_multiplexer()
     assert isinstance(mux, ZellijMultiplexer)
@@ -210,6 +220,7 @@ def test_calls_fail_cleanly_without_a_binary(fake, monkeypatch):
 
 
 def test_spawn_argv_has_no_shell_and_separates_the_command(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (0, "terminal_7\n", "")
     ref = _mux().spawn(
         "agents",
@@ -218,7 +229,8 @@ def test_spawn_argv_has_no_shell_and_separates_the_command(fake):
         name="claude-work",
     )
     assert ref == PaneRef("zellij", "agents", "7", SOCKET_DIR)
-    argv, kwargs = fake.calls[0]
+    assert [FakeZellij._key(call[0]) for call in fake.calls] == ["list-panes", "new-pane"]
+    argv, kwargs = fake.calls[1]
     assert argv == [
         ZELLIJ, "--session", "agents", "action", "new-pane",
         "--name", "claude-work", "--cwd", "/work/example",
@@ -231,10 +243,11 @@ def test_spawn_argv_has_no_shell_and_separates_the_command(fake):
 
 
 def test_spawn_keeps_dash_arguments_after_the_separator(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (0, "terminal_12\n", "")
     ref = _mux().spawn("agents", ["--help"])
     assert ref.pane_id == "12"
-    argv = fake.calls[0][0]
+    argv = _calls(fake, "new-pane")[0][0]
     assert argv[-2:] == ["--", "--help"]
     assert "--no-focus" not in argv
 
@@ -252,12 +265,14 @@ def test_spawn_keeps_dash_arguments_after_the_separator(fake):
     ],
 )
 def test_spawn_refuses_any_other_output(fake, stdout):
+    _split_session(fake)
     fake.responses["new-pane"] = (0, stdout, "")
     with pytest.raises(MultiplexerError, match="pane id"):
         _mux().spawn("agents", ["claude"])
 
 
 def test_spawn_unknown_session_exit_zero_is_refused(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (
         0,
         "\x1b[32;1magents\x1b[m [Created 2m ago]\n",
@@ -268,20 +283,22 @@ def test_spawn_unknown_session_exit_zero_is_refused(fake):
 
 
 def test_spawn_failure_exit_is_an_error_and_not_retried(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (2, "", "error: unexpected argument")
     with pytest.raises(MultiplexerError, match="new-pane failed"):
         _mux().spawn("agents", ["claude"])
-    assert len(fake.calls) == 1
+    assert len(_calls(fake, "new-pane")) == 1
     fake.responses["new-pane"] = subprocess.TimeoutExpired("zellij", 5)
     with pytest.raises(MultiplexerError, match="new-pane failed"):
         _mux().spawn("agents", ["claude"])
-    assert len(fake.calls) == 2
+    assert len(_calls(fake, "new-pane")) == 2
 
 
 def test_spawn_asks_again_after_a_transient_no_active_session(fake, monkeypatch):
     # zellij 0.44.2's socket probe can briefly deny a running session (#107).
     sleeps = []
     monkeypatch.setattr(mux_zellij.time, "sleep", sleeps.append)
+    _split_session(fake)
     fake.responses["new-pane"] = _sequence(
         (1, "", "There is no active session!\n"),
         (1, "", "There is no active session!\n"),
@@ -289,25 +306,28 @@ def test_spawn_asks_again_after_a_transient_no_active_session(fake, monkeypatch)
     )
     ref = _mux().spawn("agents", ["claude"], cwd="/work/example", name="claude")
     assert ref == PaneRef("zellij", "agents", "9", SOCKET_DIR)
-    assert len(fake.calls) == 3
-    assert all(call[0] == fake.calls[0][0] for call in fake.calls)
+    calls = _calls(fake, "new-pane")
+    assert len(calls) == 3
+    assert all(call[0] == calls[0][0] for call in calls)
     assert sleeps == [mux_zellij.READBACK_INTERVAL] * 2
 
 
 def test_spawn_gives_up_on_no_active_session_after_bounded_attempts(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (1, "", "There is no active session!")
     with pytest.raises(MultiplexerError, match="no active session"):
         _mux().spawn("agents", ["claude"])
-    assert len(fake.calls) == mux_zellij.READBACK_ATTEMPTS
+    assert len(_calls(fake, "new-pane")) == mux_zellij.READBACK_ATTEMPTS
 
 
 def test_spawn_does_not_retry_an_unknown_session(fake):
-    fake.responses["new-pane"] = (
+    # The pane listing that comes first already prints the session list.
+    fake.responses["list-panes"] = (
         0, "agents [Created 2m ago]\n", "Session 'nope' not found."
     )
-    with pytest.raises(MultiplexerError, match="pane id"):
+    with pytest.raises(MultiplexerError, match="list-panes"):
         _mux().spawn("nope", ["claude"])
-    assert len(fake.calls) == 1
+    assert [FakeZellij._key(call[0]) for call in fake.calls] == ["list-panes"]
 
 
 @pytest.mark.parametrize(
@@ -544,18 +564,20 @@ def test_delete_session_checks_that_the_session_is_gone(fake):
 
 def test_socket_dir_defaults_to_the_callers_environment(fake, monkeypatch):
     monkeypatch.setenv("ZELLIJ_SOCKET_DIR", "/run/user/1000/zellij-env")
+    _split_session(fake)
     fake.responses["new-pane"] = (0, "terminal_2\n", "")
     ref = ZellijMultiplexer(binary=ZELLIJ).spawn("agents", ["claude"])
     assert ref.socket_dir == "/run/user/1000/zellij-env"
-    env = fake.calls[0][1]["env"]
+    env = _calls(fake, "new-pane")[0][1]["env"]
     assert env["ZELLIJ_SOCKET_DIR"] == "/run/user/1000/zellij-env"
 
 
 def test_without_any_socket_dir_the_default_is_inherited(fake):
+    _split_session(fake)
     fake.responses["new-pane"] = (0, "terminal_2\n", "")
     ref = ZellijMultiplexer(binary=ZELLIJ).spawn("agents", ["claude"])
     assert ref.socket_dir is None
-    assert fake.calls[0][1]["env"] is None
+    assert all(call[1]["env"] is None for call in fake.calls)
 
 
 def test_in_session_reads_the_callers_pane(monkeypatch):
@@ -953,3 +975,184 @@ def test_package_exports_the_interface():
     }
     assert zellij_binary.ZELLIJ_FLOOR == (0, 44, 2)
     assert zellij_binary.ZELLIJ_CEILING == (0, 45, 1)
+
+
+# One agent at a time (#124): the home pane heads a stacked column beside the sidebar.
+
+SIDEBAR = _pane(0, title="tongs-agents-sidebar", pane_x=0, pane_columns=40)
+HOME = _pane(1, title=multiplexers.HOME_PANE_NAME, pane_x=40, pane_columns=120,
+             is_suppressed=True)
+
+
+def _stack(*ids, **extra):
+    return [_pane(pane_id, title=f"agent-{pane_id}", pane_x=40, pane_columns=120, **extra)
+            for pane_id in ids]
+
+
+def _listing(*entries):
+    return (0, json.dumps([PLUGIN_PANE, *entries]), "")
+
+
+def _tabs(rows, tab_id=0):
+    return (0, json.dumps([
+        {"tab_id": tab_id, "position": 0, "name": "agents", "viewport_rows": rows,
+         "viewport_columns": 160, "display_area_rows": rows + 3, "active": True},
+        {"tab_id": tab_id + 1, "position": 1, "name": "tongs", "viewport_rows": rows,
+         "viewport_columns": 160, "display_area_rows": rows + 3, "active": False},
+    ]), "")
+
+
+def _actions(fake):
+    return [argv[argv.index("action") + 1:] for argv, _ in fake.calls]
+
+
+def test_spawn_with_a_home_pane_stacks_into_its_tab_and_reads_back(fake):
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, HOME, *_stack(2)),
+        _listing(SIDEBAR, HOME, *_stack(2, 5)),
+    )
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = (0, "terminal_5\n", "")
+    ref = _mux().spawn("agents", ["claude"], name="claude", cwd="/work/example")
+    assert ref == PaneRef("zellij", "agents", "5", SOCKET_DIR)
+    assert _actions(fake) == [
+        ["list-panes", "--json"],
+        ["list-tabs", "--json"],
+        ["new-pane", "--tab-id", "0", "--floating", "--name", "claude",
+         "--cwd", "/work/example", "--", "claude"],
+        ["stack-panes", "--", "terminal_1", "terminal_5"],
+        ["list-panes", "--json"],
+    ]
+    assert not any("--stacked" in argv for argv, _ in fake.calls)
+
+
+def test_the_stack_uses_the_home_panes_tab_not_the_focused_one(fake):
+    home = dict(HOME, tab_id=3)
+    fake.responses["list-panes"] = _sequence(
+        _listing(dict(SIDEBAR, tab_id=3), home),
+        _listing(dict(SIDEBAR, tab_id=3), home, *_stack(6, tab_id=3)),
+    )
+    fake.responses["list-tabs"] = _tabs(42, tab_id=3)
+    fake.responses["new-pane"] = (0, "terminal_6\n", "")
+    assert _mux().spawn("agents", ["claude"]).pane_id == "6"
+    assert _actions(fake)[2][:4] == ["new-pane", "--tab-id", "3", "--floating"]
+
+
+def test_the_sidebar_is_never_stacked(fake):
+    fake.responses["new-pane"] = (0, "terminal_8\n", "")
+    _mux().spawn("agents", ["python3"], name="tongs-agents-sidebar")
+    assert _actions(fake) == [
+        ["new-pane", "--name", "tongs-agents-sidebar", "--", "python3"],
+    ]
+
+
+def test_a_floating_home_pane_is_not_an_anchor(fake):
+    fake.responses["list-panes"] = _listing(SIDEBAR, dict(HOME, is_floating=True))
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    _mux().spawn("agents", ["claude"])
+    assert [action[0] for action in _actions(fake)] == ["list-panes", "new-pane"]
+
+
+def test_a_full_stack_is_refused_before_any_pane_starts(fake):
+    # A 8-row viewport fits 3 stack members; home plus two agents fill it.
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2, 3))
+    fake.responses["list-tabs"] = _tabs(8)
+    with pytest.raises(MultiplexerError, match="agent stack is full: 3 panes fill a 8-row"):
+        _mux().spawn("agents", ["claude"])
+    assert [action[0] for action in _actions(fake)] == ["list-panes", "list-tabs"]
+
+
+def test_exited_stack_members_count_toward_the_capacity(fake):
+    fake.responses["list-panes"] = _listing(
+        SIDEBAR, HOME, *_stack(2), *_stack(3, exited=True, is_held=True))
+    fake.responses["list-tabs"] = _tabs(8)
+    with pytest.raises(MultiplexerError, match="stack is full"):
+        _mux().spawn("agents", ["claude"])
+
+
+def test_stack_capacity_leaves_a_margin_of_title_lines():
+    assert mux_zellij.stack_capacity(21) == 16
+    assert mux_zellij.stack_capacity(42) == 37
+    assert mux_zellij.stack_capacity(3) == 1
+
+
+@pytest.mark.parametrize("landed", [
+    dict(pane_x=0, pane_columns=40),
+    dict(tab_id=1),
+    dict(is_floating=True),
+])
+def test_a_pane_that_does_not_join_the_stack_is_closed(fake, landed):
+    stray = dict(_stack(5)[0], **landed)
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, stray))
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = (0, "terminal_5\n", "")
+    with pytest.raises(MultiplexerError, match="closed new pane 5: it did not join"):
+        _mux().spawn("agents", ["claude"])
+    actions = _actions(fake)
+    assert actions[-1] == ["close-pane", "--pane-id", "terminal_5"]
+    assert actions.count(["list-panes", "--json"]) == 1 + mux_zellij.READBACK_ATTEMPTS
+
+
+def test_a_failed_stack_panes_closes_the_new_pane(fake):
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME)
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = (0, "terminal_5\n", "")
+    fake.responses["stack-panes"] = (1, "", "error: unrecognized subcommand")
+    with pytest.raises(MultiplexerError, match="closed new pane 5: zellij action stack-panes"):
+        _mux().spawn("agents", ["claude"])
+    assert _actions(fake)[-1] == ["close-pane", "--pane-id", "terminal_5"]
+
+
+def test_a_list_tabs_without_the_home_tab_is_refused(fake):
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME)
+    fake.responses["list-tabs"] = _tabs(42, tab_id=7)
+    with pytest.raises(MultiplexerError, match="does not list tab 0"):
+        _mux().spawn("agents", ["claude"])
+    assert "new-pane" not in [action[0] for action in _actions(fake)]
+
+
+def test_list_panes_keeps_collapsed_and_suppressed_stack_members(fake):
+    fake.responses["list-panes"] = _listing(
+        SIDEBAR, HOME, *_stack(2, is_suppressed=True), *_stack(3, pane_rows=1))
+    panes = _mux().list_panes("agents")
+    assert [pane.ref.pane_id for pane in panes] == ["0", "1", "2", "3"]
+    assert not any(pane.exited for pane in panes)
+
+
+def test_show_is_a_pane_selection(fake):
+    fake.responses["list-clients"] = _sequence(
+        _clients("1 terminal_0 sidebar\n"), _clients("1 terminal_2 claude\n"))
+    result = _mux().show(PaneRef("zellij", "agents", "2"))
+    assert result.selection.succeeded
+    assert _actions(fake) == [
+        ["list-clients"], ["focus-pane-id", "terminal_2"], ["list-clients"],
+    ]
+
+
+def test_focus_accepts_an_already_focused_refusal_on_readback(fake):
+    # focus-pane-id exits 2 when the most recent client already shows the pane.
+    fake.responses["list-clients"] = _sequence(
+        _clients("1 terminal_2 claude\n", "2 terminal_0 sidebar\n"))
+    fake.responses["focus-pane-id"] = (2, "Pane Terminal(2) is already focused\n", "")
+    result = _mux().focus(PaneRef("zellij", "agents", "2"))
+    assert result.selection.succeeded
+    assert result.selection.detail == "pane already focused"
+
+
+def test_focus_still_fails_when_the_refused_pane_is_shown_nowhere(fake):
+    fake.responses["list-clients"] = _clients("1 terminal_0 sidebar\n")
+    fake.responses["focus-pane-id"] = (2, "", "")
+    result = _mux().focus(PaneRef("zellij", "agents", "2"))
+    assert result.state == "failed" and "focus-pane-id failed" in result.selection.detail
+
+
+def test_a_focused_stacked_spawn_selects_the_new_pane(fake):
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, *_stack(5)))
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = (0, "terminal_5\n", "")
+    fake.responses["list-clients"] = _sequence(
+        _clients("1 terminal_0 sidebar\n"), _clients("1 terminal_5 chat\n"))
+    _mux().spawn("agents", ["chat"], name="chat", focus=True)
+    assert ["focus-pane-id", "terminal_5"] in _actions(fake)

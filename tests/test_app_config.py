@@ -36,6 +36,7 @@ def test_an_absent_file_gives_the_defaults():
     assert config == AppConfig()
     assert config.workspace == WorkspaceSettings(
         session="agents", default_profiles=(), tongs_tab=True, multiplexer="zellij",
+        layout="single",
     )
     assert config.ui == UISettings(
         refresh_interval=2.0, notify_level="all", theme="textual-dark", compact=False,
@@ -55,6 +56,7 @@ session = "work.1"
 default_profiles = ["alpha", "beta"]
 tongs_tab = false
 multiplexer = "tmux"
+layout = "split"
 
 [ui]
 refresh_interval = 5
@@ -69,7 +71,9 @@ mcp_any_target = true
 mcp_rate_per_minute = 12
 """)
     config = load_app_config()
-    assert config.workspace == WorkspaceSettings("work.1", ("alpha", "beta"), False, "tmux")
+    assert config.workspace == WorkspaceSettings(
+        "work.1", ("alpha", "beta"), False, "tmux", "split"
+    )
     assert config.ui == UISettings(5.0, "waiting", "nord", True)
     assert config.control == ControlSettings(True, 0, True, 12)
 
@@ -112,6 +116,8 @@ compact = true
         ("[workspace]\ntongs_tab = \"no\"\n", "workspace.tongs_tab: must be true or false"),
         ("[workspace]\nmultiplexer = \"screen\"\n",
          "workspace.multiplexer: must be one of zellij, tmux"),
+        ("[workspace]\nlayout = \"tabs\"\n", "workspace.layout: must be one of single, split"),
+        ("[workspace]\nlayout = true\n", "workspace.layout: must be one of single, split"),
         ("[ui]\nrefresh_interval = 0\n", "ui.refresh_interval: must be a number"),
         ("[ui]\nrefresh_interval = true\n", "ui.refresh_interval"),
         ("[ui]\nrefresh_interval = \"2\"\n", "ui.refresh_interval"),

@@ -19,10 +19,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tongs_agents import profiles
+from tongs_agents.multiplexers.base import LAYOUT_SINGLE, LAYOUTS
 
 DEFAULT_SESSION = "agents"
 DEFAULT_MULTIPLEXER = "zellij"
 MULTIPLEXERS: tuple[str, ...] = ("zellij", "tmux")
+DEFAULT_LAYOUT = LAYOUT_SINGLE
 DEFAULT_THEME = "textual-dark"
 NOTIFY_LEVELS: tuple[str, ...] = ("all", "waiting", "none")
 DEFAULT_REFRESH_INTERVAL = 2.0
@@ -36,7 +38,9 @@ MAX_DEFAULT_PROFILES = 32
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 THEME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 
-WORKSPACE_KEYS = frozenset({"session", "default_profiles", "tongs_tab", "multiplexer"})
+WORKSPACE_KEYS = frozenset({
+    "session", "default_profiles", "tongs_tab", "multiplexer", "layout",
+})
 UI_KEYS = frozenset({"refresh_interval", "notify_level", "theme", "compact"})
 CONTROL_KEYS = frozenset({
     "mcp_enabled", "send_delay_ms", "mcp_any_target", "mcp_rate_per_minute",
@@ -54,6 +58,7 @@ class WorkspaceSettings:
     default_profiles: tuple[str, ...] = ()
     tongs_tab: bool = True
     multiplexer: str = DEFAULT_MULTIPLEXER
+    layout: str = DEFAULT_LAYOUT
 
 
 @dataclass(frozen=True)
@@ -137,6 +142,7 @@ def parse_workspace(section: dict) -> WorkspaceSettings:
         default_profiles=tuple(names),
         tongs_tab=_bool(section, "tongs_tab", where, True),
         multiplexer=_choice(section, "multiplexer", where, MULTIPLEXERS, DEFAULT_MULTIPLEXER),
+        layout=_choice(section, "layout", where, LAYOUTS, DEFAULT_LAYOUT),
     )
 
 

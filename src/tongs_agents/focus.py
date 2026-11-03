@@ -7,9 +7,11 @@ import sys
 from tongs_agents.discovery import read_session_records, resolve_session_process
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers import MultiplexerError, PaneRef, get_multiplexer
+from tongs_agents.multiplexers.tmux import env_socket
 from tongs_agents.multiplexers.zellij import ACTIVATION_SKIPPED
 from tongs_agents.terminal_apis import find_terminal_api
 from tongs_agents.terminal_apis._env import is_decimal_id
+from tongs_agents.terminal_apis.tmux import TmuxAPI
 
 _DETAILS_LIMIT = 120
 _GENERIC_DETAILS = frozenset({"tab or pane selection", "window activation"})
@@ -197,6 +199,32 @@ def _in_session_focus(session) -> FocusResult | None:
     return dataclasses.replace(result, pid=pid)
 
 
+def _show_parked_tmux_pane(api, pid: int, terminal_env) -> None:
+    """Swap a parked agent into the main slot of a single tmux workspace first.
+
+    The terminal API then selects the window the pane now sits in (the
+    sidebar's) instead of the parked window. A split session, a pane that is
+    not found or any tmux error leaves everything as it was.
+    """
+    if not isinstance(api, TmuxAPI) or not isinstance(terminal_env, dict):
+        return
+    socket = env_socket(terminal_env)
+    if socket is None:
+        return
+    try:
+        target = api.find_tab(pid, terminal_env)
+    except Exception:  # noqa: BLE001 - the terminal API reports its own lookup
+        return
+    if not target or "." not in target:
+        return
+    pane = target.rsplit(".", 1)[1]
+    try:
+        multiplexer = get_multiplexer("tmux", socket_dir=socket)
+        multiplexer.show(PaneRef("tmux", multiplexer.session_of(pane), pane, socket))
+    except MultiplexerError:
+        pass
+
+
 def focus_session(query) -> FocusResult:
     matches = _matching_sessions(query)
     if not matches:
@@ -253,6 +281,7 @@ def focus_session(query) -> FocusResult:
             backend=terminal_type,
             pid=process.pid,
         )
+    _show_parked_tmux_pane(api, process.pid, terminal_env)
     return api.focus_result(process.pid, terminal_env)
 
 

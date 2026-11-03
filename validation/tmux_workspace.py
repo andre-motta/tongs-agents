@@ -9,12 +9,17 @@ evidence is redacted before it is printed or written.
 
 Server A is the run's own ``-L tongs-<token>`` socket under the private
 TMUX_TMPDIR. TmuxMultiplexer creates a detached session there with the
-sidebar as its first pane and spawns fake REPL profiles
-(validation/fixtures/fake_repl.py) through ``workspace_spawn`` and the real
-launcher. Checked against it:
+sidebar as its first pane, records the ``single`` layout (#124) and spawns
+fake REPL profiles (validation/fixtures/fake_repl.py) through
+``workspace_spawn`` and the real launcher. Checked against it:
 
 - spawn: a new detached session whose first pane is the live sidebar, and
   launch records claimed with the TMUX_PANE pane id and server socket;
+- swap: each agent is parked in its own window and the last one shown in
+  the sidebar's window; showing a parked agent swaps it into the main slot
+  (its pane id moves with it), a parked agent can still be captured, and an
+  empty main slot is filled with ``join-pane`` beside a sidebar about 40
+  columns wide;
 - list: list_panes agrees with raw ``tmux list-panes`` and names every pane;
 - focus readback: selection is read back with ``display-message`` and no
   client is attached, raised or created;
@@ -27,8 +32,9 @@ launcher. Checked against it:
 - the control audit log holds no sent text.
 
 Server B is tmux's default socket under the private TMUX_TMPDIR. Outside
-tmux, ``workspace --print-command`` creates the detached session with the
-sidebar and a profile and prints the attach command, and a second run in a
+tmux, ``workspace --print-command`` creates the detached session (layout
+``single``) with the sidebar and a profile shown beside it and prints the
+attach command, and a second run in a
 private PTY execs ``tmux attach-session`` (the client pid is the command's).
 Both servers are killed by their socket path at the end.
 """
@@ -71,8 +77,13 @@ from workspace import (
 )
 
 from tongs_agents import control, launches, paths, workspace_spawn
-from tongs_agents.multiplexers import PaneRef
-from tongs_agents.multiplexers.tmux import NAME_OPTION, TmuxMultiplexer
+from tongs_agents.multiplexers import LAYOUT_SINGLE, PaneRef
+from tongs_agents.multiplexers.tmux import (
+    LAYOUT_OPTION,
+    NAME_OPTION,
+    SIDEBAR_COLUMNS,
+    TmuxMultiplexer,
+)
 from tongs_agents.profiles import Profile, load_profiles
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME
 
@@ -84,8 +95,10 @@ HASHED = (
     "src/tongs_agents/commands/sidebar.py",
     "src/tongs_agents/commands/workspace.py",
     "src/tongs_agents/control.py",
+    "src/tongs_agents/focus.py",
     "src/tongs_agents/launch.py",
     "src/tongs_agents/launches.py",
+    "src/tongs_agents/multiplexers/base.py",
     "src/tongs_agents/multiplexers/tmux.py",
     "src/tongs_agents/terminal_apis/tmux.py",
     "src/tongs_agents/workspace_spawn.py",
@@ -100,6 +113,9 @@ OUTSIDE = "r4"
 PROFILES = (*SPAWNED, IN_SESSION, OUTSIDE)
 SEND_DELAY_MS = 150
 SIDEBAR_ALIVE_SECONDS = 2.0
+WINDOW_COLUMNS = 160
+WINDOW_ROWS = 40
+IDLE_PANE = "import sys, time; time.sleep(600)"
 CLI_TIMEOUT = 60
 VERSION_RE = re.compile(r"[0-9]+")
 
@@ -224,6 +240,24 @@ class Server:
         _, out, _ = self("display-message", "-p", "-t", f"={session}:", "#{pane_id}")
         return out
 
+    def windows(self, session):
+        """``{pane id: window id}`` for every pane of the session."""
+        code, out, _ = self("list-panes", "-s", "-t", f"={session}", "-F",
+                            "#{pane_id} #{window_id}")
+        return dict(line.split() for line in out.splitlines()) if code == 0 else {}
+
+    def window_name(self, window):
+        _, out, _ = self("display-message", "-p", "-t", window, "#{window_name}")
+        return out
+
+    def width(self, pane):
+        _, out, _ = self("display-message", "-p", "-t", pane, "#{pane_width}")
+        return int(out) if out.isdigit() else None
+
+    def layout(self, session):
+        _, out, _ = self("show-options", "-q", "-v", "-t", f"={session}:", LAYOUT_OPTION)
+        return out
+
     def kill(self):
         self("kill-server")
         return wait_until(lambda: self("list-sessions")[0] != 0, 5, 0.1)
@@ -257,6 +291,7 @@ def exercise(root, session, outside_session, label, tracker, observations):
                                      "floor": "3.2", "version_read_live": mux.version is not None}
         expect(available, f"tmux is not available: {detail}")
         records = spawn(mux, server, session, io_dir, tracker, observations)
+        swap(mux, server, session, records, root, tracker, observations)
         listing(mux, server, session, records, observations)
         focus(mux, server, session, records, observations)
         in_session(cli, server, session, io_dir, tracker, observations)
@@ -272,6 +307,9 @@ def spawn(mux, server, session, io_dir, tracker, observations):
     started = time.monotonic()
     sidebar = mux.spawn(session, workspace_spawn.sidebar_argv(), name=SIDEBAR_PANE_NAME)
     tracker.sweep()
+    server("resize-window", "-t", f"={session}:", "-x", str(WINDOW_COLUMNS),
+           "-y", str(WINDOW_ROWS))
+    mux.set_layout(session, LAYOUT_SINGLE)
     profiles = load_profiles()
     created = workspace_spawn.spawn_profiles(mux, session, [profiles[name] for name in SPAWNED])
     tracker.sweep()
@@ -292,6 +330,7 @@ def spawn(mux, server, session, io_dir, tracker, observations):
             for name in SPAWNED),
         "session_recorded": bool(records) and all(
             records[name].session == session for name in SPAWNED),
+        "layout": server.layout(session),
     }
     facts = observations["spawn"]
     expect(facts["session_absent_before"] and facts["sessions_after"] == 1,
@@ -301,7 +340,65 @@ def spawn(mux, server, session, io_dir, tracker, observations):
     expect(records, "the fake REPL panes were not claimed and ready")
     expect(facts["socket_recorded"] and facts["session_recorded"],
            "the launch records do not name the session and socket")
+    expect(facts["layout"] == LAYOUT_SINGLE, "the session does not record the single layout")
     return records
+
+
+def swap(mux, server, session, records, root, tracker, observations):
+    """Parked agents, show by swap-pane and join-pane, capture of a parked pane."""
+    sidebar = "%0"
+    first, last = (records[name].pane_id for name in SPAWNED)
+    windows = server.windows(session)
+    main = windows.get(sidebar)
+    spawned = {
+        "main_window_panes": sorted(pane for pane, window in windows.items() if window == main),
+        "first_parked_alone": windows.get(first) != main and list(windows.values()).count(
+            windows.get(first)) == 1,
+        "last_shown_and_active": windows.get(last) == main and server.active(session) == last,
+    }
+    parked_window = windows.get(first)
+    shown = mux.show(PaneRef("tmux", session, first, server.socket))
+    windows = server.windows(session)
+    swapped = {
+        "detail": shown.selection.detail,
+        "moved_into_main": windows.get(first) == main,
+        "pane_id_kept": first in windows,
+        "previous_parked_in_its_window": windows.get(last) == parked_window,
+        "parked_window_renamed": server.window_name(parked_window) == SPAWNED[1],
+        "active_pane": server.active(session) == first,
+        "attached_clients": len(server.clients()),
+    }
+    capture = mux.capture(PaneRef("tmux", session, last, server.socket), 20)
+    swapped["parked_capture_has_prompt"] = "fake-repl>" in capture
+    spare = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)], name="spare")
+    tracker.sweep()
+    mux.show(spare)
+    server("kill-pane", "-t", spare.pane_id)
+    emptied = sorted(pane for pane, window in server.windows(session).items() if window == main)
+    joined = mux.show(PaneRef("tmux", session, first, server.socket))
+    windows = server.windows(session)
+    rejoined = {
+        "main_slot_emptied": emptied == [sidebar],
+        "detail": joined.selection.detail,
+        "joined_into_main": windows.get(first) == main,
+        "sidebar_columns": server.width(sidebar),
+        "active_pane": server.active(session) == first,
+    }
+    observations["swap"] = {"after_spawn": spawned, "show_parked": swapped,
+                            "show_into_empty_slot": rejoined}
+    expect(spawned["main_window_panes"] == sorted([sidebar, last])
+           and spawned["first_parked_alone"] and spawned["last_shown_and_active"],
+           f"spawned agents were not parked and shown: {spawned}")
+    expect(shown.selection.succeeded and swapped["moved_into_main"]
+           and swapped["pane_id_kept"] and swapped["previous_parked_in_its_window"]
+           and swapped["active_pane"], f"show did not swap the parked agent in: {swapped}")
+    expect(swapped["attached_clients"] == 0, "show attached a client")
+    expect(swapped["parked_capture_has_prompt"], "a parked agent could not be captured")
+    expect(rejoined["main_slot_emptied"] and joined.selection.succeeded
+           and rejoined["joined_into_main"] and rejoined["active_pane"],
+           f"show did not join the agent into the empty main slot: {rejoined}")
+    expect(rejoined["sidebar_columns"] == SIDEBAR_COLUMNS,
+           f"the sidebar is {rejoined['sidebar_columns']} columns wide after join-pane")
 
 
 def listing(mux, server, session, records, observations):
@@ -493,6 +590,8 @@ def outside(root, env, binary, session, cli, io_dir, tracker, observations):
         "panes": len(panes_before_attach),
         "profile_claimed": bool(records),
         "pane_names": sorted(server.names(session)),
+        "layout": server.layout(session),
+        "profile_shown_beside_sidebar": len(set(server.windows(session).values())) == 1,
         "exec_attach_clients": len(clients),
         "exec_attach_client_is_the_command": [str(client.pid), session] in clients,
         "panes_after_attach": len(server.pane_ids(session)),
@@ -503,6 +602,8 @@ def outside(root, env, binary, session, cli, io_dir, tracker, observations):
     expect(facts["sessions"] == 1 and facts["panes"] == 2
            and facts["pane_names"] == sorted([SIDEBAR_PANE_NAME, OUTSIDE])
            and facts["profile_claimed"], f"the detached session is not sidebar plus profile: {facts}")
+    expect(facts["layout"] == LAYOUT_SINGLE and facts["profile_shown_beside_sidebar"],
+           f"the new session does not show its profile beside the sidebar: {facts}")
     expect(facts["exec_attach_client_is_the_command"],
            "the workspace command did not exec tmux attach-session")
     expect(facts["panes_after_attach"] == 2, "attaching to a running session added panes")

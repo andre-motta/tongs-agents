@@ -1,8 +1,13 @@
 """Terminal multiplexer pane lifecycle (beside terminal_apis)."""
 
 from tongs_agents.multiplexers.base import (
+    HOME_PANE_NAME,
+    LAYOUT_SINGLE,
+    LAYOUT_SPLIT,
+    LAYOUTS,
     SESSION_EXITED,
     SESSION_RUNNING,
+    SIDEBAR_PANE_NAME,
     Multiplexer,
     MultiplexerError,
     PaneInfo,
@@ -13,8 +18,13 @@ from tongs_agents.multiplexers.tmux import TmuxMultiplexer
 from tongs_agents.multiplexers.zellij import ZellijMultiplexer
 
 __all__ = [
+    "HOME_PANE_NAME",
+    "LAYOUTS",
+    "LAYOUT_SINGLE",
+    "LAYOUT_SPLIT",
     "SESSION_EXITED",
     "SESSION_RUNNING",
+    "SIDEBAR_PANE_NAME",
     "Multiplexer",
     "MultiplexerError",
     "PaneInfo",
