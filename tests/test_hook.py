@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.terminal_apis import _ancestry
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.terminal_apis import _ancestry
 from tests.conftest import write_session
 from tests.terminal_env import clear_terminal_markers
 
@@ -36,14 +36,14 @@ def run_hook(
         start_token=process_start,
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.resolve_process_identity",
+        "tongs_agents.hook.resolve_process_identity",
         lambda value, supplied=None: process if resolved else None,
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.capture_terminal_info",
+        "tongs_agents.terminal_apis.capture_terminal_info",
         lambda: {"terminal": "test", "terminal_env": {"TEST": "1"}},
     )
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     return handle(event, agent)
 
 
@@ -166,21 +166,21 @@ def test_malformed_payload_preserves_record(fleet_dir, monkeypatch):
     write_session(fleet_dir, "test-sess", "myrepo", "/tmp/myrepo")
     before = legacy.read_bytes()
     monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id":'))
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     assert not handle("prompt-submit")
     assert legacy.read_bytes() == before
 
 
 def test_oversized_payload_is_rejected(fleet_dir, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO(" " * (64 * 1024 + 1)))
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     assert not handle("session-start")
     assert list(fleet_dir.iterdir()) == []
 
 
 def test_raw_lone_surrogate_payload_is_rejected(fleet_dir, monkeypatch):
     monkeypatch.setattr("sys.stdin", io.StringIO("\ud800"))
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     assert not handle("session-start")
     assert list(fleet_dir.iterdir()) == []
 
@@ -190,7 +190,7 @@ def test_huge_json_integer_payload_is_rejected(fleet_dir, monkeypatch):
         "sys.stdin",
         io.StringIO('{"session_id":"probe","ts":' + "9" * 5000 + "}"),
     )
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     assert not handle("session-start")
     assert list(fleet_dir.iterdir()) == []
 
@@ -266,7 +266,7 @@ def test_native_non_start_event_does_not_create_missing_record(
 def test_unresolved_native_record_is_superseded_when_identified(
     fleet_dir, monkeypatch
 ):
-    from claude_fleet_monitor.discovery import read_session_records
+    from tongs_agents.discovery import read_session_records
 
     payload = {"session_id": "native", "cwd": "/tmp/repo"}
     assert run_hook(
@@ -295,7 +295,7 @@ def test_failed_identified_migration_preserves_unresolved_record(
     )
     before = read_new_record(fleet_dir)
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.write_session_record", lambda record: False
+        "tongs_agents.hook.write_session_record", lambda record: False
     )
     assert not run_hook(monkeypatch, "prompt-submit", payload)
     assert read_new_record(fleet_dir) == before
@@ -306,7 +306,7 @@ def test_windows_native_event_without_ancestry_never_signals_pid(
 ):
     import os
 
-    import claude_fleet_monitor.hook as hook
+    import tongs_agents.hook as hook
 
     monkeypatch.setattr(
         os, "kill", lambda *args: pytest.fail("native hook must not signal a PID")
@@ -323,7 +323,7 @@ def test_windows_native_event_without_ancestry_never_signals_pid(
     )
     monkeypatch.setattr(hook, "resolve_process_identity", lambda *args: None)
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.capture_terminal_info",
+        "tongs_agents.terminal_apis.capture_terminal_info",
         lambda: {"terminal": "windows_terminal", "terminal_env": {
             "WT_SESSION": "guid"
         }},
@@ -333,18 +333,18 @@ def test_windows_native_event_without_ancestry_never_signals_pid(
 
 
 def test_native_alias_ignores_payload_pid_and_sequence(fleet_dir, monkeypatch):
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
 
     calls = []
     process = ProcessInfo(
         12345, 1, "claude", "claude", ("claude",), "/tmp/repo", "100"
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.resolve_process_identity",
+        "tongs_agents.hook.resolve_process_identity",
         lambda harness, supplied=None: calls.append(supplied) or process,
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.capture_terminal_info",
+        "tongs_agents.terminal_apis.capture_terminal_info",
         lambda: {"terminal": "test", "terminal_env": {}},
     )
     payload = {
@@ -365,8 +365,8 @@ def test_native_alias_ignores_payload_pid_and_sequence(fleet_dir, monkeypatch):
 def test_identified_migration_serializes_inflight_unresolved_write(
     fleet_dir, monkeypatch
 ):
-    import claude_fleet_monitor.hook as hook
-    from claude_fleet_monitor.discovery import read_session_records
+    import tongs_agents.hook as hook
+    from tongs_agents.discovery import read_session_records
 
     payload = {"session_id": "race", "cwd": "/tmp/repo"}
 
@@ -388,7 +388,7 @@ def test_identified_migration_serializes_inflight_unresolved_write(
     monkeypatch.setattr("sys.stdin", ThreadInput())
     monkeypatch.setattr(hook, "resolve_process_identity", resolve)
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.capture_terminal_info",
+        "tongs_agents.terminal_apis.capture_terminal_info",
         lambda: {"terminal": "test", "terminal_env": {}},
     )
     assert hook.handle("session-start", "claude")
@@ -443,7 +443,7 @@ def test_session_start_labels_nearest_ancestor_over_leaked_markers(
     monkeypatch.setenv("STY", "4242.pts-3.fleet")
     monkeypatch.setenv("WINDOW", "2")
     stats = {
-        900: "900 (claude-fleet-ho) S 890",
+        900: "900 (tongs-agents-ho) S 890",
         890: "890 (claude) S 880",
         880: "880 (bash) S 870",
         870: "870 (screen) S 860",
@@ -454,14 +454,14 @@ def test_session_start_labels_nearest_ancestor_over_leaked_markers(
     monkeypatch.setattr(_ancestry, "sys", SimpleNamespace(platform="linux"))
     process = ProcessInfo(12345, 1, "claude", "claude", ("claude",), "/tmp/r", "1")
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.resolve_process_identity",
+        "tongs_agents.hook.resolve_process_identity",
         lambda value, supplied=None: process,
     )
     monkeypatch.setattr(
         "sys.stdin",
         io.StringIO(json.dumps({"session_id": "leak", "cwd": "/tmp/r"})),
     )
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
 
     assert handle("session-start", "claude")
     data = read_new_record(fleet_dir)

@@ -1,6 +1,6 @@
 ---
 name: Bug Report
-about: Report a bug in Claude Fleet Monitor
+about: Report a bug in Tongs Agents
 labels: bug
 ---
 
@@ -9,7 +9,7 @@ labels: bug
 - **OS**: (e.g. Fedora 44, macOS 15, Windows 11)
 - **Terminal**: (e.g. Konsole, GNOME Terminal, iTerm2, Windows Terminal)
 - **Python version**: (output of `python3 --version`)
-- **Package version**: (output of `pip show claude-fleet-monitor | grep Version`)
+- **Package version**: (output of `pip show tongs-agents | grep Version`)
 
 ## Description
 
@@ -32,7 +32,7 @@ What actually happened.
 ## Fleet Status Output
 
 ```
-(paste output of `claude-fleet status` here)
+(paste output of `tongs-agents status` here)
 ```
 
 ## Additional Context

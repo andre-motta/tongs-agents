@@ -12,7 +12,7 @@ import tempfile
 import time
 from unittest.mock import patch
 
-from claude_fleet_monitor.terminal_apis.tmux import TmuxAPI
+from tongs_agents.terminal_apis.tmux import TmuxAPI
 
 
 def process_identity(pid):
@@ -175,7 +175,7 @@ def validate():
                 "parent terminal instrumented may have raised its window but "
                 "could not confirm it (window activation was not confirmed)"
             )
-            with patch("claude_fleet_monitor.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
+            with patch("tongs_agents.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
                 reason = raise_failure(api, target, env)
             assert reason == unconfirmed, reason
             assert calls == [(operation, target_client) for operation in ("find", "select", "raise")], calls
@@ -185,14 +185,14 @@ def validate():
             not_activated = (
                 "parent terminal instrumented did not activate (tab selection failed)"
             )
-            with patch("claude_fleet_monitor.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
+            with patch("tongs_agents.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
                 reason = raise_failure(api, target, env)
             assert reason == not_activated, reason
             assert calls == [(operation, target_client) for operation in ("find", "select")], calls
             tty = run("list-clients", "-t", session, "-F", "#{client_tty}")
             run("detach-client", "-t", tty)
             calls.clear()
-            with patch("claude_fleet_monitor.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
+            with patch("tongs_agents.terminal_apis.tmux._detect_parent_terminal", return_value=parent):
                 reason = raise_failure(api, target, env)
             assert reason == "no attached tmux client shows the pane", reason
             assert not calls, calls

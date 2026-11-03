@@ -500,10 +500,10 @@ def _write_wrapper(path: Path) -> None:
         "#!/usr/bin/env python3\n"
         "import sys\n"
         "from types import ModuleType\n"
-        "package = ModuleType('claude_fleet_monitor')\n"
-        "package.__path__ = ['/workspace/src/claude_fleet_monitor']\n"
-        "sys.modules['claude_fleet_monitor'] = package\n"
-        "from claude_fleet_monitor.hook import main\n"
+        "package = ModuleType('tongs_agents')\n"
+        "package.__path__ = ['/workspace/src/tongs_agents']\n"
+        "sys.modules['tongs_agents'] = package\n"
+        "from tongs_agents.hook import main\n"
         "main()\n",
         encoding="utf-8",
     )
@@ -511,10 +511,10 @@ def _write_wrapper(path: Path) -> None:
 
 
 def _installer_commands(hook_cmd: Path) -> dict[str, dict[str, str]]:
-    package = ModuleType("claude_fleet_monitor")
-    package.__path__ = [str(SOURCE_MOUNT / "claude_fleet_monitor")]
-    sys.modules["claude_fleet_monitor"] = package
-    cli = importlib.import_module("claude_fleet_monitor.cli")
+    package = ModuleType("tongs_agents")
+    package.__path__ = [str(SOURCE_MOUNT / "tongs_agents")]
+    sys.modules["tongs_agents"] = package
+    cli = importlib.import_module("tongs_agents.cli")
     commands: dict[str, dict[str, str]] = {}
     for agent, events in (
         ("claude", cli.CLAUDE_HOOK_EVENTS),
@@ -530,7 +530,7 @@ def _installer_commands(hook_cmd: Path) -> dict[str, dict[str, str]]:
             for group in config.get("hooks", {}).get(hook_event, []):
                 for hook in group.get("hooks", []):
                     command = hook.get("command")
-                    if isinstance(command, str) and "claude-fleet-hook" in command:
+                    if isinstance(command, str) and "tongs-agents-hook" in command:
                         candidates.append(command)
             if len(candidates) != 1:
                 raise RuntimeError(
@@ -599,7 +599,7 @@ def _path_probe(
     installer_commands: dict[str, dict[str, str]] | None,
     installer_error: str | None,
 ) -> dict[str, object]:
-    spaced_wrapper = WORK_DIR / "hook bin" / "claude-fleet-hook"
+    spaced_wrapper = WORK_DIR / "hook bin" / "tongs-agents-hook"
     spaced_wrapper.parent.mkdir(parents=True, exist_ok=True)
     _write_wrapper(spaced_wrapper)
     unquoted_session = f"path-unquoted-{token}-{spec['id']}"
@@ -675,7 +675,7 @@ def _path_probe(
     )
     probe = {
         "shell": spec["id"],
-        "installer_builder": "claude_fleet_monitor.cli._install_hooks",
+        "installer_builder": "tongs_agents.cli._install_hooks",
         "installer_config_written": False,
         "generated_session_scope": "one stable session_id per shell and agent, events ordered",
         "configured_command_form": "<path with spaces> session-start --agent <agent>",
@@ -722,10 +722,10 @@ def _run_inside(args: argparse.Namespace) -> int:
     token = uuid.uuid4().hex[:10]
     source_hash = _tree_hash(SOURCE_MOUNT)
     source_matches = source_hash == args.source_tree_sha256
-    wrapper = WORK_DIR / "hook-bin" / "claude-fleet-hook"
+    wrapper = WORK_DIR / "hook-bin" / "tongs-agents-hook"
     wrapper.parent.mkdir(parents=True, exist_ok=True)
     _write_wrapper(wrapper)
-    spaced_wrapper = WORK_DIR / "hook bin" / "claude-fleet-hook"
+    spaced_wrapper = WORK_DIR / "hook bin" / "tongs-agents-hook"
     spaced_wrapper.parent.mkdir(parents=True, exist_ok=True)
     _write_wrapper(spaced_wrapper)
     installer_error = None
@@ -821,7 +821,7 @@ def _run_inside(args: argparse.Namespace) -> int:
             "mount_hash_matches": source_matches,
         },
         "installer_builder": {
-            "function": "claude_fleet_monitor.cli._install_hooks",
+            "function": "tongs_agents.cli._install_hooks",
             "config_written": False,
             "command_path": str(spaced_wrapper),
             "error": installer_error,

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.focus import focus_notification
-from claude_fleet_monitor.terminal_apis import _qdbus, konsole
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
+from tongs_agents.focus import focus_notification
+from tongs_agents.terminal_apis import _qdbus, konsole
+from tongs_agents.terminal_apis.base import TerminalAPI
 from tests.konsole_fakes import fake_konsole, qdbus_result
 
 StepError = konsole.KonsoleFocusError
@@ -439,7 +439,7 @@ def _run_kwin_script(titles, windows):
     [
         (
             ["repo : claude"],
-            ["repo : claude \u2014 Konsole", "repo : claude-fleet \u2014 Konsole"],
+            ["repo : claude \u2014 Konsole", "repo : tongs-agents \u2014 Konsole"],
             "repo : claude \u2014 Konsole",
         ),
         (["t"], ["t \u2014 Konsole <2>"], "t \u2014 Konsole <2>"),

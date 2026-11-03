@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _unix_peers
+from tongs_agents.terminal_apis import _unix_peers
 
 SOCKET_PATH = "/run/user/1000/zellij/contract_version_1/session"
 

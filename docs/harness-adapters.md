@@ -8,7 +8,7 @@ is the public capability summary. The detailed rules are in the implemented
 
 ## Start at the registry
 
-The built-in [harness registry](../src/claude_fleet_monitor/harnesses.py)
+The built-in [harness registry](../src/tongs_agents/harnesses.py)
 declares a stable lowercase ID, display name, exact process names, accepted
 events, process identity mode and capabilities. The current entries are:
 
@@ -22,7 +22,7 @@ An identifier is accepted only when it is registered and its event is in that
 entry's allowlist. For example, this is the current normalized event command:
 
 ```text
-claude-fleet-hook fleet-event --agent pi
+tongs-agents-hook fleet-event --agent pi
 ```
 
 Changing `pi` to a proposed ID does not make that harness supported. A future
@@ -32,15 +32,15 @@ contributor scaffolding until that code exists.
 
 The implementation boundary is deliberately small:
 
-- [harnesses.py](../src/claude_fleet_monitor/harnesses.py) owns the registry
+- [harnesses.py](../src/tongs_agents/harnesses.py) owns the registry
   and allowlists.
-- [hook.py](../src/claude_fleet_monitor/hook.py) parses native and normalized
+- [hook.py](../src/tongs_agents/hook.py) parses native and normalized
   events, applies bounds and writes lifecycle updates.
-- [models.py](../src/claude_fleet_monitor/models.py) defines schema-facing
+- [models.py](../src/tongs_agents/models.py) defines schema-facing
   statuses, identity fields and structured focus results.
-- [discovery.py](../src/claude_fleet_monitor/discovery.py) owns process
+- [discovery.py](../src/tongs_agents/discovery.py) owns process
   evidence, canonical storage, locking, atomic writes and safe reads.
-- [focus.py](../src/claude_fleet_monitor/focus.py) resolves a session and
+- [focus.py](../src/tongs_agents/focus.py) resolves a session and
   delegates its captured target to the selected terminal backend.
 
 ## Event contract
@@ -141,7 +141,7 @@ unresolved placeholder after a successful identity migration.
 
 ## Storage, privacy and fail-open behavior
 
-All writes go through [discovery.py](../src/claude_fleet_monitor/discovery.py).
+All writes go through [discovery.py](../src/tongs_agents/discovery.py).
 The configured Fleet directory cannot be a symlink. Symlink record and lock
 entries are ignored or rejected, depending on the operation. Each canonical
 record has its own lock; writes use a private temporary file, flush and an
@@ -163,19 +163,19 @@ runtimes into the hook path.
 
 ## Installer and package ownership
 
-The [CLI installer](../src/claude_fleet_monitor/cli.py) owns Claude Code and
+The [CLI installer](../src/tongs_agents/cli.py) owns Claude Code and
 Codex hook configuration and the Fleet MCP registration. The default command
 configures those two harnesses. Pi is explicit opt-in:
 
 ```bash
-claude-fleet install --agent pi
+tongs-agents install --agent pi
 ```
 
 `--agent all` selects all three. A new adapter needs an explicit CLI selection,
 an upgrade path and an uninstall path. It must preserve unrelated settings and
 must not silently convert an existing user-owned configuration.
 
-Pi's [installer](../src/claude_fleet_monitor/pi_install.py) records an ownership
+Pi's [installer](../src/tongs_agents/pi_install.py) records an ownership
 marker, exact absolute hook and extension paths, and all managed paths. It
 installs the new package path before removing old owned references; failed old
 removals remain recorded for retry. It refuses an unowned config, removes only
@@ -184,16 +184,16 @@ adapter must define equivalent ownership and migration behavior before its
 install command is advertised.
 
 The packaged Pi bridge is a dependency-free JavaScript extension described by
-its [package manifest](../src/claude_fleet_monitor/pi_extension/package.json).
+its [package manifest](../src/tongs_agents/pi_extension/package.json).
 It is installed through Pi's package command, and its hook executable is the
-packaged `claude-fleet-hook`. Optional JavaScript is currently an approved Pi
+packaged `tongs-agents-hook`. Optional JavaScript is currently an approved Pi
 exception to the Python core rule. Do not add an npm or runtime dependency to
 the core solely to add a candidate adapter. Pi lifecycle installation does not
 register an MCP server.
 
 ## Focus and consumer behavior
 
-The [focus service](../src/claude_fleet_monitor/focus.py) uses the target
+The [focus service](../src/tongs_agents/focus.py) uses the target
 captured by the producer. It does not guess another terminal backend after a
 failure. `FocusResult` reports independent target selection and window
 activation operations with `complete`, `partial`, `failed`, `unavailable`,

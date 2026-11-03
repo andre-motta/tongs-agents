@@ -11,10 +11,10 @@ from unittest.mock import patch
 
 from textual.widgets import Input
 
-from claude_fleet_monitor import discovery
-from claude_fleet_monitor.tui import FleetMonitorApp
-from claude_fleet_monitor.widgets.detail_panel import DetailPanel
-from claude_fleet_monitor.widgets.session_table import SessionTable
+from tongs_agents import discovery
+from tongs_agents.tui import FleetMonitorApp
+from tongs_agents.widgets.detail_panel import DetailPanel
+from tongs_agents.widgets.session_table import SessionTable
 
 
 async def validate():

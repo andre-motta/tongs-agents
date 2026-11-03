@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import screen, tmux
-from claude_fleet_monitor.terminal_apis.screen import ScreenAPI
+from tongs_agents.terminal_apis import screen, tmux
+from tongs_agents.terminal_apis.screen import ScreenAPI
 from tests.terminal_env import clear_terminal_markers
 
 STY = "4242.pts-3.fleet"

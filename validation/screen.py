@@ -38,11 +38,11 @@ from probe_terminals import (
     wait_until,
 )
 
-from claude_fleet_monitor.terminal_apis import screen as screen_module
-from claude_fleet_monitor.terminal_apis.screen import ScreenAPI
+from tongs_agents.terminal_apis import screen as screen_module
+from tongs_agents.terminal_apis.screen import ScreenAPI
 
 ROOT = Path(__file__).resolve().parents[1]
-ADAPTER = "src/claude_fleet_monitor/terminal_apis/screen.py"
+ADAPTER = "src/tongs_agents/terminal_apis/screen.py"
 VALIDATOR = "validation/screen.py"
 WINDOWS = ("0", "1", "2", "3")
 CAPTURE_CODE = (
@@ -50,7 +50,7 @@ CAPTURE_CODE = (
     "def forbidden(*args, **kwargs):\n"
     "    raise AssertionError('capture started a process')\n"
     "subprocess.run = subprocess.Popen = forbidden\n"
-    "from claude_fleet_monitor.terminal_apis.screen import ScreenAPI\n"
+    "from tongs_agents.terminal_apis.screen import ScreenAPI\n"
     "json.dump({'detect': ScreenAPI.detect(), 'env': ScreenAPI.capture_env()}, sys.stdout)\n"
 )
 NO_GUI = ("not supported: a screen session owns no GUI window, ScreenAPI declares "

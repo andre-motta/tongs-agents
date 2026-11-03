@@ -6,11 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _applescript, iterm2, macos_terminal
-from claude_fleet_monitor.terminal_apis._applescript import AppleScriptError
-from claude_fleet_monitor.terminal_apis.iterm2 import ITerm2API
-from claude_fleet_monitor.terminal_apis.macos_terminal import MacOSTerminalAPI
-from claude_fleet_monitor.terminal_apis.parent import activate_parent
+from tongs_agents.terminal_apis import _applescript, iterm2, macos_terminal
+from tongs_agents.terminal_apis._applescript import AppleScriptError
+from tongs_agents.terminal_apis.iterm2 import ITerm2API
+from tongs_agents.terminal_apis.macos_terminal import MacOSTerminalAPI
+from tongs_agents.terminal_apis.parent import activate_parent
 from tests.terminal_env import clear_terminal_markers
 
 GUID = "6A1BC2F3-0D4E-4F5A-8B6C-7D8E9F0A1B2C"

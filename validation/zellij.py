@@ -45,9 +45,9 @@ from probe_terminals import (
     zellij_cache_mentions,
 )
 
-from claude_fleet_monitor.terminal_apis import tmux, zellij
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
-from claude_fleet_monitor.terminal_apis.zellij import ZellijAPI
+from tongs_agents.terminal_apis import tmux, zellij
+from tongs_agents.terminal_apis.base import TerminalAPI
+from tongs_agents.terminal_apis.zellij import ZellijAPI
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EVIDENCE = REPO_ROOT / "validation" / "evidence" / "zellij-fedora44.json"
@@ -56,8 +56,8 @@ LEGACY_DETAIL = (
     " session to enable selection"
 )
 HASHED = (
-    "src/claude_fleet_monitor/terminal_apis/zellij.py",
-    "src/claude_fleet_monitor/terminal_apis/_unix_peers.py",
+    "src/tongs_agents/terminal_apis/zellij.py",
+    "src/tongs_agents/terminal_apis/_unix_peers.py",
     "validation/zellij.py",
 )
 PANES = ("0", "1", "2")

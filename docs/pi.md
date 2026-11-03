@@ -1,18 +1,18 @@
 # Pi lifecycle integration
 
-Pi support is optional. Install it after installing both Pi and Claude Fleet
+Pi support is optional. Install it after installing both Pi and Tongs Agents
 Monitor:
 
 ```bash
-claude-fleet install --agent pi
+tongs-agents install --agent pi
 ```
 
 The installer requires Pi 0.84.4 or newer. It checks the version with a temporary
 offline Pi configuration, then asks Pi to install the JavaScript extension that
-is packaged with Claude Fleet Monitor. The extension has no npm dependencies.
+is packaged with Tongs Agents. The extension has no npm dependencies.
 It does not add an MCP server to Pi.
 
-The default `claude-fleet install` command continues to configure Claude Code
+The default `tongs-agents install` command continues to configure Claude Code
 and Codex only. Use `--agent all` to configure all three agents, or select one of
 `claude`, `codex` and `pi`.
 
@@ -22,7 +22,7 @@ so they load the monitoring bridge.
 ## Data and privacy
 
 The extension reports lifecycle state through the installed
-`claude-fleet-hook` executable. It sends the Pi process ID, native session ID,
+`tongs-agents-hook` executable. It sends the Pi process ID, native session ID,
 working directory, a random extension-runtime instance ID, a monotonic sequence
 and minimal status metadata. Tool events include the tool name only.
 
@@ -64,16 +64,16 @@ integration.
 ## Upgrade and removal
 
 Run the Pi install command again after moving or recreating the Python virtual
-environment that contains Claude Fleet Monitor:
+environment that contains Tongs Agents:
 
 ```bash
-claude-fleet install --agent pi
+tongs-agents install --agent pi
 ```
 
 Fleet stores its exact hook and extension paths in
 `$PI_CODING_AGENT_DIR/claude-fleet-monitor.json`, or
 `~/.pi/agent/claude-fleet-monitor.json` by default. The file is marked as owned
-by Claude Fleet Monitor. A repeated install updates those paths, installs the
+by Tongs Agents. A repeated install updates those paths, installs the
 new package path first, and removes old owned references. A failed old-reference
 removal remains recorded so a later install or uninstall can retry it.
 
@@ -82,7 +82,7 @@ removal stop without replacing it. Uninstall passes only paths recorded in the
 owned file to Pi, preserving every unrelated package and extension:
 
 ```bash
-claude-fleet uninstall --agent pi
+tongs-agents uninstall --agent pi
 ```
 
 Restart or exit Pi sessions that were already running when you uninstalled the

@@ -10,7 +10,7 @@ def _session(harness, native, canonical):
 
 
 def test_fleet_session_accepts_canonical_id(monkeypatch):
-    from claude_fleet_monitor import mcp_server
+    from tongs_agents import mcp_server
 
     codex = _session("codex", "shared", "fleet:v1:codex:bbb")
     monkeypatch.setattr(mcp_server, "read_sessions", lambda: [codex])
@@ -19,7 +19,7 @@ def test_fleet_session_accepts_canonical_id(monkeypatch):
 
 
 def test_fleet_session_rejects_ambiguous_native_id(monkeypatch):
-    from claude_fleet_monitor import mcp_server
+    from tongs_agents import mcp_server
 
     sessions = [
         _session("claude", "shared", "fleet:v1:claude:aaa"),
@@ -35,7 +35,7 @@ def test_fleet_session_rejects_ambiguous_native_id(monkeypatch):
 
 
 def test_fleet_session_preserves_unique_native_prefix(monkeypatch):
-    from claude_fleet_monitor import mcp_server
+    from tongs_agents import mcp_server
 
     codex = _session("codex", "native-123", "fleet:v1:codex:bbb")
     monkeypatch.setattr(mcp_server, "read_sessions", lambda: [codex])

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.skipif(NODE is None, reason="Node.js is not installed")
 
 
 def extension_path():
-    from claude_fleet_monitor.pi_install import pi_extension_path
+    from tongs_agents.pi_install import pi_extension_path
 
     return pi_extension_path() / "extensions" / "fleet-monitor.js"
 
@@ -27,7 +27,7 @@ def run_bridge(
     events = tmp_path / "events.jsonl"
     hook_dir = tmp_path / "hook path with spaces"
     hook_dir.mkdir()
-    hook = hook_dir / "claude-fleet-hook"
+    hook = hook_dir / "tongs-agents-hook"
     if hook_exists:
         hook.write_text(hook_body or (
             "#!/usr/bin/env python3\n"

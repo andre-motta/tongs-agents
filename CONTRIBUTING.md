@@ -1,10 +1,10 @@
-# Contributing to Claude Fleet Monitor
+# Contributing to Tongs Agents
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/andre-motta/claude-fleet-monitor.git
-cd claude-fleet-monitor
+git clone https://github.com/andre-motta/tongs-agents.git
+cd tongs-agents
 pip install -e ".[dev]"
 ```
 
@@ -38,7 +38,7 @@ hooks (hook.py)  -->  ~/.claude/fleet/*.json  <--  discovery.py
 - **mcp_server.py**: MCP server exposing fleet tools to Claude Code and Codex sessions.
 - **tui.py**: Textual-based interactive dashboard.
 - **focus.py**: Cross-platform terminal window/tab focus (KDE/GNOME/macOS/Windows).
-- **cli.py**: Entry point for `claude-fleet` command.
+- **cli.py**: Entry point for `tongs-agents` command.
 
 ## Agent-led initiatives
 
@@ -57,4 +57,4 @@ process below without installing the private orchestration skill.
 
 ## Reporting Issues
 
-Use the GitHub issue templates. Include your OS, terminal emulator, Python version, and the output of `claude-fleet status`.
+Use the GitHub issue templates. Include your OS, terminal emulator, Python version, and the output of `tongs-agents status`.

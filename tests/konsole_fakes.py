@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from claude_fleet_monitor.terminal_apis import _qdbus, konsole
+from tongs_agents.terminal_apis import _qdbus, konsole
 
 
 def qdbus_result(returncode=0, stdout=""):

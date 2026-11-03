@@ -5,8 +5,8 @@ import time
 import anyio
 import pytest
 
-import claude_fleet_monitor.discovery as discovery
-import claude_fleet_monitor.mcp_server as mcp_server
+import tongs_agents.discovery as discovery
+import tongs_agents.mcp_server as mcp_server
 from mcp.client.session import ClientSession
 from tests.conftest import write_session
 
@@ -66,7 +66,7 @@ async def test_mcp_protocol_lists_tools_and_returns_fleet_status(
         protocol_smoke(), timeout=5
     )
 
-    assert initialization.serverInfo.name == "claude-fleet"
+    assert initialization.serverInfo.name == "tongs-agents"
     assert {tool.name for tool in tools.tools} == {
         "fleet_status",
         "fleet_session",

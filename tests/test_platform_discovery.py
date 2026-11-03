@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 
 def test_linux_process_info_parses_identity(monkeypatch):
-    from claude_fleet_monitor import discovery
+    from tongs_agents import discovery
 
     fields = ["S", "42"] + ["0"] * 17 + ["987654"]
 
@@ -40,7 +40,7 @@ def test_linux_process_info_parses_identity(monkeypatch):
 
 
 def test_macos_process_info_parses_identity(monkeypatch):
-    from claude_fleet_monitor import discovery
+    from tongs_agents import discovery
 
     def run(command, **kwargs):
         if command[:3] == ["ps", "-o", "ppid="]:
@@ -67,7 +67,7 @@ def test_macos_process_info_parses_identity(monkeypatch):
 
 
 def test_macos_process_info_rejects_failed_query(monkeypatch):
-    from claude_fleet_monitor import discovery
+    from tongs_agents import discovery
 
     monkeypatch.setattr(discovery.sys, "platform", "darwin")
     monkeypatch.setattr(
@@ -79,7 +79,7 @@ def test_macos_process_info_rejects_failed_query(monkeypatch):
 
 
 def test_windows_process_info_has_explicit_limitations(monkeypatch):
-    from claude_fleet_monitor import discovery
+    from tongs_agents import discovery
 
     monkeypatch.setattr(discovery.sys, "platform", "win32")
     monkeypatch.setattr(
@@ -98,7 +98,7 @@ def test_windows_process_info_has_explicit_limitations(monkeypatch):
 
 
 def test_ancestor_walk_requires_exact_process_identity(monkeypatch):
-    from claude_fleet_monitor import discovery
+    from tongs_agents import discovery
 
     processes = {
         500: discovery.ProcessInfo(

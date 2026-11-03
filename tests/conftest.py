@@ -1,7 +1,7 @@
 import json
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _ancestry
+from tongs_agents.terminal_apis import _ancestry
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +19,7 @@ def fleet_dir(tmp_path, monkeypatch):
     d = tmp_path / "fleet"
     d.mkdir()
     monkeypatch.setenv("FLEET_DIR", str(d))
-    import claude_fleet_monitor.discovery as discovery
+    import tongs_agents.discovery as discovery
     monkeypatch.setattr(discovery, "FLEET_DIR", d)
     return d
 
@@ -28,7 +28,7 @@ def fleet_dir(tmp_path, monkeypatch):
 def settings_file(tmp_path, monkeypatch):
     f = tmp_path / "settings.json"
     f.write_text("{}")
-    import claude_fleet_monitor.cli as cli
+    import tongs_agents.cli as cli
     monkeypatch.setattr(cli, "SETTINGS_FILE", f)
     monkeypatch.setattr(cli, "CLAUDE_DIR", tmp_path)
     monkeypatch.setattr(cli, "CODEX_DIR", tmp_path / "codex")

@@ -3,17 +3,17 @@ import os
 
 import pytest
 
-import claude_fleet_monitor.focus as focus_module
-import claude_fleet_monitor.mcp_server as mcp_server
-from claude_fleet_monitor.focus import focus, focus_notification, focus_session
-from claude_fleet_monitor.models import FocusOperation, FocusResult
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
+import tongs_agents.focus as focus_module
+import tongs_agents.mcp_server as mcp_server
+from tongs_agents.focus import focus, focus_notification, focus_session
+from tongs_agents.models import FocusOperation, FocusResult
+from tongs_agents.terminal_apis.base import TerminalAPI
 from tests.conftest import write_session
 
 
 def test_find_session_by_repo(fleet_dir):
     write_session(fleet_dir, "abc-123", "myrepo", "/tmp/myrepo")
-    from claude_fleet_monitor.focus import find_session
+    from tongs_agents.focus import find_session
     result = find_session("myrepo")
     assert result is not None
     assert result["repo"] == "myrepo"
@@ -21,7 +21,7 @@ def test_find_session_by_repo(fleet_dir):
 
 def test_find_session_by_id(fleet_dir):
     write_session(fleet_dir, "abc-123", "myrepo", "/tmp/myrepo")
-    from claude_fleet_monitor.focus import find_session
+    from tongs_agents.focus import find_session
     result = find_session("abc-123")
     assert result is not None
     assert result["session_id"] == "abc-123"
@@ -29,7 +29,7 @@ def test_find_session_by_id(fleet_dir):
 
 def test_find_session_no_match(fleet_dir):
     write_session(fleet_dir, "abc-123", "myrepo", "/tmp/myrepo")
-    from claude_fleet_monitor.focus import find_session
+    from tongs_agents.focus import find_session
     result = find_session("nonexistent")
     assert result is None
 
@@ -37,7 +37,7 @@ def test_find_session_no_match(fleet_dir):
 def test_find_session_prefers_hook_over_proc(fleet_dir):
     write_session(fleet_dir, "hook-sess", "myrepo", "/tmp/myrepo")
     write_session(fleet_dir, "proc-99999", "myrepo", "/tmp/myrepo", source="process")
-    from claude_fleet_monitor.focus import find_session
+    from tongs_agents.focus import find_session
     result = find_session("myrepo")
     assert result["session_id"] == "hook-sess"
 
@@ -45,15 +45,15 @@ def test_find_session_prefers_hook_over_proc(fleet_dir):
 def test_find_session_multiple_returns_none(fleet_dir):
     write_session(fleet_dir, "sess-1", "myrepo", "/tmp/myrepo")
     write_session(fleet_dir, "sess-2", "myrepo", "/tmp/myrepo2")
-    from claude_fleet_monitor.focus import find_session
+    from tongs_agents.focus import find_session
     result = find_session("myrepo")
     assert result is None
 
 
 def test_get_pid_from_proc_session(fleet_dir):
-    from claude_fleet_monitor.discovery import ProcessInfo
-    import claude_fleet_monitor.focus as focus_module
-    from claude_fleet_monitor.focus import get_pid
+    from tongs_agents.discovery import ProcessInfo
+    import tongs_agents.focus as focus_module
+    from tongs_agents.focus import get_pid
     process = ProcessInfo(
         12345, 1, "claude", "claude", ("claude",), "/tmp/myrepo", "1"
     )
@@ -67,14 +67,14 @@ def test_get_pid_from_proc_session(fleet_dir):
 
 
 def test_get_pid_from_stored_pid(fleet_dir, monkeypatch):
-    from claude_fleet_monitor.discovery import ProcessInfo
+    from tongs_agents.discovery import ProcessInfo
     monkeypatch.setattr(
-        "claude_fleet_monitor.focus.resolve_session_process",
+        "tongs_agents.focus.resolve_session_process",
         lambda value: ProcessInfo(
             os.getpid(), 1, "claude", "claude", ("claude",), value["cwd"], "1"
         ),
     )
-    from claude_fleet_monitor.focus import get_pid
+    from tongs_agents.focus import get_pid
     session = {"session_id": "abc-123", "pid": str(os.getpid()), "cwd": "/tmp/myrepo"}
     result = get_pid(session)
     assert result == os.getpid()
@@ -82,9 +82,9 @@ def test_get_pid_from_stored_pid(fleet_dir, monkeypatch):
 
 def test_get_pid_dead_stored_pid(fleet_dir, monkeypatch):
     monkeypatch.setattr(
-        "claude_fleet_monitor.focus.resolve_session_process", lambda value: None
+        "tongs_agents.focus.resolve_session_process", lambda value: None
     )
-    from claude_fleet_monitor.focus import get_pid
+    from tongs_agents.focus import get_pid
     session = {"session_id": "abc-123", "pid": "999999", "cwd": "/tmp/myrepo"}
     result = get_pid(session)
     assert result is None

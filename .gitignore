@@ -6,5 +6,5 @@ build/
 .eggs/
 *.egg
 .venv/
-src/claude_fleet_monitor/_version.py
+src/tongs_agents/_version.py
 _demo/

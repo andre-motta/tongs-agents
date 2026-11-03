@@ -40,16 +40,16 @@ from probe_terminals import (
     wait_until,
 )
 
-from claude_fleet_monitor.terminal_apis import _kwin
-from claude_fleet_monitor.terminal_apis import _qdbus
-from claude_fleet_monitor.terminal_apis import kitty as kitty_module
-from claude_fleet_monitor.terminal_apis.kitty import KittyAPI
+from tongs_agents.terminal_apis import _kwin
+from tongs_agents.terminal_apis import _qdbus
+from tongs_agents.terminal_apis import kitty as kitty_module
+from tongs_agents.terminal_apis.kitty import KittyAPI
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNED = (
-    "src/claude_fleet_monitor/terminal_apis/kitty.py",
-    "src/claude_fleet_monitor/terminal_apis/_kwin.py",
-    "src/claude_fleet_monitor/terminal_apis/_qdbus.py",
+    "src/tongs_agents/terminal_apis/kitty.py",
+    "src/tongs_agents/terminal_apis/_kwin.py",
+    "src/tongs_agents/terminal_apis/_qdbus.py",
     "validation/kitty.py",
 )
 real_which = kitty_module.shutil.which
@@ -58,7 +58,7 @@ SETTLE_LIMIT_SECONDS = 5.0
 DEFAULT_OUT = ROOT / "validation" / "evidence" / "kitty-fedora44.json"
 CAPTURE = (
     "import json, sys\n"
-    "from claude_fleet_monitor.terminal_apis.kitty import KittyAPI\n"
+    "from tongs_agents.terminal_apis.kitty import KittyAPI\n"
     "json.dump({'detect': KittyAPI.detect(), 'env': KittyAPI.capture_env()}, sys.stdout)\n"
 )
 

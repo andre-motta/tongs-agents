@@ -1,7 +1,7 @@
 [project]
-name = "claude-fleet-monitor"
+name = "tongs-agents"
 dynamic = ["version"]
-description = "Fleet monitoring for Claude Code and Codex sessions"
+description = "Agent workspace for tongs: monitor and focus Claude Code, Codex and Pi sessions"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ dependencies = [
 authors = [
     {name = "Andre Motta"},
 ]
-keywords = ["claude", "claude-code", "codex", "mcp", "monitoring", "fleet"]
+keywords = ["tongs", "agents", "claude-code", "codex", "pi", "mcp", "monitoring", "fleet"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
@@ -32,11 +32,11 @@ dev = [
 ]
 
 [project.scripts]
-claude-fleet = "claude_fleet_monitor.cli:main"
-claude-fleet-hook = "claude_fleet_monitor.hook:main"
+tongs-agents = "tongs_agents.cli:main"
+tongs-agents-hook = "tongs_agents.hook:main"
 
 [project.entry-points."tongs.plugins"]
-fleet-monitor = "claude_fleet_monitor.tongs_plugin:FleetMonitorPlugin"
+fleet-monitor = "tongs_agents.tongs_plugin:FleetMonitorPlugin"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -46,10 +46,10 @@ build-backend = "hatchling.build"
 source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
-version-file = "src/claude_fleet_monitor/_version.py"
+version-file = "src/tongs_agents/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_fleet_monitor"]
+packages = ["src/tongs_agents"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

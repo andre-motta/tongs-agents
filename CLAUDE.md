@@ -1,4 +1,4 @@
-# Claude Fleet Monitor
+# Tongs Agents
 
 Fleet monitoring for Claude Code and Codex sessions. The core is pure Python and cross-platform.
 The approved Pi integration may package an optional dependency-free JavaScript extension.
@@ -41,7 +41,7 @@ Codex sessions --------/
 - `views/fleet_screen.py`: `FleetScreen(Screen)` for embedding in tongs. Same features as standalone but escape pops back.
 - `tongs_plugin.py`: `FleetMonitorPlugin(TongsPlugin)` ABC implementation. Optional tongs dependency. Registers command palette entry and screen.
 - `focus.py`: Session lookup and PID resolution. Delegates to terminal APIs for actual focus.
-- `cli.py`: Entry point for `claude-fleet` command. Installs Claude Code and Codex hooks and MCP configuration, then delegates to tui/focus/status.
+- `cli.py`: Entry point for `tongs-agents` command. Installs Claude Code and Codex hooks and MCP configuration, then delegates to tui/focus/status.
 
 ### Terminal APIs (`terminal_apis/`)
 

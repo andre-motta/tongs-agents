@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.models import FocusOperation, FocusResult
+from tongs_agents.models import FocusOperation, FocusResult
 
 
 def _result(state):
@@ -59,8 +59,8 @@ def _result(state):
 @pytest.mark.parametrize(
     ("module_name", "class_name"),
     [
-        ("claude_fleet_monitor.tui", "FleetMonitorApp"),
-        ("claude_fleet_monitor.views.fleet_screen", "FleetScreen"),
+        ("tongs_agents.tui", "FleetMonitorApp"),
+        ("tongs_agents.views.fleet_screen", "FleetScreen"),
     ],
 )
 def test_focus_consumer_notifies_completed_result(
@@ -87,8 +87,8 @@ class _ImmediateThread:
 @pytest.mark.parametrize(
     ("module_name", "class_name"),
     [
-        ("claude_fleet_monitor.tui", "FleetMonitorApp"),
-        ("claude_fleet_monitor.views.fleet_screen", "FleetScreen"),
+        ("tongs_agents.tui", "FleetMonitorApp"),
+        ("tongs_agents.views.fleet_screen", "FleetScreen"),
     ],
 )
 def test_focus_consumer_dispatches_worker_result_to_ui_thread(

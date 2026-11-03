@@ -24,7 +24,7 @@ def main():
         }
         (Path(directory) / 'fixture.json').write_text(json.dumps(fixture))
         process = subprocess.Popen(
-            [sys.executable, '-u', '-m', 'claude_fleet_monitor.mcp_server'],
+            [sys.executable, '-u', '-m', 'tongs_agents.mcp_server'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, bufsize=0,
         )
@@ -66,7 +66,7 @@ def main():
                 'clientInfo': {'name': 'fleet-validation', 'version': '1'},
             }})
             initialized = response(1)
-            assert initialized['serverInfo']['name'] == 'claude-fleet'
+            assert initialized['serverInfo']['name'] == 'tongs-agents'
             send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
             send({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list', 'params': {}})
             listing = response(2)

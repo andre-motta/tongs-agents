@@ -3,11 +3,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.terminal_apis import _qdbus, ghostty, gnome, konsole, tmux
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
-from claude_fleet_monitor.terminal_apis.generic import GenericAPI
-from claude_fleet_monitor.terminal_apis.tmux import TmuxAPI
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.terminal_apis import _qdbus, ghostty, gnome, konsole, tmux
+from tongs_agents.terminal_apis.base import TerminalAPI
+from tongs_agents.terminal_apis.generic import GenericAPI
+from tongs_agents.terminal_apis.tmux import TmuxAPI
 from tests.konsole_fakes import fake_konsole as _fake_konsole
 
 
@@ -748,7 +748,7 @@ def test_detect_parent_terminal_uses_shared_process_discovery(monkeypatch):
         lambda pid: calls.append(pid) or processes.get(pid),
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.get_terminal_api",
+        "tongs_agents.terminal_apis.get_terminal_api",
         lambda name: expected if name == "konsole" else None,
     )
 

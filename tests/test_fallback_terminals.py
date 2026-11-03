@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _x11, generic, gnome, windows_terminal
-from claude_fleet_monitor.terminal_apis.generic import GenericAPI
-from claude_fleet_monitor.terminal_apis.gnome import GnomeAPI
-from claude_fleet_monitor.terminal_apis.windows_terminal import WindowsTerminalAPI
+from tongs_agents.terminal_apis import _x11, generic, gnome, windows_terminal
+from tongs_agents.terminal_apis.generic import GenericAPI
+from tongs_agents.terminal_apis.gnome import GnomeAPI
+from tongs_agents.terminal_apis.windows_terminal import WindowsTerminalAPI
 
 
 class _Forbidden:

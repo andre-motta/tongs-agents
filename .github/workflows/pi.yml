@@ -38,7 +38,7 @@ jobs:
             printf 'checkout_tree=%s\n' "$(git rev-parse 'HEAD^{tree}')"
             printf 'intended_provider=synthetic localhost HTTP fixture\n'
             printf 'intended_pi_process=real installed Pi CLI process\n'
-            printf 'intended_hook_process=real claude-fleet-hook process\n'
+            printf 'intended_hook_process=real tongs-agents-hook process\n'
             printf 'intended_tmux_process_and_pane=real detached tmux server and pane selection\n'
             printf 'intended_model_calls=none\n'
             printf 'intended_gui_window_focus=not exercised\n'

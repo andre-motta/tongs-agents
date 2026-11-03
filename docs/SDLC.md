@@ -1,4 +1,4 @@
-# Fleet Monitor SDLC profile
+# Tongs Agents SDLC profile
 
 Fleet Monitor adopts Agent SDLC **0.2.4**. Andre approved migrating from the
 earlier 0.1.0 baseline on 2026-10-09; the terminal focus initiative (#32, #47)
@@ -9,7 +9,7 @@ active initiative until a migration is agreed again.
 
 | Setting | Project value |
 | --- | --- |
-| Repository and tracker | Public `andre-motta/claude-fleet-monitor`; GitHub Issues and PRs, native sub-issue/blocking links plus readable dependencies |
+| Repository and tracker | Public `andre-motta/tongs-agents`; GitHub Issues and PRs, native sub-issue/blocking links plus readable dependencies |
 | Default branch | `main`; merging into it is Andre's acceptance gate |
 | Feature integration | One local integration branch per initiative when it has several items, owned by the orchestrator; none active |
 | Worktrees | One isolated worktree and branch per work item, outside the repository checkout; removed once integrated |
@@ -87,6 +87,12 @@ live evidence explicitly.
 
 ## Initiatives
 
+Issue and PR numbers recorded before the rename (2026-11-02) refer to the
+[claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
+
+- Active: tongs-agents. Item 1 is the behaviour-neutral rename from
+  claude-fleet-monitor; the workspace, multiplexer, profiles and config
+  emitter plan follows its discovery and design gates.
 - Delivered: terminal focus (#32, #47) in v0.8.0 and its follow-ups (#49 to
   #52) in v0.9.0, one PR per issue into `main`. See
   [terminal focus](work/terminal-focus.md).

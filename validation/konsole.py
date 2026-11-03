@@ -12,7 +12,7 @@ import sys
 import tempfile
 import time
 
-from claude_fleet_monitor.terminal_apis.konsole import KonsoleAPI
+from tongs_agents.terminal_apis.konsole import KonsoleAPI
 
 
 def process_identity(pid):

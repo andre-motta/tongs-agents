@@ -1,13 +1,13 @@
 import pytest
 
-from claude_fleet_monitor.terminal_apis import parent as parent_routing
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
-from claude_fleet_monitor.terminal_apis.generic import GenericAPI
-from claude_fleet_monitor.terminal_apis.parent import (
+from tongs_agents.terminal_apis import parent as parent_routing
+from tongs_agents.terminal_apis.base import TerminalAPI
+from tongs_agents.terminal_apis.generic import GenericAPI
+from tongs_agents.terminal_apis.parent import (
     ParentActivation,
     activate_parent,
 )
-from claude_fleet_monitor.terminal_apis.terminator import TerminatorAPI
+from tongs_agents.terminal_apis.terminator import TerminatorAPI
 
 
 class RecordingParent(TerminalAPI):

@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor import discovery
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.terminal_apis import (
+from tongs_agents import discovery
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.terminal_apis import (
     TERMINALS,
     _env,
     capture_terminal_info,
@@ -20,11 +20,11 @@ from claude_fleet_monitor.terminal_apis import (
     tmux,
     zellij,
 )
-from claude_fleet_monitor.terminal_apis import _ancestry as ancestry
-from claude_fleet_monitor.terminal_apis.ghostty import GhosttyAPI
-from claude_fleet_monitor.terminal_apis.kitty import KittyAPI
-from claude_fleet_monitor.terminal_apis.tmux import TmuxAPI
-from claude_fleet_monitor.terminal_apis.zellij import ZellijAPI
+from tongs_agents.terminal_apis import _ancestry as ancestry
+from tongs_agents.terminal_apis.ghostty import GhosttyAPI
+from tongs_agents.terminal_apis.kitty import KittyAPI
+from tongs_agents.terminal_apis.tmux import TmuxAPI
+from tongs_agents.terminal_apis.zellij import ZellijAPI
 from tests.terminal_env import clear_terminal_markers
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -141,7 +141,7 @@ def test_vte_alone_does_not_claim_gnome_terminal(monkeypatch):
 
 def test_ghostty_missing_ancestry_is_not_a_tab(monkeypatch):
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.ghostty.discovery.get_process_info",
+        "tongs_agents.terminal_apis.ghostty.discovery.get_process_info",
         lambda pid: None,
     )
     result = GhosttyAPI().focus_result(101, {})
@@ -153,7 +153,7 @@ def test_ghostty_activates_before_global_tab_keys(monkeypatch):
     calls = []
     api = GhosttyAPI()
     monkeypatch.setattr(
-        "claude_fleet_monitor.terminal_apis.ghostty.time.sleep",
+        "tongs_agents.terminal_apis.ghostty.time.sleep",
         lambda seconds: calls.append(("delay", seconds)),
     )
     monkeypatch.setattr(api, "find_tab", lambda pid, env: "101:2")
@@ -557,7 +557,7 @@ def _proc(monkeypatch, *chain, platform="linux"):
 
 def _agent_under(*ancestors):
     """Hook, agent and shell, then the given comm names, then systemd as pid 1."""
-    names = ["claude-fleet-ho", "claude", "bash", *ancestors]
+    names = ["tongs-agents-ho", "claude", "bash", *ancestors]
     pids = [HOOK_PID - index * 10 for index in range(len(names))] + [1]
     chain = [(pid, comm, ppid) for pid, comm, ppid in zip(pids, names, pids[1:])]
     return [*chain, (1, "systemd", 0)]
@@ -850,17 +850,17 @@ def test_parse_stat(text, expected):
 @pytest.mark.parametrize(
     "chain",
     [
-        pytest.param([(900, "claude-fleet-ho", 890)], id="unreadable-parent"),
+        pytest.param([(900, "tongs-agents-ho", 890)], id="unreadable-parent"),
         pytest.param(
-            [(900, "claude-fleet-ho", 890), (890, "claude", 880), (880, "bash", 890)],
+            [(900, "tongs-agents-ho", 890), (890, "claude", 880), (880, "bash", 890)],
             id="cycle",
         ),
         pytest.param(
-            [(900, "claude-fleet-ho", 900)],
+            [(900, "tongs-agents-ho", 900)],
             id="self-parent",
         ),
         pytest.param(
-            [(900, "claude-fleet-ho", 0)],
+            [(900, "tongs-agents-ho", 0)],
             id="no-parent",
         ),
     ],
@@ -1007,6 +1007,6 @@ def test_ancestry_never_reads_environ_or_cmdline():
 
 @pytest.mark.parametrize("comm", ["Terminal", "iTerm2", "WindowsTerminal"])
 def test_linux_ancestry_ignores_non_linux_terminal_names(comm):
-    from claude_fleet_monitor.terminal_apis import _ancestry
+    from tongs_agents.terminal_apis import _ancestry
 
     assert _ancestry.comm_terminal(comm) is None

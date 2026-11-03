@@ -235,8 +235,8 @@ def verify_tmux_focus(started, fleet_dir):
             [*command, "select-pane", "-t", other], timeout=5, check=True
         )
         before = active_tmux_pane(command)
-        from claude_fleet_monitor import discovery
-        from claude_fleet_monitor.focus import focus_session
+        from tongs_agents import discovery
+        from tongs_agents.focus import focus_session
 
         discovery.FLEET_DIR = fleet_dir
         result = focus_session(started["canonical_id"])
@@ -268,10 +268,10 @@ def verify_tmux_focus(started, fleet_dir):
 def validate(require_tmux):
     FixtureProvider.calls = 0
     pi_command = shutil.which("pi")
-    hook_command = shutil.which("claude-fleet-hook")
+    hook_command = shutil.which("tongs-agents-hook")
     tmux_command = shutil.which("tmux")
     if pi_command is None or hook_command is None:
-        raise RuntimeError("pi and claude-fleet-hook must be on PATH")
+        raise RuntimeError("pi and tongs-agents-hook must be on PATH")
     if require_tmux and (tmux_command is None or not os.environ.get("TMUX")):
         raise RuntimeError("run this validator inside an isolated tmux session")
 
@@ -322,7 +322,7 @@ def validate(require_tmux):
         })
 
         install = subprocess.run(
-            [sys.executable, "-m", "claude_fleet_monitor.cli", "install", "--agent", "pi"],
+            [sys.executable, "-m", "tongs_agents.cli", "install", "--agent", "pi"],
             env=environment,
             capture_output=True,
             text=True,
@@ -334,7 +334,7 @@ def validate(require_tmux):
         if installed_settings.get("extensions") != [str(fixture_extension)]:
             raise RuntimeError("Pi install replaced an unrelated extension")
         repeated_install = subprocess.run(
-            [sys.executable, "-m", "claude_fleet_monitor.cli", "install", "--agent", "pi"],
+            [sys.executable, "-m", "tongs_agents.cli", "install", "--agent", "pi"],
             env=environment,
             capture_output=True,
             text=True,
@@ -484,7 +484,7 @@ def validate(require_tmux):
             )
             abrupt.process.kill()
             abrupt.process.wait(timeout=10)
-            from claude_fleet_monitor import discovery
+            from tongs_agents import discovery
 
             discovery.FLEET_DIR = fleet_dir
             discovery.read_sessions()
@@ -511,7 +511,7 @@ def validate(require_tmux):
         ).stdout.strip()
         uninstall = subprocess.run(
             [
-                sys.executable, "-m", "claude_fleet_monitor.cli", "uninstall",
+                sys.executable, "-m", "tongs_agents.cli", "uninstall",
                 "--agent", "pi", "--keep-data",
             ],
             env=environment,
@@ -530,7 +530,7 @@ def validate(require_tmux):
             raise RuntimeError("Pi uninstall left its ownership config")
         repeated_uninstall = subprocess.run(
             [
-                sys.executable, "-m", "claude_fleet_monitor.cli", "uninstall",
+                sys.executable, "-m", "tongs_agents.cli", "uninstall",
                 "--agent", "pi", "--keep-data",
             ],
             env=environment,

@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import kitty, tmux
-from claude_fleet_monitor.terminal_apis.kitty import KittyAPI
-from claude_fleet_monitor.terminal_apis.parent import activate_parent
-from claude_fleet_monitor.terminal_apis.tmux import TmuxAPI
+from tongs_agents.terminal_apis import kitty, tmux
+from tongs_agents.terminal_apis.kitty import KittyAPI
+from tongs_agents.terminal_apis.parent import activate_parent
+from tongs_agents.terminal_apis.tmux import TmuxAPI
 from tests.terminal_env import clear_terminal_markers
 
 ADDRESS = "unix:/tmp/fleet-kitty-test/rc.sock"
@@ -642,7 +642,7 @@ def test_activation_confirmed_by_kitty_focus_readback(desktop):
     ]
     assert api.raise_requested
     assert fake.kwin == [
-        (QDBUS, KITTY_PID, {"plugin_prefix": "claude-fleet-kitty", "report": True})
+        (QDBUS, KITTY_PID, {"plugin_prefix": "tongs-agents-kitty", "report": True})
     ]
 
 

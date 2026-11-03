@@ -9,8 +9,8 @@ import sys
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import zellij
-from claude_fleet_monitor.terminal_apis.zellij import ZellijAPI
+from tongs_agents.terminal_apis import zellij
+from tongs_agents.terminal_apis.zellij import ZellijAPI
 
 ROOT = Path(__file__).parents[1]
 

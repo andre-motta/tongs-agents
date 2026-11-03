@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _kwin, _qdbus, konsole
+from tongs_agents.terminal_apis import _kwin, _qdbus, konsole
 
 QDBUS = "/usr/bin/qdbus-qt6"
 NODE = shutil.which("node")
@@ -109,11 +109,11 @@ def test_plain_activation_never_polls_and_returns_true(fake_kwin):
     fake = fake_kwin()
 
     assert _kwin.activate_owned_window(
-        QDBUS, 7, plugin_prefix="claude-fleet-focus", titles=["t"]
+        QDBUS, 7, plugin_prefix="tongs-agents-focus", titles=["t"]
     )
     assert "org.kde.kwin.Scripting.isScriptLoaded" not in fake.methods()
     assert "callDBus" not in fake.scripts[0][0]
-    assert fake.scripts[0][1].startswith("claude-fleet-focus-")
+    assert fake.scripts[0][1].startswith("tongs-agents-focus-")
 
 
 @pytest.mark.parametrize("report", [True, False])
@@ -227,7 +227,7 @@ def _window(id, pid=500, normal=True, deleted=False, caption="sh"):
          "no-type-info", "string-pid", "empty"],
 )
 def test_script_activates_exactly_one_normal_owned_window(windows, active):
-    plugin = "claude-fleet-kitty-0123"
+    plugin = "tongs-agents-kitty-0123"
     result = _run(_kwin.activation_script(500, report_plugin=plugin), windows)
 
     assert result["active"] == active
@@ -308,7 +308,7 @@ def test_script_matches_marker_titles_literally(marker):
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 @pytest.mark.parametrize("report", [True, False])
 def test_refused_activation_is_not_reported(report):
-    plugin = "claude-fleet-kitty-0123"
+    plugin = "tongs-agents-kitty-0123"
     script = _kwin.activation_script(
         500, report_plugin=plugin if report else None
     )

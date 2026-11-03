@@ -5,9 +5,9 @@ import dataclasses
 import pytest
 from textual.app import App, ComposeResult
 
-from claude_fleet_monitor.models import FleetSession, SessionStatus
-from claude_fleet_monitor.terminal_apis import TERMINALS
-from claude_fleet_monitor.widgets.session_table import TERMINAL_ABBREV, SessionTable
+from tongs_agents.models import FleetSession, SessionStatus
+from tongs_agents.terminal_apis import TERMINALS
+from tongs_agents.widgets.session_table import TERMINAL_ABBREV, SessionTable
 
 
 def _session(

@@ -7,8 +7,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.models import SCHEMA_VERSION, canonical_session_id
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.models import SCHEMA_VERSION, canonical_session_id
 
 
 def make_record(
@@ -45,7 +45,7 @@ def make_record(
 
 
 def test_registry_declares_process_identity_and_capabilities():
-    from claude_fleet_monitor.harnesses import ProcessIdentity, get_harness
+    from tongs_agents.harnesses import ProcessIdentity, get_harness
     assert get_harness("claude").process_identity is ProcessIdentity.DISCOVERABLE
     assert "terminal-focus" in get_harness("codex").capabilities
     assert get_harness("pi").process_identity is ProcessIdentity.EMITTER
@@ -53,7 +53,7 @@ def test_registry_declares_process_identity_and_capabilities():
 
 
 def test_hostile_native_id_never_becomes_a_path(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     hostile = "../../outside/\N{SNOWMAN}"
     record = make_record(session=hostile)
     assert write_session_record(record)
@@ -65,12 +65,12 @@ def test_hostile_native_id_never_becomes_a_path(fleet_dir):
 
 
 def test_mixed_harnesses_with_same_native_id_are_distinct(fleet_dir, monkeypatch):
-    from claude_fleet_monitor.discovery import read_sessions, write_session_record
+    from tongs_agents.discovery import read_sessions, write_session_record
     monkeypatch.setattr(
-        "claude_fleet_monitor.discovery.discover_processes", lambda: None
+        "tongs_agents.discovery.discover_processes", lambda: None
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.discovery._cleanup_stale_sessions", lambda: None
+        "tongs_agents.discovery._cleanup_stale_sessions", lambda: None
     )
     claude = make_record("claude", "same", "101:20")
     codex = make_record("codex", "same", "202:30")
@@ -85,7 +85,7 @@ def test_mixed_harnesses_with_same_native_id_are_distinct(fleet_dir, monkeypatch
 
 
 def test_symlink_record_is_ignored_and_never_followed(fleet_dir, tmp_path):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     target = tmp_path / "target.json"
     target.write_text('{"sentinel": true}')
     link = fleet_dir / "legacy.json"
@@ -101,7 +101,7 @@ def test_symlink_record_is_ignored_and_never_followed(fleet_dir, tmp_path):
 
 
 def test_oversized_and_malformed_records_are_ignored(fleet_dir):
-    from claude_fleet_monitor.discovery import (
+    from tongs_agents.discovery import (
         MAX_RECORD_BYTES,
         read_stored_sessions,
         write_session_record,
@@ -126,7 +126,7 @@ def test_oversized_and_malformed_records_are_ignored(fleet_dir):
 
 
 def test_schema_one_record_requires_derived_id_and_filename(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions
+    from tongs_agents.discovery import read_stored_sessions
 
     wrong_id = make_record(session="wrong-id")
     wrong_id["canonical_id"] = canonical_session_id(
@@ -147,7 +147,7 @@ def test_schema_one_record_requires_derived_id_and_filename(fleet_dir):
 
 
 def test_explicit_sequence_rejects_replay_and_out_of_order(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     newest = make_record(sequence=2)
     newest["detail"] = "newest"
     stale = make_record(sequence=1)
@@ -163,7 +163,7 @@ def test_explicit_sequence_rejects_replay_and_out_of_order(fleet_dir):
 
 
 def test_instance_token_cannot_move_to_another_process(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     original = make_record(sequence=1)
     moved = make_record(sequence=2)
     moved["pid"] = "202"
@@ -174,7 +174,7 @@ def test_instance_token_cannot_move_to_another_process(fleet_dir):
 
 
 def test_unsequenced_events_use_serialized_arrival_order(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     first = make_record()
     first["detail"] = "first"
     second = make_record()
@@ -187,7 +187,7 @@ def test_unsequenced_events_use_serialized_arrival_order(fleet_dir):
 
 
 def test_concurrent_sequenced_writers_keep_highest_event(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     barrier = threading.Barrier(12)
 
     def emit(sequence):
@@ -204,7 +204,7 @@ def test_concurrent_sequenced_writers_keep_highest_event(fleet_dir):
 
 
 def test_atomic_readers_never_observe_partial_json(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     assert write_session_record(make_record(sequence=0))
     failures = []
 
@@ -225,13 +225,13 @@ def test_atomic_readers_never_observe_partial_json(fleet_dir):
 
 
 def test_denied_replace_preserves_known_record(fleet_dir, monkeypatch):
-    from claude_fleet_monitor.discovery import read_stored_sessions, write_session_record
+    from tongs_agents.discovery import read_stored_sessions, write_session_record
     first = make_record(sequence=1)
     assert write_session_record(first)
     update = make_record(sequence=2)
     update["detail"] = "must not appear"
     monkeypatch.setattr(
-        "claude_fleet_monitor.discovery.os.replace",
+        "tongs_agents.discovery.os.replace",
         lambda *args: (_ for _ in ()).throw(PermissionError("denied")),
     )
     assert not write_session_record(update)
@@ -241,7 +241,7 @@ def test_denied_replace_preserves_known_record(fleet_dir, monkeypatch):
 
 
 def test_process_match_uses_executable_identity_not_arguments():
-    from claude_fleet_monitor.discovery import process_matches_harness
+    from tongs_agents.discovery import process_matches_harness
     unrelated = ProcessInfo(
         1, 0, "python", "python3", ("python3", "--label", "claude"), "/tmp", "1"
     )
@@ -251,10 +251,10 @@ def test_process_match_uses_executable_identity_not_arguments():
 
 
 def test_explicit_instance_rejects_reused_pid(monkeypatch):
-    from claude_fleet_monitor.discovery import resolve_session_process
+    from tongs_agents.discovery import resolve_session_process
     process = ProcessInfo(101, 1, "claude", "claude", ("claude",), "/tmp", "new")
     monkeypatch.setattr(
-        "claude_fleet_monitor.discovery.get_process_info", lambda pid: process
+        "tongs_agents.discovery.get_process_info", lambda pid: process
     )
     assert resolve_session_process({
         "pid": "101", "agent": "claude", "instance_id": "old-run",
@@ -263,10 +263,10 @@ def test_explicit_instance_rejects_reused_pid(monkeypatch):
 
 
 def test_windows_liveness_uses_read_only_process_query(monkeypatch):
-    from claude_fleet_monitor.discovery import _is_pid_alive
-    monkeypatch.setattr("claude_fleet_monitor.discovery.sys.platform", "win32")
+    from tongs_agents.discovery import _is_pid_alive
+    monkeypatch.setattr("tongs_agents.discovery.sys.platform", "win32")
     monkeypatch.setattr(
-        "claude_fleet_monitor.discovery.subprocess.run",
+        "tongs_agents.discovery.subprocess.run",
         lambda *args, **kwargs: type("Result", (), {
             "stdout": '"claude.exe","101","Console","1","1 K"\n',
             "returncode": 0,
@@ -279,7 +279,7 @@ def test_windows_liveness_uses_read_only_process_query(monkeypatch):
 
 
 def test_legacy_record_without_agent_defaults_to_claude(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions
+    from tongs_agents.discovery import read_stored_sessions
     (fleet_dir / "legacy.json").write_text(json.dumps({
         "session_id": "legacy", "cwd": "/tmp/repo", "repo": "repo",
         "status": "idle", "detail": "", "ts": int(time.time()),
@@ -289,8 +289,8 @@ def test_legacy_record_without_agent_defaults_to_claude(fleet_dir):
 
 
 def test_legacy_records_cannot_inject_canonical_identity(fleet_dir):
-    from claude_fleet_monitor.discovery import read_stored_sessions
-    from claude_fleet_monitor.models import parse_session
+    from tongs_agents.discovery import read_stored_sessions
+    from tongs_agents.models import parse_session
 
     for index, session_id in enumerate(("legacy-a", "legacy-b")):
         (fleet_dir / f"legacy-{index}.json").write_text(json.dumps({
@@ -312,7 +312,7 @@ def test_legacy_records_cannot_inject_canonical_identity(fleet_dir):
 
 
 def test_record_lookup_rejects_invalid_identifier_text(fleet_dir):
-    from claude_fleet_monitor.discovery import (
+    from tongs_agents.discovery import (
         delete_session_record,
         read_session_record,
     )
@@ -322,7 +322,7 @@ def test_record_lookup_rejects_invalid_identifier_text(fleet_dir):
 
 
 def test_terminal_focus_reports_partial_and_boolean_compatibility():
-    from claude_fleet_monitor.terminal_apis.base import TerminalAPI
+    from tongs_agents.terminal_apis.base import TerminalAPI
 
     class WindowOnly(TerminalAPI):
         name = "window-only"
@@ -342,7 +342,7 @@ def test_terminal_focus_reports_partial_and_boolean_compatibility():
 
 
 def test_terminal_target_lookup_exception_is_structured():
-    from claude_fleet_monitor.terminal_apis.base import TerminalAPI
+    from tongs_agents.terminal_apis.base import TerminalAPI
 
     class BrokenLookup(TerminalAPI):
         name = "broken"
@@ -362,7 +362,7 @@ def test_terminal_target_lookup_exception_is_structured():
 
 
 def test_focus_does_not_fallback_from_captured_terminal(monkeypatch):
-    from claude_fleet_monitor.focus import focus_session
+    from tongs_agents.focus import focus_session
     session = make_record()
     session["terminal"] = "missing-terminal"
     session["focus_target"]["terminal"] = "missing-terminal"
@@ -370,10 +370,10 @@ def test_focus_does_not_fallback_from_captured_terminal(monkeypatch):
     session["_legacy"] = False
     process = ProcessInfo(101, 1, "claude", "claude", ("claude",), "/tmp", "20")
     monkeypatch.setattr(
-        "claude_fleet_monitor.focus.read_session_records", lambda: [session]
+        "tongs_agents.focus.read_session_records", lambda: [session]
     )
     monkeypatch.setattr(
-        "claude_fleet_monitor.focus.resolve_session_process", lambda value: process
+        "tongs_agents.focus.resolve_session_process", lambda value: process
     )
     result = focus_session("session-1")
     assert result.state == "unavailable"
@@ -381,14 +381,14 @@ def test_focus_does_not_fallback_from_captured_terminal(monkeypatch):
 
 
 def test_ambiguous_native_session_id_reports_ambiguity(monkeypatch):
-    from claude_fleet_monitor.focus import focus_session
+    from tongs_agents.focus import focus_session
     claude = make_record("claude", "shared", "101:20")
     codex = make_record("codex", "shared", "202:30")
     for record in (claude, codex):
         record["_process"] = False
         record["_legacy"] = False
     monkeypatch.setattr(
-        "claude_fleet_monitor.focus.read_session_records", lambda: [claude, codex]
+        "tongs_agents.focus.read_session_records", lambda: [claude, codex]
     )
     result = focus_session("shared")
     assert result.state == "ambiguous"
@@ -400,10 +400,10 @@ def test_ambiguous_native_session_id_reports_ambiguity(monkeypatch):
 def test_normalized_emitter_event_requires_sequence_and_namespace(
     fleet_dir, monkeypatch
 ):
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.hook import handle
     process = ProcessInfo(303, 1, "node", "node", ("node",), "/tmp/repo", "40")
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.resolve_process_identity",
+        "tongs_agents.hook.resolve_process_identity",
         lambda harness, pid=None: process,
     )
     payload = {
@@ -424,12 +424,12 @@ def test_normalized_emitter_event_requires_sequence_and_namespace(
 
 
 def test_emitter_instance_named_unresolved_is_not_deleted(fleet_dir, monkeypatch):
-    from claude_fleet_monitor.discovery import read_session_records
-    from claude_fleet_monitor.hook import handle
+    from tongs_agents.discovery import read_session_records
+    from tongs_agents.hook import handle
 
     process = ProcessInfo(303, 1, "node", "node", ("node",), "/tmp/repo", "40")
     monkeypatch.setattr(
-        "claude_fleet_monitor.hook.resolve_process_identity",
+        "tongs_agents.hook.resolve_process_identity",
         lambda harness, pid=None: process,
     )
     payload = {
@@ -453,8 +453,8 @@ def test_emitter_instance_named_unresolved_is_not_deleted(fleet_dir, monkeypatch
 
 
 def test_cli_quotes_hook_executable_with_spaces(monkeypatch):
-    from claude_fleet_monitor.cli import _install_hooks
-    monkeypatch.setattr("claude_fleet_monitor.cli.os.name", "posix")
+    from tongs_agents.cli import _install_hooks
+    monkeypatch.setattr("tongs_agents.cli.os.name", "posix")
     config = {}
     _install_hooks(config, [("SessionStart", "session-start")], "/opt/Fleet App/hook", "claude")
     command = config["hooks"]["SessionStart"][0]["hooks"][0]["command"]
@@ -462,8 +462,8 @@ def test_cli_quotes_hook_executable_with_spaces(monkeypatch):
 
 
 def test_cli_quotes_windows_hook_executable(monkeypatch):
-    from claude_fleet_monitor.cli import _install_hooks
-    monkeypatch.setattr("claude_fleet_monitor.cli.os.name", "nt")
+    from tongs_agents.cli import _install_hooks
+    monkeypatch.setattr("tongs_agents.cli.os.name", "nt")
     config = {}
     _install_hooks(
         config,

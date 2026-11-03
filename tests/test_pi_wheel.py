@@ -34,9 +34,9 @@ def test_wheel_contains_loadable_pi_extension(tmp_path):
     assert len(wheels) == 1
     with zipfile.ZipFile(wheels[0]) as archive:
         names = set(archive.namelist())
-        assert "claude_fleet_monitor/pi_extension/package.json" in names
+        assert "tongs_agents/pi_extension/package.json" in names
         assert (
-            "claude_fleet_monitor/pi_extension/extensions/fleet-monitor.js"
+            "tongs_agents/pi_extension/extensions/fleet-monitor.js"
             in names
         )
         extracted = tmp_path / "extracted"
@@ -46,7 +46,7 @@ def test_wheel_contains_loadable_pi_extension(tmp_path):
         [
             sys.executable,
             "-c",
-            "from claude_fleet_monitor.pi_install import pi_extension_path; "
+            "from tongs_agents.pi_install import pi_extension_path; "
             "print(pi_extension_path())",
         ],
         cwd=tmp_path,

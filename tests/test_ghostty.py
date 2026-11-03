@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.terminal_apis import _qdbus, ghostty
-from claude_fleet_monitor.terminal_apis.ghostty import GhosttyAPI
+from tongs_agents.terminal_apis import _qdbus, ghostty
+from tongs_agents.terminal_apis.ghostty import GhosttyAPI
 
 QDBUS = "/usr/bin/qdbus-qt6"
 GHOSTTY_PID = 4242
@@ -177,8 +177,8 @@ def test_kwin_script_filters_by_owner_and_is_always_unloaded(desktop):
     script, plugin, path = desktop.scripts[0]
     assert f"var owner = {json.dumps(GHOSTTY_PID)};" in script
     assert "resourceClass" not in script
-    assert plugin.startswith("claude-fleet-ghostty-")
-    assert plugin != "claude-fleet-ghostty-"
+    assert plugin.startswith("tongs-agents-ghostty-")
+    assert plugin != "tongs-agents-ghostty-"
     assert desktop.unloaded == [plugin]
     assert not os.path.exists(path)
 
@@ -277,7 +277,7 @@ def test_kwin_fdopen_failure_closes_the_descriptor(monkeypatch, tmp_path):
     monkeypatch.setattr(_qdbus.subprocess, "run", run)
 
     with pytest.raises(OSError, match="Too many open files"):
-        _qdbus.run_kwin_script(QDBUS, "", "claude-fleet-test")
+        _qdbus.run_kwin_script(QDBUS, "", "tongs-agents-test")
     with pytest.raises(OSError):
         os.fstat(opened[0])
     assert not list(tmp_path.iterdir())

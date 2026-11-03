@@ -3,17 +3,17 @@ import subprocess
 
 import pytest
 
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.terminal_apis import zellij
-from claude_fleet_monitor.terminal_apis.base import TerminalAPI
-from claude_fleet_monitor.terminal_apis.generic import GenericAPI
-from claude_fleet_monitor.terminal_apis.terminator import TerminatorAPI
-from claude_fleet_monitor.terminal_apis.zellij import ZellijAPI
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.terminal_apis import zellij
+from tongs_agents.terminal_apis.base import TerminalAPI
+from tongs_agents.terminal_apis.generic import GenericAPI
+from tongs_agents.terminal_apis.terminator import TerminatorAPI
+from tongs_agents.terminal_apis.zellij import ZellijAPI
 from tests.terminal_env import clear_terminal_markers
 
 ZELLIJ_ENV = {"ZELLIJ": "0", "ZELLIJ_SESSION_NAME": "session"}
 PANE_ENV = {**ZELLIJ_ENV, "ZELLIJ_PANE_ID": "3"}
-DETECT_PARENT = "claude_fleet_monitor.terminal_apis.tmux._detect_parent_terminal"
+DETECT_PARENT = "tongs_agents.terminal_apis.tmux._detect_parent_terminal"
 HEADER = "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND"
 SOCKET_DIR = "/run/user/1000/zellij"
 SOCKET_PATH = f"{SOCKET_DIR}/contract_version_1/session"

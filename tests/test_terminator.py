@@ -3,14 +3,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from claude_fleet_monitor.discovery import ProcessInfo
-from claude_fleet_monitor.terminal_apis import (
+from tongs_agents.discovery import ProcessInfo
+from tongs_agents.terminal_apis import (
     capture_terminal_info,
     detect_terminal,
     tmux,
 )
-from claude_fleet_monitor.terminal_apis.terminator import TerminatorAPI
-from claude_fleet_monitor.terminal_apis.tmux import TmuxAPI
+from tongs_agents.terminal_apis.terminator import TerminatorAPI
+from tongs_agents.terminal_apis.tmux import TmuxAPI
 from tests.terminal_env import clear_terminal_markers
 
 TERMINATOR_ENV = {

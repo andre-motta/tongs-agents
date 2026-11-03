@@ -10,7 +10,7 @@ def completed(code=0, stdout="", stderr=""):
 
 
 def test_version_probe_isolated_from_user_config(monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     seen = {}
 
@@ -30,7 +30,7 @@ def test_version_probe_isolated_from_user_config(monkeypatch):
 
 
 def test_version_probe_rejects_unknown_output(monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     monkeypatch.setattr(
         pi_install.subprocess,
@@ -41,7 +41,7 @@ def test_version_probe_rejects_unknown_output(monkeypatch):
 
 
 def test_version_probe_does_not_claim_prerelease_support(monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     monkeypatch.setattr(
         pi_install.subprocess,
@@ -52,7 +52,7 @@ def test_version_probe_does_not_claim_prerelease_support(monkeypatch):
 
 
 def test_old_pi_is_rejected_before_configuration(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(config_dir))
@@ -66,13 +66,13 @@ def test_old_pi_is_rejected_before_configuration(tmp_path, monkeypatch):
 
 
 def test_pi_install_handles_paths_and_preserves_owned_history(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "Pi config"
     config_dir.mkdir()
     extension = tmp_path / "new extension Ω"
     extension.mkdir()
-    hook = tmp_path / "venv with spaces" / "claude-fleet-hook"
+    hook = tmp_path / "venv with spaces" / "tongs-agents-hook"
     hook.parent.mkdir()
     hook.write_text("")
     old = tmp_path / "old extension"
@@ -103,7 +103,7 @@ def test_pi_install_handles_paths_and_preserves_owned_history(tmp_path, monkeypa
 
 
 def test_failed_upgrade_removal_is_retained_for_retry(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -147,7 +147,7 @@ def test_failed_upgrade_removal_is_retained_for_retry(tmp_path, monkeypatch):
 
 
 def test_failed_install_restores_previous_config(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -176,7 +176,7 @@ def test_failed_install_restores_previous_config(tmp_path, monkeypatch):
 
 
 def test_unmanaged_pi_config_is_never_replaced(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -190,7 +190,7 @@ def test_unmanaged_pi_config_is_never_replaced(tmp_path, monkeypatch):
 
 
 def test_broken_symlink_pi_config_is_never_replaced(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -212,7 +212,7 @@ def test_broken_symlink_pi_config_is_never_replaced(tmp_path, monkeypatch):
 def test_malformed_owned_paths_are_never_removed(
     tmp_path, monkeypatch, managed_path
 ):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -234,7 +234,7 @@ def test_malformed_owned_paths_are_never_removed(
 
 
 def test_uninstall_removes_only_owned_paths(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -260,7 +260,7 @@ def test_uninstall_removes_only_owned_paths(tmp_path, monkeypatch):
 
 
 def test_partial_uninstall_preserves_valid_retry_state(tmp_path, monkeypatch):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -299,14 +299,14 @@ def test_partial_uninstall_preserves_valid_retry_state(tmp_path, monkeypatch):
 def test_repeated_uninstall_succeeds_when_pi_is_no_longer_installed(
     tmp_path, monkeypatch
 ):
-    from claude_fleet_monitor import pi_install
+    from tongs_agents import pi_install
 
     monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path / "config"))
     assert pi_install.uninstall_pi(None)
 
 
 def test_pi_asset_is_packaged_and_dependency_free():
-    from claude_fleet_monitor.pi_install import pi_extension_path
+    from tongs_agents.pi_install import pi_extension_path
 
     package = pi_extension_path()
     manifest = json.loads((package / "package.json").read_text())
@@ -316,11 +316,11 @@ def test_pi_asset_is_packaged_and_dependency_free():
 
 
 def test_cli_pi_selection_does_not_touch_other_agents(settings_file, monkeypatch):
-    from claude_fleet_monitor import cli
+    from tongs_agents import cli
 
-    hook = Path(settings_file).parent / "claude-fleet-hook"
+    hook = Path(settings_file).parent / "tongs-agents-hook"
     hook.write_text("")
-    monkeypatch.setattr(cli.shutil, "which", lambda name: str(hook) if name == "claude-fleet-hook" else "/usr/bin/pi")
+    monkeypatch.setattr(cli.shutil, "which", lambda name: str(hook) if name == "tongs-agents-hook" else "/usr/bin/pi")
     monkeypatch.setattr(cli, "install_pi", lambda pi, hook_path: True)
     cli.cmd_install(SimpleNamespace(agent="pi"))
     assert json.loads(settings_file.read_text()) == {}
@@ -330,7 +330,7 @@ def test_cli_pi_selection_does_not_touch_other_agents(settings_file, monkeypatch
 def test_cli_pi_uninstall_instructs_running_sessions_to_restart(
     settings_file, monkeypatch, capsys
 ):
-    from claude_fleet_monitor import cli
+    from tongs_agents import cli
 
     monkeypatch.setattr(cli.shutil, "which", lambda name: "/usr/bin/pi")
     monkeypatch.setattr(cli, "uninstall_pi", lambda command: True)
@@ -344,7 +344,7 @@ def test_cli_pi_uninstall_instructs_running_sessions_to_restart(
 
 
 def test_cli_default_selection_remains_claude_and_codex(settings_file, monkeypatch):
-    from claude_fleet_monitor import cli
+    from tongs_agents import cli
 
     monkeypatch.setattr("shutil.which", lambda name: f"/usr/bin/{name}")
     monkeypatch.setattr(

@@ -90,10 +90,10 @@ cwd, repository name, status, detail and tool content. The payload cwd includes
 spaces, Unicode and an apostrophe. Shell version output, image identity,
 source commit and source tree hash are recorded in the evidence files.
 
-The executable path probe creates a temporary Python `claude-fleet-hook`
+The executable path probe creates a temporary Python `tongs-agents-hook`
 entry point in a directory containing spaces. It creates fresh in-memory
 Claude and Codex hook configurations through
-`claude_fleet_monitor.cli._install_hooks`, extracts the emitted command for
+`tongs_agents.cli._install_hooks`, extracts the emitted command for
 each tested event, and executes that exact command under every shell. It also
 records a manual unquoted control and a correctly quoted control. On the
 baseline revision, the generated commands fail because the CLI command builder
