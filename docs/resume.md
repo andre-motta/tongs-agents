@@ -35,6 +35,11 @@ Then, for each session:
    terminal (`/exit`, or Ctrl+D) before you type in the new pane.
    tongs-agents never stops it for you.
 
+A session whose process already runs in the workspace session it would join
+is refused (exit 2) instead: it already has a pane there. Select its row in
+the sidebar, or run `tongs-agents focus ID`, to bring that pane up. Inside
+tmux this compares the tmux session the command runs in.
+
 Resume while the old agent still runs: once its process is gone, the
 session store drops its record within seconds, and it is no longer listed.
 
@@ -42,16 +47,29 @@ session store drops its record within seconds, and it is no longer listed.
 
 | Where | What it does |
 | --- | --- |
-| `R` on a row | Resumes the selected agent's session in a new pane of the sidebar's session. |
-| `Ctrl+P`, `Resume in workspace` | The same as `R`. |
+| `u` on a row | Resumes the selected agent's session in a new pane of the sidebar's session. |
+| `Ctrl+P`, `Resume in workspace` | The same as `u`. |
 | `Ctrl+P`, `Resume session…` | Lists the recent sessions of the store (harness, short id, status, age, folder); Enter resumes the chosen one, Escape closes the list. |
 | `:` then `resume [ID] [--profile NAME]` | The CLI verb in the [sidebar command line](app.md#sidebar-command-line): without ID it lists the sessions under the prompt. |
 
 The sidebar only lists the panes of its own session, so `Resume session…`
-(or `:resume`) is the way to reach sessions that run in other terminals.
-A failure (no matching profile, a folder that no longer exists) is shown as
-an error notification; a session that still runs elsewhere gets a warning
-next to the result.
+(or `:resume`) is the way to reach sessions that run in other terminals;
+`u` is for a row whose agent has ended in its pane. Before anything starts,
+the sidebar checks where the session still runs:
+
+- In this workspace: it is not resumed again. The sidebar says so and offers
+  to show that pane instead (Yes brings it up, No leaves everything as it is).
+- Elsewhere (another terminal or session): a dialog names the process and
+  asks whether to resume it here anyway; No starts nothing. After Yes, the
+  warning is shown again next to the result.
+- Nowhere: it is resumed right away.
+
+While a session is being resumed (or its dialog is open), asking to resume
+it again is ignored with a short notice, so a double key press starts one
+pane. `:resume ID` works like the CLI: it refuses a session that runs in this
+workspace and warns, without asking, about one that runs elsewhere. A failure
+(no matching profile, a folder that no longer exists) is shown as an error
+notification.
 
 ## What it starts
 
@@ -69,7 +87,10 @@ session record does not store one. It looks for:
 - Claude Code: `projects/*/ID.jsonl` under `config_dir`, else
   `CLAUDE_CONFIG_DIR`, else `~/.claude`;
 - Codex: `sessions/YYYY/MM/DD/rollout-*-ID.jsonl` under `config_dir`, else
-  `CODEX_HOME`, else `~/.codex`;
+  `CODEX_HOME`, else `~/.codex`. The days around the session's recorded
+  start and last activity (as UTC and local dates, a day either side) are
+  read first, then the other days newest first, within a bound of 20000
+  directory entries, so a long Codex history is not read in full;
 - Pi: `sessions/*/*_ID.jsonl` under `config_dir`, else
   `PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
 
@@ -114,5 +135,6 @@ tongs-agents run codex-review ~/src/api -- resume --last
 | `--multiplexer {zellij,tmux}` | The multiplexer when run outside one, as for `run`. |
 
 Exit status: 0 when the pane started or the list was printed, 2 when the
-session or profile was refused (nothing starts) or on Windows, 1 for a usage
-error and other errors.
+session or profile was refused (nothing starts, including a session that
+already runs in this workspace) or on Windows, 1 for a usage error and other
+errors.

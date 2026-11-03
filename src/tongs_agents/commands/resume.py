@@ -19,9 +19,11 @@ path (``commands.run``), with:
   resumes it in its working directory"; its own exit hint prints
   ``pi --session <id>``).
 
-When the session still has a live process (any status but ended), it warns:
-two processes on one session conflict. It never stops that process. That is
-the usual case: maintenance removes a record once its process is gone, so a
+When the session still has a live process (any status but ended) in the
+workspace session it would join, it is refused: that pane is already there,
+so show it instead. A live process anywhere else gets a warning: two
+processes on one session conflict. It never stops that process. That is the
+usual case: maintenance removes a record once its process is gone, so a
 session is resumed while it still runs, and the old one is quit afterwards.
 
 The sidebar's command line (``widgets.command_line``) and its palette
@@ -34,7 +36,7 @@ import os
 import re
 import sys
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +47,7 @@ from tongs_agents.commands import workspace
 from tongs_agents.harnesses import get_harness
 from tongs_agents.launches import LaunchError
 from tongs_agents.models import format_age
+from tongs_agents.multiplexers import get_multiplexer
 from tongs_agents.pi_install import pi_config_dir
 from tongs_agents.profiles import (
     CONFIG_DIR_ENV_BY_HARNESS,
@@ -66,6 +69,7 @@ RESUME_ARGS = {
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 SHORT_ID = 8
 MAX_SCAN_ENTRIES = 20000
+DAY_SECONDS = 24 * 3600
 LIST_LIMIT = 50
 EPILOG = (
     "Without ID it lists the sessions it can resume. ID may be a unique prefix, "
@@ -262,6 +266,54 @@ def _is_dir(entry: os.DirEntry) -> bool:
         return False
 
 
+def _newest_dirs(root: Path, depth: int, budget: list[int]) -> Iterator[Path]:
+    """The directories ``depth`` levels below ``root``, highest names first.
+
+    Codex names them ``YYYY/MM/DD``, so the newest days come first and the
+    shared budget is spent on recent sessions.
+    """
+    if depth == 0:
+        yield root
+        return
+    children = sorted(
+        (entry for entry in _entries(root, budget) if _is_dir(entry)),
+        key=lambda entry: entry.name, reverse=True,
+    )
+    for child in children:
+        yield from _newest_dirs(Path(child.path), depth - 1, budget)
+        if budget[0] < 0:
+            return
+
+
+def codex_days(session: Resumable) -> list[tuple[str, str, str]]:
+    """The ``YYYY, MM, DD`` folders a Codex rollout of ``session`` most likely sits in.
+
+    Every record's ``started`` and ``ts`` as a UTC and a local date, each
+    with the day before and after, in that order and without repeats.
+    """
+    stamps = []
+    for record in session.records:
+        for key in ("started", "ts"):
+            value = _int(record.get(key))
+            if value > 0 and value not in stamps:
+                stamps.append(value)
+    if session.ts > 0 and session.ts not in stamps:
+        stamps.append(session.ts)
+    days: list[tuple[str, str, str]] = []
+    for stamp in stamps:
+        for offset in (0, -DAY_SECONDS, DAY_SECONDS):
+            for convert in (time.gmtime, time.localtime):
+                try:
+                    moment = convert(stamp + offset)
+                except (OverflowError, OSError, ValueError):
+                    continue
+                day = (f"{moment.tm_year:04d}", f"{moment.tm_mon:02d}",
+                       f"{moment.tm_mday:02d}")
+                if day not in days:
+                    days.append(day)
+    return days
+
+
 def _claude_project(folder: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", folder)
 
@@ -289,14 +341,26 @@ def holds_session(harness: str, home: Path, session: Resumable) -> bool:
         return False
     if harness == "codex":
         ending = f"-{session_id}.jsonl"
-        levels = [home / "sessions"]
-        for _ in range(3):
-            levels = [Path(entry.path) for directory in levels
-                      for entry in _entries(directory, budget) if _is_dir(entry)]
-        return any(
-            entry.name.startswith("rollout-") and entry.name.endswith(ending)
-            for directory in levels for entry in _entries(directory, budget)
-        )
+        sessions = home / "sessions"
+
+        def holds(directory: Path) -> bool:
+            return any(
+                entry.name.startswith("rollout-") and entry.name.endswith(ending)
+                for entry in _entries(directory, budget)
+            )
+
+        probed = set()
+        for day in codex_days(session):
+            directory = sessions.joinpath(*day)
+            probed.add(directory)
+            if holds(directory):
+                return True
+        for directory in _newest_dirs(sessions, 3, budget):
+            if directory not in probed and holds(directory):
+                return True
+            if budget[0] < 0:
+                break
+        return False
     if harness == "pi":
         ending = f"_{session_id}.jsonl"
         return any(
@@ -390,15 +454,32 @@ def plan(session: Resumable, profiles: Mapping[str, Profile],
 
 # -- Live processes --
 
-def _where(record: dict, workspace_session: str | None) -> str:
+@dataclass(frozen=True)
+class LiveProcess:
+    """A live process of a session: its pid, where it runs and whether that is here."""
+
+    pid: int
+    where: str
+    here: bool
+
+
+def _location(record: dict) -> tuple[str | None, str | None]:
+    """The workspace session (and its multiplexer, when known) a record runs in."""
     env = record.get("terminal_env")
     env = env if isinstance(env, dict) else {}
     name = env.get("ZELLIJ_SESSION_NAME")
+    if isinstance(name, str) and name:
+        return name, "zellij"
     launch = record.get("launch") if isinstance(record.get("launch"), dict) else {}
-    if not name and launch.get("launch_id"):
+    if launch.get("launch_id"):
         launched = launches.get(launch["launch_id"])
-        name = launched.session if launched is not None else None
-    if workspace_session is not None and name == workspace_session:
+        if launched is not None:
+            return launched.session, launched.multiplexer
+    return None, None
+
+
+def _where(record: dict, name: str | None, here: bool) -> str:
+    if here:
         return "in this workspace"
     if name:
         return f"in session {name!r}"
@@ -406,12 +487,16 @@ def _where(record: dict, workspace_session: str | None) -> str:
     return f"in {terminal}" if isinstance(terminal, str) and terminal else "elsewhere"
 
 
-def live_warning(session: Resumable, workspace_session: str | None = None) -> str | None:
-    """A warning when ``session`` still has a live process; None otherwise.
+def live_process(session: Resumable, workspace_session: str | None = None,
+                 multiplexer: str | None = None) -> LiveProcess | None:
+    """The live process of ``session``, if any; ``here`` when it runs in
+    ``workspace_session`` (on ``multiplexer``, when both are known).
 
     An ended record is skipped: its process may have started another session
-    (Claude Code ``/clear``). The process is never stopped.
+    (Claude Code ``/clear``). A process in this workspace wins over one
+    elsewhere. The process is never stopped.
     """
+    found = None
     for record in session.records:
         if record.get("status") == "ended":
             continue
@@ -421,12 +506,54 @@ def live_warning(session: Resumable, workspace_session: str | None = None) -> st
             process = None
         if process is None:
             continue
-        return (
-            f"session {session.short_id} still runs as pid {process.pid} "
-            f"{_where(record, workspace_session)}; two processes on one session conflict, "
-            "so quit that one before you type in the new pane (it was not stopped)"
+        name, runs_on = _location(record)
+        here = (
+            workspace_session is not None
+            and name == workspace_session
+            and (multiplexer is None or runs_on is None or runs_on == multiplexer)
         )
-    return None
+        live = LiveProcess(process.pid, _where(record, name, here), here)
+        if here:
+            return live
+        found = found or live
+    return found
+
+
+def live_warning(session: Resumable, workspace_session: str | None = None,
+                 multiplexer: str | None = None) -> str | None:
+    """A warning when ``session`` still has a live process; None otherwise."""
+    live = live_process(session, workspace_session, multiplexer)
+    if live is None:
+        return None
+    return warning_text(session, live)
+
+
+def warning_text(session: Resumable, live: LiveProcess) -> str:
+    return (
+        f"session {session.short_id} still runs as pid {live.pid} {live.where}; "
+        "two processes on one session conflict, so quit that one before you type in "
+        "the new pane (it was not stopped)"
+    )
+
+
+def here_refusal(session: Resumable, live: LiveProcess) -> str:
+    """Why a session already running in this workspace is not resumed again."""
+    return (
+        f"session {session.short_id} already runs in this workspace as pid {live.pid}; "
+        "show its pane instead (select its row in the sidebar, or run "
+        f"'tongs-agents focus {session.session_id}')"
+    )
+
+
+def _workspace_here(args, settings) -> tuple[str | None, str | None]:
+    """The workspace session and multiplexer ``run`` would add the pane to."""
+    if os.environ.get("ZELLIJ") is not None:
+        return os.environ.get("ZELLIJ_SESSION_NAME"), "zellij"
+    if os.environ.get("TMUX"):
+        here = get_multiplexer("tmux").in_session()
+        return (here.session if here is not None else None), "tmux"
+    session = settings.session if args.session is None else args.session
+    return session, args.multiplexer or settings.multiplexer
 
 
 # -- Listing --
@@ -502,15 +629,12 @@ def run(args) -> int:
         resumed = plan(target, profiles, args.profile)
     except ResumeRefused as refused:
         return _error(str(refused), EXIT_USAGE)
-    if os.environ.get("ZELLIJ") is not None:
-        here = os.environ.get("ZELLIJ_SESSION_NAME")
-    elif os.environ.get("TMUX"):
-        here = None
-    else:
-        here = settings.session if args.session is None else args.session
-    warning = live_warning(target, here)
-    if warning is not None:
-        print(f"tongs-agents resume: warning: {warning}", file=sys.stderr)
+    here, multiplexer = _workspace_here(args, settings)
+    live = live_process(target, here, multiplexer)
+    if live is not None and live.here:
+        return _error(here_refusal(target, live), EXIT_USAGE)
+    if live is not None:
+        print(f"tongs-agents resume: warning: {warning_text(target, live)}", file=sys.stderr)
     print(f"tongs-agents resume: resuming {resumed.summary}", file=sys.stderr)
     if os.environ.get("ZELLIJ") is not None:
         return run_command._inside("zellij", args, resumed.profile, resumed.options)

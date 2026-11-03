@@ -18,10 +18,12 @@ from tongs_agents import cli, discovery, launches
 from tongs_agents.commands import resume, run, workspace
 from tongs_agents.commands.sidebar import SidebarApp
 from tongs_agents.models import UNRESOLVED_INSTANCE_ID, canonical_session_id
+from tongs_agents.multiplexers import PaneRef
 from tongs_agents.palette import COMMAND_LINE, RESUME_SELECTED, RESUME_SESSION
 from tongs_agents.profiles import load_profiles
 from tongs_agents.sessions_feed import WorkspaceFeed
 from tongs_agents.widgets import agents_panel, command_line
+from tongs_agents.widgets.chat_panel import ConfirmScreen
 from tongs_agents.widgets.resume_picker import ResumePickerScreen
 
 SESSION = "agents"
@@ -256,6 +258,75 @@ def test_a_live_process_is_warned_about_and_ended_records_are_skipped(project, m
     assert resume.live_warning(live) is None
 
 
+def test_a_process_in_this_workspace_wins_over_one_elsewhere(project, monkeypatch):
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=int(record["pid"])))
+    [session] = resume.recent_sessions([
+        _record("claude", CLAUDE_ID, project, pid="10", ts=200),
+        _record("claude", CLAUDE_ID, project, pid="20", ts=100, instance="9:1",
+                env={"ZELLIJ_SESSION_NAME": SESSION}),
+    ])
+    live = resume.live_process(session, SESSION, "zellij")
+    assert (live.pid, live.here) == (20, True)
+    elsewhere = resume.live_process(session, "other")
+    assert (elsewhere.pid, elsewhere.here, elsewhere.where) == (10, False, "in konsole")
+
+
+def _codex_session(project, **times):
+    return resume.recent_sessions([dict(_record("codex", CODEX_ID, project), **times)])[0]
+
+
+def test_codex_days_cover_utc_and_local_dates_around_the_record(project, monkeypatch):
+    # UTC+14: 08:00 local on 2 November is 18:00 UTC on 1 November.
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")
+    time.tzset()
+    try:
+        stamp = int(time.mktime(time.strptime("2026-11-02 08:00", "%Y-%m-%d %H:%M")))
+        days = resume.codex_days(_codex_session(project, ts=stamp, started=stamp))
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+    assert days == [("2026", "11", "01"), ("2026", "11", "02"), ("2026", "10", "31"),
+                    ("2026", "11", "03")]
+
+
+def test_codex_lookup_probes_the_records_days_before_any_walk(tmp_path, project,
+                                                              monkeypatch):
+    home = tmp_path / "codex"
+    stamp = int(time.mktime(time.strptime("2026-11-02 12:00", "%Y-%m-%d %H:%M")))
+    session = _codex_session(project, ts=stamp, started=stamp)
+    _codex_transcript(home)
+    for day in range(1, 29):
+        (home / "sessions" / "2026" / "10" / f"{day:02d}").mkdir(parents=True)
+    monkeypatch.setattr(resume, "MAX_SCAN_ENTRIES", 3)
+    assert resume.holds_session("codex", home, session)
+    old = _codex_session(project, ts=1, started=1)
+    assert not resume.holds_session("codex", home, old)
+
+
+def test_codex_walk_goes_newest_first_within_its_budget(tmp_path, project, monkeypatch):
+    home = tmp_path / "codex"
+    for month in ("01", "02", "03"):
+        for day in ("01", "02"):
+            folder = home / "sessions" / "2025" / month / day
+            folder.mkdir(parents=True)
+            (folder / "rollout-x-other.jsonl").write_text("")
+    newest = home / "sessions" / "2025" / "03" / "02"
+    (newest / f"rollout-2025-03-02T00-00-00-{CODEX_ID}.jsonl").write_text("")
+    session = _codex_session(project, ts=1, started=1)
+    walked = list(resume._newest_dirs(home / "sessions", 3, [100]))
+    assert walked[:3] == [newest, newest.parent / "01", home / "sessions" / "2025" / "02" / "02"]
+    # One year, three months and two days are listed before the newest day's two files.
+    monkeypatch.setattr(resume, "MAX_SCAN_ENTRIES", 8)
+    assert resume.holds_session("codex", home, session)
+    oldest = home / "sessions" / "2025" / "01" / "01"
+    (newest / f"rollout-2025-03-02T00-00-00-{CODEX_ID}.jsonl").rename(
+        oldest / f"rollout-2025-01-01T00-00-00-{CODEX_ID}.jsonl")
+    assert not resume.holds_session("codex", home, session)
+    monkeypatch.setattr(resume, "MAX_SCAN_ENTRIES", 100)
+    assert resume.holds_session("codex", home, session)
+
+
 # -- The CLI --
 
 def test_without_an_id_it_lists_the_sessions(tmp_path, project, monkeypatch, capsys):
@@ -310,6 +381,54 @@ def test_refusals_exit_2_and_start_nothing(tmp_path, project, monkeypatch, capsy
     assert mux.spawned
 
 
+def test_a_session_already_in_the_workspace_is_refused(tmp_path, project, monkeypatch,
+                                                       capsys):
+    _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
+    _claude_transcript(tmp_path / "home" / ".claude", project)
+    _store(monkeypatch, [_record("claude", CLAUDE_ID, project, pid="4242",
+                                 env={"ZELLIJ_SESSION_NAME": SESSION})])
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=4242))
+    mux = FakeMux()
+    monkeypatch.setattr(run, "get_multiplexer", lambda name="zellij", **kwargs: mux)
+    _inside_zellij(monkeypatch, mux, SESSION)
+    assert _main("resume", "3f2a") == 2
+    err = capsys.readouterr().err
+    assert "already runs in this workspace as pid 4242" in err
+    assert f"tongs-agents focus {CLAUDE_ID}" in err
+    assert not mux.spawned and launches.list_records() == []
+    _inside_zellij(monkeypatch, mux, "other")
+    assert _main("resume", "3f2a") == 0
+    assert "warning: session 3f2a9c1e still runs as pid 4242 in session 'agents'" in (
+        capsys.readouterr().err)
+
+
+def test_inside_tmux_the_warning_names_this_workspace(tmp_path, project, monkeypatch,
+                                                      capsys):
+    _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
+    _claude_transcript(tmp_path / "home" / ".claude", project)
+    record = launches.create_pending(load_profiles()["main"], SESSION, "tmux")
+    row = _record("claude", CLAUDE_ID, project, pid="4242")
+    row["launch"] = {"launch_id": record.launch_id}
+    _store(monkeypatch, [row])
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=4242))
+    here = PaneRef("tmux", SESSION, "%3", "/tmp/tmux-1000/default")
+    monkeypatch.setattr(resume, "get_multiplexer",
+                        lambda name: SimpleNamespace(in_session=lambda: here))
+    monkeypatch.setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+    [session] = resume.recent_sessions()
+    args = SimpleNamespace(session=None, multiplexer=None)
+    settings = SimpleNamespace(session="ignored", multiplexer="zellij")
+    assert resume._workspace_here(args, settings) == (SESSION, "tmux")
+    live = resume.live_process(session, SESSION, "tmux")
+    assert live.here and live.where == "in this workspace"
+    assert not resume.live_process(session, SESSION, "zellij").here
+    monkeypatch.setattr(resume, "get_multiplexer",
+                        lambda name: SimpleNamespace(in_session=lambda: None))
+    assert resume._workspace_here(args, settings) == (None, "tmux")
+
+
 def test_resume_is_a_lazy_verb_with_static_metadata():
     entry = next(item for item in cli.commands.discover()
                  if cli.commands.command_name(item) == "resume")
@@ -362,9 +481,16 @@ async def test_the_resume_verb_lists_and_starts_sessions(tmp_path, project, monk
     assert (record.profile, record.session, record.args) == ("cx", SESSION, ("resume", CODEX_ID))
 
 
+def _notes(app, monkeypatch):
+    notes = []
+    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notes.append(
+        (kwargs.get("title"), message)))
+    return notes
+
+
 @pytest.mark.asyncio
-async def test_r_resumes_the_selected_row_and_warns_when_it_still_runs(tmp_path, project,
-                                                                      monkeypatch):
+async def test_u_refuses_a_row_that_runs_here_and_offers_its_pane(tmp_path, project,
+                                                                  monkeypatch):
     _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
     _claude_transcript(tmp_path / "home" / ".claude", project)
     row = _record("claude", CLAUDE_ID, project, pid="4242",
@@ -374,18 +500,120 @@ async def test_r_resumes_the_selected_row_and_warns_when_it_still_runs(tmp_path,
                         lambda record: SimpleNamespace(pid=4242))
     mux = FakeMux()
     app = _sidebar(mux, [row])
-    notes = []
-    monkeypatch.setattr(app, "notify", lambda message, **kwargs: notes.append(
-        (kwargs.get("title"), message)))
+    focused = []
+    monkeypatch.setattr(app, "_do_focus", focused.append)
     async with app.run_test(size=SIZE) as pilot:
         await _settle(app, pilot)
         assert app.agents_panel.selected_session().session_id == CLAUDE_ID
         await pilot.press("R")
         await _settle(app, pilot)
+        assert not isinstance(app.screen, ConfirmScreen)
+        await pilot.press("u")
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "already runs in this workspace as pid 4242" in app.screen.message
+        await pilot.press("y")
+        await _settle(app, pilot)
+        assert not app.resuming
+    assert [session.session_id for session in focused] == [CLAUDE_ID]
+    assert not mux.spawned
+    assert launches.list_records() == []
+
+
+@pytest.mark.asyncio
+async def test_a_session_here_without_a_row_is_refused_with_a_notice(tmp_path, project,
+                                                                    monkeypatch):
+    _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
+    _claude_transcript(tmp_path / "home" / ".claude", project)
+    _store(monkeypatch, [_record("claude", CLAUDE_ID, project, pid="4242",
+                                 env={"ZELLIJ_SESSION_NAME": SESSION})])
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=4242))
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CLAUDE_ID)
+        await _settle(app, pilot)
+        assert not isinstance(app.screen, ConfirmScreen)
+    [(title, message)] = notes
+    assert title == "Already running here"
+    assert f"tongs-agents focus {CLAUDE_ID}" in message
+    assert not mux.spawned
+
+
+@pytest.mark.asyncio
+async def test_a_session_running_elsewhere_needs_a_confirmation(tmp_path, project,
+                                                               monkeypatch):
+    _profiles(tmp_path, '[profiles.main]\ncommand = ["claude"]\n')
+    _claude_transcript(tmp_path / "home" / ".claude", project)
+    _store(monkeypatch, [_record("claude", CLAUDE_ID, project, pid="4242")])
+    monkeypatch.setattr(resume.discovery, "resolve_session_process",
+                        lambda record: SimpleNamespace(pid=4242))
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CLAUDE_ID)
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "still runs as pid 4242 in konsole" in app.screen.message
+        app.resume_in_workspace(CLAUDE_ID)
+        await _settle(app, pilot)
+        assert notes == [("Resume", "Already resuming 3f2a9c1e")]
+        await pilot.press("n")
+        await _settle(app, pilot)
+        assert not mux.spawned and not app.resuming
+        app.resume_in_workspace(CLAUDE_ID)
+        await _settle(app, pilot)
+        await pilot.press("y")
+        await _settle(app, pilot)
+        assert not app.resuming
     titles = [title for title, _ in notes]
-    assert "Resume" in titles and "Still running" in titles
+    assert titles[-2:] == ["Resume", "Still running"]
     [record] = launches.list_records()
     assert record.args == ("--resume", CLAUDE_ID)
+    assert len(mux.spawned) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_second_request_while_one_runs_is_ignored(tmp_path, project, monkeypatch):
+    _profiles(tmp_path, '[profiles.cx]\ncommand = ["codex"]\n')
+    _codex_transcript(tmp_path / "home" / ".codex")
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CODEX_ID)
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+        assert not app.resuming
+    assert notes[0] == ("Resume", "Already resuming 019a1b2c")
+    assert [title for title, _ in notes[1:]] == ["Resume"]
+    assert len(mux.spawned) == 1
+    [record] = launches.list_records()
+    assert record.args == ("resume", CODEX_ID)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_resume_clears_the_request(tmp_path, project, monkeypatch):
+    _profiles(tmp_path, '[profiles.cx]\ncommand = ["codex"]\n')
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    notes = _notes(app, monkeypatch)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+        assert not app.resuming
+    [(title, message)] = notes
+    assert title == "Resume failed" and "no Codex profile's config dir" in message
+    assert not mux.spawned
 
 
 @pytest.mark.asyncio

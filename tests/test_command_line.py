@@ -291,7 +291,21 @@ async def test_a_failed_spawn_is_shown_inline(projects):
         await pilot.pause()
         await _submit(app, pilot, "run beta")
         assert app.command_line.result_text == "cannot spawn beta"
+        assert app.command_line.input.value == "run beta"
     assert launches.list_records() == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_run_does_not_replace_a_new_line(projects):
+    app = _app(FakeMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.action_command_line()
+        await pilot.pause()
+        line = app.command_line
+        line.input.value = "run alpha"
+        line._finished("run beta", False, "cannot spawn beta")
+        assert line.input.value == "run alpha"
 
 
 @pytest.mark.asyncio

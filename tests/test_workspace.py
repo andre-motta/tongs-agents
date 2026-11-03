@@ -461,7 +461,7 @@ def test_single_layout_stacks_a_home_pane_beside_the_sidebar():
     assert f'pane name="{HOME_PANE_NAME}" command="/usr/bin/python3"' in stack
     assert f'"-m" "{workspace_spawn.HOME_MODULE}" "{workspace_spawn.HOME_COMMAND}"' in stack
     assert text.index(SIDEBAR_PANE_NAME) < text.index(HOME_PANE_NAME)
-    assert f"--spawn-request\" \"{TOKEN}\"" in text
+    assert f'"--compact" "--layout" "single" "--spawn-request" "{TOKEN}"' in text
     assert text.count("{") == text.count("}")
 
 
@@ -470,6 +470,7 @@ def test_split_layout_is_the_sidebar_alone():
     assert "BEGIN@" not in text and "END@" not in text
     assert text.count(f'pane name="{SIDEBAR_PANE_NAME}"') == 1
     assert HOME_PANE_NAME not in text and "stacked" not in text
+    assert "--layout" not in text
     assert "split_direction" not in text
     assert 'tab name="tongs"' in text
     assert text.count("{") == text.count("}")
@@ -629,6 +630,7 @@ def test_layout_split_in_the_config_renders_the_split_layout(
     (layout,) = (runtime_dir / "layouts").iterdir()
     text = layout.read_text()
     assert HOME_PANE_NAME not in text and "stacked" not in text
+    assert "--layout" not in text
     assert f'pane name="{SIDEBAR_PANE_NAME}"' in text
 
 

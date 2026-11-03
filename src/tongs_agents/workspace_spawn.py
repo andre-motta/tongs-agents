@@ -48,6 +48,8 @@ from pathlib import Path
 from tongs_agents import launches, paths
 from tongs_agents.launches import LaunchError, LaunchRecord
 from tongs_agents.multiplexers.base import (
+    HOME_COMMAND,
+    HOME_MODULE,
     SIDEBAR_PANE_NAME,
     Multiplexer,
     MultiplexerError,
@@ -57,8 +59,6 @@ from tongs_agents.profiles import Profile, folder_problem
 
 LAUNCH_MODULE = "tongs_agents.launch"
 SIDEBAR_MODULE = "tongs_agents.commands.sidebar"
-HOME_MODULE = "tongs_agents.workspace_spawn"
-HOME_COMMAND = "home"
 HOME_TEXT = (
     "tongs-agents",
     "",
@@ -159,10 +159,31 @@ def create_launches(
     return records
 
 
-def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False) -> PaneRef:
+def take_notices(mux: Multiplexer) -> list[str]:
+    """The placement notices ``mux`` collected since the last call (Zellij only)."""
+    take = getattr(mux, "take_notices", None)
+    return list(take()) if callable(take) else []
+
+
+def report_notices(mux: Multiplexer, notices: list[str] | None = None) -> None:
+    """Add ``mux``'s placement notices to ``notices``, or print them to stderr.
+
+    A TUI passes a list and shows it; the CLI verbs leave it out.
+    """
+    found = take_notices(mux)
+    if notices is not None:
+        notices.extend(found)
+        return
+    for message in found:
+        print(f"tongs-agents: notice: {message}", file=sys.stderr)
+
+
+def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False,
+                 notices: list[str] | None = None) -> PaneRef:
     """Start the launcher for a pending record in a new pane of its session.
 
     With ``show`` the new pane is then brought into view (``show_pane``).
+    Placement notices (a Zellij stack that is gone) go to ``report_notices``.
     """
     ref = mux.spawn(
         record.session,
@@ -170,6 +191,7 @@ def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False) 
         name=record.profile,
         focus=False,
     )
+    report_notices(mux, notices)
     if show:
         show_pane(mux, ref)
     return ref
@@ -186,6 +208,7 @@ def show_pane(mux: Multiplexer, ref: PaneRef) -> bool:
 def spawn_profiles(
     mux: Multiplexer, session: str, profiles: Iterable[Profile], *,
     folder: str | None = None, args: Iterable[str] = (),
+    notices: list[str] | None = None,
 ) -> list[LaunchRecord]:
     """Create a pending record and spawn one launcher pane per profile, in order.
 
@@ -193,7 +216,8 @@ def spawn_profiles(
     are checked for all of them before any pane starts. Each pane is shown
     once it is up, so the last one ends in view. Raises the first
     MultiplexerError or LaunchError; panes spawned before it stay up, and the
-    record of the pane that failed to start is discarded.
+    record of the pane that failed to start is discarded. ``notices`` is
+    passed to ``spawn_launch``.
     """
     records = []
     profiles = list(profiles)
@@ -204,7 +228,7 @@ def spawn_profiles(
             profile, session, mux.name, folder=folder, args=args,
         )
         try:
-            spawn_launch(mux, record, show=True)
+            spawn_launch(mux, record, show=True, notices=notices)
         except BaseException:
             discard_launches([record])
             raise
@@ -444,11 +468,13 @@ def spawn_requested(
     session: str,
     token: str,
     on_spawned: Callable[[str, PaneRef], None] | None = None,
+    notices: list[str] | None = None,
 ) -> list[str]:
     """Consume ``token``'s request and spawn its pending launches in ``session``.
 
     Returns one message per launch that could not be spawned. The request and
-    its layout are removed whatever happens.
+    its layout are removed whatever happens. ``notices`` is passed to
+    ``spawn_launch``.
     """
     try:
         request = consume_spawn_request(token)
@@ -478,7 +504,7 @@ def spawn_requested(
             failures.append(f"launch {launch_id}: belongs to another session")
             continue
         try:
-            ref = spawn_launch(mux, record, show=True)
+            ref = spawn_launch(mux, record, show=True, notices=notices)
         except (MultiplexerError, LaunchError) as error:
             detail = getattr(error, "detail", None) or str(error)
             failures.append(f"profile {record.profile}: {detail}")

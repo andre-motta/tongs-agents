@@ -32,6 +32,16 @@ refused before anything starts. Selecting a stacked pane is the ordinary
 ``focus-pane-id``, which expands it and collapses the rest. Collapsed panes
 keep running and stay listed (0.45.1 reports them ``is_suppressed``, which
 never means hidden or gone here).
+
+The home pane can be closed. When it is gone but the sidebar pane runs with
+``--layout single`` (the workspace layout marks it), the next spawn opens a
+new home pane and stacks it onto a pane of the agent column in the sidebar's
+tab (the column with most tiled panes beside the sidebar), then stacks the
+new pane onto it as usual; if the home pane does not join, the column's pane
+anchors the stack itself. Only when that column is gone too does the pane
+open with a plain ``new-pane``, and ``take_notices`` returns a notice saying
+so. A session whose sidebar carries no marker (split, or created before it
+existed) keeps the plain placement silently.
 """
 
 from __future__ import annotations
@@ -42,6 +52,7 @@ import re
 import select
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 from collections.abc import Iterator
@@ -49,7 +60,11 @@ from collections.abc import Iterator
 from tongs_agents import paths
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
+    HOME_COMMAND,
+    HOME_MODULE,
     HOME_PANE_NAME,
+    LAYOUT_OPTION,
+    LAYOUT_SINGLE,
     SESSION_EXITED,
     SESSION_RUNNING,
     SIDEBAR_PANE_NAME,
@@ -95,8 +110,14 @@ STOP_TIMEOUT = 2.0
 CAPTURE_DIR = "capture"
 MAX_DUMP_POLLS = 20
 STACK_MARGIN_ROWS = 5
+STACK_GONE = (
+    "the agent stack is gone (its tongs-agents-home pane and every agent pane in it "
+    "were closed), so the new pane opens side by side instead; start a new workspace "
+    "session to get one agent at a time back"
+)
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]*\Z")
 _NEW_PANE = re.compile(r"terminal_([0-9]{1,12})")
+_ALREADY_FOCUSED = re.compile(r"Pane Terminal\(([0-9]{1,12})\) is already focused")
 _SESSION_LINE = re.compile(r" \[Created [^\]\n]*\](?: \([^()\n]*\))*")
 _PANE_KEYS = {
     "id": int,
@@ -228,6 +249,41 @@ def _home_anchor(entries: list[dict]) -> dict | None:
     return min(anchors, key=lambda entry: entry["id"]) if anchors else None
 
 
+def _marks_single(entry: dict) -> bool:
+    """True for a tiled sidebar pane started with ``--layout single``."""
+    if entry["is_plugin"] or entry["title"] != SIDEBAR_PANE_NAME:
+        return False
+    if entry.get("is_floating") is not False:
+        return False
+    words = (entry.get("terminal_command") or entry.get("pane_command") or "").split()
+    return any(
+        words[index:index + 2] == [LAYOUT_OPTION, LAYOUT_SINGLE]
+        for index in range(len(words) - 1)
+    )
+
+
+def _agent_column(entries: list[dict], sidebar: dict) -> list[dict]:
+    """The tiled panes of the sidebar's tab that share the fullest column beside it."""
+    sidebar_column = _geometry(sidebar)
+    columns: dict[tuple[int, int, int], list[dict]] = {}
+    for entry in entries:
+        if (
+            entry["is_plugin"]
+            or entry.get("is_floating") is not False
+            or entry["title"] == SIDEBAR_PANE_NAME
+        ):
+            continue
+        column = _geometry(entry)
+        if column[0] == sidebar_column[0] and column != sidebar_column:
+            columns.setdefault(column, []).append(entry)
+    if not columns:
+        return []
+    return max(
+        columns.values(),
+        key=lambda group: (len(group), -min(entry["id"] for entry in group)),
+    )
+
+
 def _stack_members(entries: list[dict], anchor: dict) -> list[dict]:
     column = _geometry(anchor)
     return [
@@ -296,6 +352,7 @@ class ZellijMultiplexer:
     def __init__(self, socket_dir: str | None = None, binary: str | None = None):
         self._socket_dir = _socket_dir(socket_dir)
         self._binary = binary
+        self.notices: list[str] = []
 
     def _effective_socket_dir(self, socket_dir: str | None = None) -> str | None:
         return (
@@ -442,6 +499,8 @@ class ZellijMultiplexer:
         if name != SIDEBAR_PANE_NAME:
             entries = self._pane_entries(session)
             anchor = _home_anchor(entries)
+            if anchor is None:
+                anchor, entries = self._restore_home(session, entries)
             if anchor is not None:
                 members = _stack_members(entries, anchor)
                 ref = self._spawn_stacked(session, anchor, members, options, command)
@@ -450,6 +509,35 @@ class ZellijMultiplexer:
                 return ref
         result = self._new_pane(session, *options, "--", *command)
         return self._new_ref(session, result)
+
+    def take_notices(self) -> list[str]:
+        """Notices about pane placement since the last call (see the module docstring)."""
+        notices, self.notices = self.notices, []
+        return notices
+
+    def _restore_home(self, session: str, entries: list[dict]) -> tuple[dict | None, list[dict]]:
+        """The stack's anchor when the home pane of a ``single`` session was closed.
+
+        Returns ``(None, entries)`` for a session without a marked sidebar
+        and, with a notice, when no agent column is left.
+        """
+        sidebar = next((entry for entry in entries if _marks_single(entry)), None)
+        if sidebar is None:
+            return None, entries
+        column = _agent_column(entries, sidebar)
+        if not column:
+            self.notices.append(STACK_GONE)
+            return None, entries
+        agent = min(column, key=lambda entry: (entry["exited"], entry["id"]))
+        try:
+            self._spawn_stacked(
+                session, agent, column, ["--name", HOME_PANE_NAME],
+                [sys.executable, "-m", HOME_MODULE, HOME_COMMAND],
+            )
+        except MultiplexerError:
+            return agent, self._pane_entries(session)
+        entries = self._pane_entries(session)
+        return _home_anchor(entries) or agent, entries
 
     def _new_ref(self, session: str, result) -> PaneRef:
         match = _NEW_PANE.fullmatch((result.stdout or "").strip())
@@ -593,8 +681,37 @@ class ZellijMultiplexer:
             shown[len(prefix):] for shown in clients.values() if shown.startswith(prefix)
         }
 
+    def _focus_pane_id(self, session: str, socket_dir: str | None, expected: str) -> str | None:
+        """Run focus-pane-id: None when it exited 0, else zellij's refusal text."""
+        argv = [self._zellij(), "--session", session, "action", "focus-pane-id", expected]
+        try:
+            result = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                timeout=COMMAND_TIMEOUT,
+                stdin=subprocess.DEVNULL,
+                env=_cli_env(self._effective_socket_dir(socket_dir)),
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise MultiplexerError(f"zellij action focus-pane-id failed: {error}") from error
+        if result.returncode == 0:
+            return None
+        text = " ".join((result.stderr or result.stdout or "").split())[:200]
+        return f"zellij action focus-pane-id failed (exit {result.returncode})" + (
+            f": {text}" if text else ""
+        )
+
     def focus(self, ref: PaneRef) -> FocusResult:
-        """Select ref's pane for the most recent client; never activate."""
+        """Select ref's pane for the most recent client; never activate.
+
+        focus-pane-id acts on the client that most recently sent input and
+        exits 2 with ``Pane Terminal(N) is already focused`` when that client
+        already shows the pane (0.44.2 and 0.45.1). Only that refusal, for
+        this pane and with the pane shown by a client on readback, counts as
+        already focused; list-clients cannot tell which client the action
+        targets, so another client merely showing the pane is not enough.
+        """
         if not isinstance(ref, PaneRef) or ref.multiplexer != NAME:
             raise MultiplexerError("refused pane ref for another multiplexer")
         session = _session(ref.session)
@@ -607,19 +724,14 @@ class ZellijMultiplexer:
                 return _failed("no attached zellij client")
             if all(shown == expected for shown in before.values()):
                 return _selected(ALREADY_FOCUSED)
-            try:
-                self._action(session, socket_dir, "focus-pane-id", expected)
-            except _NoActiveSession:
-                raise
-            except MultiplexerError as error:
-                # focus-pane-id exits non-zero when the most recent client
-                # already shows the pane; the readback below decides.
-                refused = error.detail
-            else:
-                refused = None
+            refused = self._focus_pane_id(session, socket_dir, expected)
+            if refused is not None:
+                already = _ALREADY_FOCUSED.search(refused)
+                if already is None or already.group(1) != pane:
+                    return _failed(refused)
             for attempt in range(READBACK_ATTEMPTS):
                 after = self._clients(session, socket_dir)
-                if any(
+                if refused is None and any(
                     after.get(client) == expected and shown != expected
                     for client, shown in before.items()
                 ):

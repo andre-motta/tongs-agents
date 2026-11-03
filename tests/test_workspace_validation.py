@@ -629,6 +629,61 @@ def test_stack_membership_needs_a_home_pane():
         validator.stack_membership(_Target(["s1"], panes), ("f1",), {}, "stack")
 
 
+class _RecoveringTarget(_Target):
+    """Closing the home pane removes it; the fake adapter's spawn adds it back."""
+
+    def __init__(self, panes):
+        super().__init__(["s1"], panes)
+        self.closed = []
+
+    def action(self, *arguments):
+        if arguments[0] == "close-pane":
+            pane_id = int(arguments[-1].removeprefix("terminal_"))
+            self.closed.append(pane_id)
+            self._panes = [pane for pane in self._panes if pane["id"] != pane_id]
+        return 0, "", ""
+
+
+class _FakeAdapter:
+    def __init__(self, target, panes, notices=()):
+        self.target = target
+        self.panes = panes
+        self.notices = list(notices)
+
+    def __call__(self):
+        return self
+
+    def spawn(self, session, argv, *, name=None):
+        self.target._panes.extend(self.panes)
+        return SimpleNamespace(pane_id=str(self.panes[-1]["id"]))
+
+    def take_notices(self):
+        return self.notices
+
+
+@linux_only
+def test_home_recovery_expects_a_new_home_in_the_agent_column(monkeypatch):
+    target = _RecoveringTarget(_stacked_panes())
+    reopened = [_geometry_pane(7, validator.HOME_PANE_NAME, 40),
+                _geometry_pane(8, "recovered", 40)]
+    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(target, reopened))
+    observations = {}
+    validator.home_recovery("/root", "s1", target, _Tracker(), observations)
+    facts = observations["home_recovery"]
+    assert target.closed == [1]
+    assert facts["home_reopened"] and facts["same_column"] and facts["spawn_stacked"]
+    assert (facts["members_before"], facts["members_after"]) == (3, 4)
+
+
+@linux_only
+def test_home_recovery_refuses_a_side_by_side_fallback(monkeypatch):
+    target = _RecoveringTarget(_stacked_panes())
+    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(
+        target, [_geometry_pane(8, "recovered", 0, 40)], ["the agent stack is gone"]))
+    with pytest.raises(validator.Check, match="not reopened"):
+        validator.home_recovery("/root", "s1", target, _Tracker(), {})
+
+
 @linux_only
 @pytest.mark.parametrize("pane, shown", [
     ({"is_suppressed": False, "pane_rows": 12}, True),

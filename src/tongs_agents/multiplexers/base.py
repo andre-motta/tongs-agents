@@ -8,8 +8,10 @@ driven is decided by ``tongs_agents.control`` alone.
 
 A workspace session shows one agent at a time (layout ``single``, #124) or
 every agent side by side (``split``). The session itself records which: a
-Zellij session has a ``tongs-agents-home`` pane heading a stacked column,
-a tmux session has the ``@tongs_agents_layout`` option set to ``single``.
+Zellij session has a ``tongs-agents-home`` pane heading a stacked column
+(and its sidebar pane runs with ``--layout single``, so the stack can be
+found again after the home pane was closed), a tmux session has the
+``@tongs_agents_layout`` option set to ``single``.
 Adapters read that marker, so every spawner (the workspace and run
 commands, the sidebar, the palette, MCP) places panes the same way, and a
 session created before the marker existed keeps the split behaviour. A pane
@@ -28,6 +30,9 @@ SESSION_RUNNING = "running"
 SESSION_EXITED = "exited"
 SIDEBAR_PANE_NAME = "tongs-agents-sidebar"
 HOME_PANE_NAME = "tongs-agents-home"
+HOME_MODULE = "tongs_agents.workspace_spawn"
+HOME_COMMAND = "home"
+LAYOUT_OPTION = "--layout"
 LAYOUT_SINGLE = "single"
 LAYOUT_SPLIT = "split"
 LAYOUTS: tuple[str, ...] = (LAYOUT_SINGLE, LAYOUT_SPLIT)

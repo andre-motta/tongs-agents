@@ -356,6 +356,12 @@ def test_spawn_starts_the_launcher_in_the_running_session(world):
     )
 
 
+def test_spawn_returns_placement_notices(world, monkeypatch):
+    world.mux.take_notices = lambda: ["the agent stack is gone"]
+    result = world.tools().spawn("worker")
+    assert result["ok"] is True and result["notices"] == ["the agent stack is gone"]
+
+
 def test_spawn_uses_the_callers_session_not_the_server_env(world):
     env = {**world.env, "ZELLIJ_SESSION_NAME": "elsewhere", "ZELLIJ_SOCKET_DIR": "/x"}
     world.mux.states = {SESSION: SESSION_RUNNING, "elsewhere": SESSION_RUNNING}

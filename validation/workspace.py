@@ -23,9 +23,10 @@ keystroke into the sidebar pane.
 The workspace uses the default ``single`` layout (#124): the home pane heads
 a stacked column beside the sidebar. The run checks that every agent pane
 joined that stack (same tab, column and width as the home pane), that a row
-selection expands its pane and collapses the others, and, after shrinking
-both clients, that spawning fills the stack up to its capacity and then is
-refused with no pane added.
+selection expands its pane and collapses the others, that a spawn after
+closing the home pane opens a new home pane in the agent column and joins
+the stack, and, after shrinking both clients, that spawning fills the stack
+up to its capacity and then is refused with no pane added.
 """
 
 import argparse
@@ -429,6 +430,7 @@ def exercise(root, session, tracker, observations):
                          "stack_after_rerun")
         agent_env(io_dir, session, target, observations)
         row_focus(session, env, target, tracker, io_dir, first, observations)
+        home_recovery(root, session, target, tracker, observations)
         capacity(root, session, target, tracker, observations)
 
 
@@ -705,6 +707,39 @@ def stack_membership(target, profiles, observations, key):
     expect(facts["home_pane"], "the workspace has no home pane")
     expect(facts["profiles_stacked"], f"profile panes are not stacked: {titles}")
     expect(facts["sidebar_outside_stack"], "the sidebar is in the agent stack")
+
+
+def home_recovery(root, session, target, tracker, observations):
+    """Close the home pane, spawn through the adapter, expect the stack rebuilt.
+
+    The sidebar of a ``single`` layout runs with ``--layout single``, so the
+    spawn opens a new home pane in the agent column and stacks the new pane
+    onto it, with no placement notice.
+    """
+    home, members = stack_of(target.panes())
+    expect(home is not None, "the workspace has no home pane")
+    code, _, _ = target.action("close-pane", "--pane-id", f"terminal_{home.get('id')}")
+    closed = wait_until(lambda: stack_of(target.panes())[0] is None, RESIZE_WAIT)
+    mux = ZellijMultiplexer()
+    ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)], name="recovered")
+    tracker.sweep()
+    new_home, after = stack_of(target.panes())
+    observations["home_recovery"] = {
+        "home_closed": bool(closed) and code == 0,
+        "home_reopened": new_home is not None and new_home.get("id") != home.get("id"),
+        "same_column": new_home is not None and column(new_home) == column(home),
+        "spawn_stacked": any(str(pane.get("id")) == ref.pane_id for pane in after),
+        "members_before": len(members),
+        "members_after": len(after),
+        "notices": mux.take_notices(),
+    }
+    facts = observations["home_recovery"]
+    expect(facts["home_closed"], "the home pane could not be closed")
+    expect(facts["home_reopened"] and facts["same_column"],
+           f"the home pane was not reopened in the agent column: {facts}")
+    expect(facts["spawn_stacked"] and facts["members_after"] == len(members) + 1,
+           f"the spawn after closing the home pane did not join the stack: {facts}")
+    expect(not facts["notices"], f"a rebuilt stack reported notices: {facts['notices']}")
 
 
 def expanded(pane):

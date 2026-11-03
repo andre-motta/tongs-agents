@@ -20,7 +20,10 @@ Up and Down walk the history of submitted lines, kept in memory for the life
 of the sidebar. Tab completes the verb, a profile name or a folder (relative
 to the folder the sidebar started in, ``~`` expanded; hidden folders only
 after a typed dot) and lists the candidates when several remain. Escape
-closes the prompt. The result or the error is shown under the prompt.
+closes the prompt. The result or the error is shown under the prompt; a
+line that is refused, or whose command fails (a spawn the multiplexer
+refuses, a resume that cannot start), is put back into the prompt when
+nothing else was typed meanwhile.
 """
 
 from __future__ import annotations
@@ -315,6 +318,11 @@ def complete_line(
 
 # -- The run verb --
 
+def _with_notices(text: str, notices: list[str]) -> str:
+    """``text`` followed by one ``notice:`` line per placement notice."""
+    return "\n".join([text, *(f"notice: {message}" for message in notices)])
+
+
 def _prepare_run(context: CommandContext, args: argparse.Namespace) -> Prepared:
     mux, session = context.multiplexer, context.session
     try:
@@ -331,11 +339,14 @@ def _prepare_run(context: CommandContext, args: argparse.Namespace) -> Prepared:
         text += f" with {shlex.join(options['args'])}"
 
     def execute() -> str:
+        notices: list[str] = []
         try:
-            workspace_spawn.spawn_profiles(mux, session, [profile], **options)
+            workspace_spawn.spawn_profiles(mux, session, [profile], **options,
+                                           notices=notices)
         except (MultiplexerError, LaunchError, OSError) as error:
-            raise CommandError(getattr(error, "detail", None) or str(error)) from None
-        return f"started {text}"
+            raise CommandError(_with_notices(
+                getattr(error, "detail", None) or str(error), notices)) from None
+        return _with_notices(f"started {text}", notices)
 
     return Prepared(f"starting {text}", execute)
 
@@ -352,12 +363,33 @@ RUN = register_verb(Verb(
 
 # -- The resume verb --
 
-def resume_into(context: CommandContext, session_id: str,
-                profile: str | None = None) -> tuple[resume_command.Plan, str | None]:
-    """Start ``session_id`` in the context's session: the plan and any live warning.
+@dataclass(frozen=True)
+class ResumeCheck:
+    """A checked resume: the plan and the session's live process, if any."""
+
+    plan: resume_command.Plan
+    live: resume_command.LiveProcess | None
+
+    @property
+    def warning(self) -> str | None:
+        if self.live is None:
+            return None
+        return resume_command.warning_text(self.plan.target, self.live)
+
+    @property
+    def refusal(self) -> str | None:
+        """Set when the session already runs in this workspace."""
+        if self.live is None or not self.live.here:
+            return None
+        return resume_command.here_refusal(self.plan.target, self.live)
+
+
+def check_resume(context: CommandContext, session_id: str,
+                 profile: str | None = None) -> ResumeCheck:
+    """The plan for ``session_id`` in the context's session and where it still runs.
 
     Raises CommandError. It reads the store and the harness config dirs, so
-    call it off the UI thread.
+    call it off the UI thread. Nothing starts.
     """
     try:
         profiles = context.load_profiles()
@@ -368,24 +400,42 @@ def resume_into(context: CommandContext, session_id: str,
         plan = resume_command.plan(target, profiles, profile)
     except resume_command.ResumeRefused as refused:
         raise CommandError(str(refused)) from None
-    warning = resume_command.live_warning(target, context.session)
+    live = resume_command.live_process(target, context.session, context.multiplexer.name)
+    return ResumeCheck(plan, live)
+
+
+def start_resume(context: CommandContext, plan: resume_command.Plan) -> list[str]:
+    """Spawn the pane ``plan`` describes in the context's session.
+
+    Returns the placement notices; raises CommandError on failure.
+    """
+    notices: list[str] = []
     try:
         workspace_spawn.spawn_profiles(
             context.multiplexer, context.session, [plan.profile], **plan.options,
+            notices=notices,
         )
     except (MultiplexerError, LaunchError, OSError) as error:
-        raise CommandError(getattr(error, "detail", None) or str(error)) from None
-    return plan, warning
+        raise CommandError(_with_notices(
+            getattr(error, "detail", None) or str(error), notices)) from None
+    return notices
 
 
 def resume_session(context: CommandContext, session_id: str,
                    profile: str | None = None) -> str:
-    """``resume_into`` as the command line's result text."""
-    plan, warning = resume_into(context, session_id, profile)
-    result = f"resumed {plan.summary}"
-    if warning is not None:
-        result += f"\nwarning: {warning}"
-    return result
+    """Start ``session_id`` in the context's session; the command line's result text.
+
+    A session that already runs in this session is refused (CommandError);
+    one that runs elsewhere starts with a warning, as the CLI does.
+    """
+    checked = check_resume(context, session_id, profile)
+    if checked.refusal is not None:
+        raise CommandError(checked.refusal)
+    notices = start_resume(context, checked.plan)
+    result = f"resumed {checked.plan.summary}"
+    if checked.warning is not None:
+        result += f"\nwarning: {checked.warning}"
+    return _with_notices(result, notices)
 
 
 def recent_listing(context: CommandContext) -> str:
@@ -609,4 +659,6 @@ class CommandLine(Widget):
 
     def _finished(self, line: str, ok: bool, message: str) -> None:
         self.show_result(message, error=not ok)
+        if not ok and not self.input.value:
+            self._set_value(line)
         self.post_message(self.Ran(line, ok, message))

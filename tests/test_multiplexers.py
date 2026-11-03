@@ -1156,3 +1156,126 @@ def test_a_focused_stacked_spawn_selects_the_new_pane(fake):
         _clients("1 terminal_0 sidebar\n"), _clients("1 terminal_5 chat\n"))
     _mux().spawn("agents", ["chat"], name="chat", focus=True)
     assert ["focus-pane-id", "terminal_5"] in _actions(fake)
+
+
+def test_focus_rejects_a_refusal_other_than_already_focused(fake):
+    # Another client shows the pane, but zellij refused for another reason.
+    fake.responses["list-clients"] = _clients(
+        "1 terminal_2 claude\n", "2 terminal_0 sidebar\n")
+    fake.responses["focus-pane-id"] = (2, "", "Pane with id Terminal(2) not found\n")
+    result = _mux().focus(PaneRef("zellij", "agents", "2"))
+    assert result.state == "failed"
+    assert "not found" in result.selection.detail
+    assert _actions(fake) == [["list-clients"], ["focus-pane-id", "terminal_2"]]
+
+
+def test_focus_rejects_an_already_focused_refusal_for_another_pane(fake):
+    fake.responses["list-clients"] = _clients(
+        "1 terminal_2 claude\n", "2 terminal_0 sidebar\n")
+    fake.responses["focus-pane-id"] = (2, "", "Pane Terminal(0) is already focused\n")
+    result = _mux().focus(PaneRef("zellij", "agents", "2"))
+    assert result.state == "failed"
+    assert "Terminal(0) is already focused" in result.selection.detail
+
+
+def test_focus_reads_the_already_focused_refusal_from_stderr(fake):
+    fake.responses["list-clients"] = _clients(
+        "1 terminal_2 claude\n", "2 terminal_0 sidebar\n")
+    fake.responses["focus-pane-id"] = (2, "", "Pane Terminal(2) is already focused\n")
+    result = _mux().focus(PaneRef("zellij", "agents", "2"))
+    assert result.selection.succeeded
+    assert result.selection.detail == "pane already focused"
+
+
+# The home pane was closed (#124 follow-up): the marked sidebar finds the stack again.
+
+MARKED = dict(SIDEBAR, terminal_command=(
+    "/usr/bin/python3 -m tongs_agents.commands.sidebar --compact --layout single "
+    "--spawn-request 0123"))
+
+
+def test_a_closed_home_pane_is_reopened_in_the_agent_column(fake):
+    home = _pane(9, title=multiplexers.HOME_PANE_NAME, pane_x=40, pane_columns=120)
+    fake.responses["list-panes"] = _sequence(
+        _listing(MARKED, *_stack(3, 2)),
+        _listing(MARKED, *_stack(3, 2), home),
+        _listing(MARKED, *_stack(3, 2), home),
+        _listing(MARKED, *_stack(3, 2), home, *_stack(10)),
+    )
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = _sequence(
+        (0, "terminal_9\n", ""), (0, "terminal_10\n", ""))
+    ref = _mux().spawn("agents", ["claude"], name="claude")
+    assert ref.pane_id == "10"
+    new_panes = [action for action in _actions(fake) if action[0] == "new-pane"]
+    assert new_panes[0][:6] == ["new-pane", "--tab-id", "0", "--floating", "--name",
+                                multiplexers.HOME_PANE_NAME]
+    assert new_panes[0][-3:] == ["-m", "tongs_agents.workspace_spawn", "home"]
+    stacks = [action for action in _actions(fake) if action[0] == "stack-panes"]
+    assert stacks == [["stack-panes", "--", "terminal_2", "terminal_9"],
+                      ["stack-panes", "--", "terminal_9", "terminal_10"]]
+    assert _mux().take_notices() == []
+
+
+def test_an_exited_agent_is_the_anchor_only_without_a_live_one(fake):
+    entries = [MARKED, *_stack(2, exited=True, is_held=True), *_stack(5)]
+    assert mux_zellij._agent_column(entries, MARKED)[0]["id"] == 2
+    column = mux_zellij._agent_column(entries, MARKED)
+    assert min(column, key=lambda entry: (entry["exited"], entry["id"]))["id"] == 5
+
+
+def test_the_agent_column_is_the_fullest_one_beside_the_sidebar(fake):
+    entries = [
+        MARKED, _pane(7, title="split", pane_x=0, pane_columns=40),
+        *_stack(4, 5), _pane(3, title="other", pane_x=100, pane_columns=60),
+        *_stack(8, tab_id=1),
+    ]
+    assert [entry["id"] for entry in mux_zellij._agent_column(entries, MARKED)] == [4, 5]
+
+
+def test_a_home_pane_that_does_not_join_leaves_the_agent_as_anchor(fake):
+    stray = dict(_pane(9, title=multiplexers.HOME_PANE_NAME), is_floating=True)
+    fake.responses["list-panes"] = _sequence(
+        _listing(MARKED, *_stack(2)),
+        *[_listing(MARKED, *_stack(2), stray)] * mux_zellij.READBACK_ATTEMPTS,
+        _listing(MARKED, *_stack(2)),
+        _listing(MARKED, *_stack(2, 10)),
+    )
+    fake.responses["list-tabs"] = _tabs(42)
+    fake.responses["new-pane"] = _sequence(
+        (0, "terminal_9\n", ""), (0, "terminal_10\n", ""))
+    assert _mux().spawn("agents", ["claude"]).pane_id == "10"
+    actions = _actions(fake)
+    assert ["close-pane", "--pane-id", "terminal_9"] in actions
+    assert actions[-2] == ["stack-panes", "--", "terminal_2", "terminal_10"]
+
+
+def test_a_full_stack_without_its_home_pane_is_still_refused(fake):
+    fake.responses["list-panes"] = _listing(MARKED, *_stack(2, 3, 4))
+    fake.responses["list-tabs"] = _tabs(8)
+    with pytest.raises(MultiplexerError, match="agent stack is full"):
+        _mux().spawn("agents", ["claude"])
+    assert "new-pane" not in [action[0] for action in _actions(fake)]
+
+
+def test_a_gone_stack_falls_back_to_a_plain_pane_with_a_notice(fake):
+    fake.responses["list-panes"] = _listing(MARKED)
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    mux = _mux()
+    assert mux.spawn("agents", ["claude"], name="claude").pane_id == "4"
+    assert _actions(fake) == [["list-panes", "--json"],
+                              ["new-pane", "--name", "claude", "--", "claude"]]
+    [notice] = mux.take_notices()
+    assert "agent stack is gone" in notice and "side by side" in notice
+    assert mux.take_notices() == []
+
+
+def test_an_unmarked_session_without_a_home_pane_stays_silent(fake):
+    fake.responses["list-panes"] = _listing(SIDEBAR, *_stack(2))
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    mux = _mux()
+    mux.spawn("agents", ["claude"])
+    assert [action[0] for action in _actions(fake)] == ["list-panes", "new-pane"]
+    assert mux.take_notices() == []
+    assert not mux_zellij._marks_single(dict(MARKED, is_floating=True))
+    assert not mux_zellij._marks_single(dict(MARKED, title="claude"))

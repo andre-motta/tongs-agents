@@ -110,10 +110,12 @@ The monitor counts as inside a session when it runs in a Zellij pane (the
 sidebar also detects tmux); started elsewhere it offers only the last four
 commands. In the sidebar the palette also has `Command line`, which opens the
 [sidebar command line](#sidebar-command-line) like `:`, `Resume in workspace`
-(same as `R`: resumes the selected agent's harness session in a new pane) and
+(same as `u`: resumes the selected agent's harness session in a new pane) and
 `Resume session…` (a list of the recent sessions in the session store; Enter
 resumes the chosen one), both described in
-[moving open sessions into the workspace](resume.md), and the chat entries (`Grant chat`, `Grant chat and wake`,
+[moving open sessions into the workspace](resume.md) (a session that already
+runs in this workspace is not resumed again, and one that runs elsewhere asks
+first), and the chat entries (`Grant chat`, `Grant chat and wake`,
 `Revoke chat`, `Post to chat`, `Toggle chat` and `Open chat pane`); see
 [agent chat](chat.md). A spawn that fails is shown as an error notification and
 its launch record is removed.
@@ -128,7 +130,7 @@ parser, and it always works on the session the sidebar runs in:
 | Verb | What it does |
 | --- | --- |
 | `run PROFILE [DIR] [-- ARGS ...]` | Same as [`tongs-agents run`](workspace.md#adding-agents-run) inside the session: adds a pane for the profile, in DIR, with ARGS appended for this launch. DIR defaults to the folder the sidebar started in, and a relative DIR is resolved from there. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
-| `resume [ID] [--profile NAME]` | Same as [`tongs-agents resume`](resume.md) inside the session: without ID it lists the sessions it can resume under the prompt; with an ID or a unique prefix it adds a pane that resumes that session in its recorded folder, with the matching profile. A warning follows the result when the session still runs elsewhere. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
+| `resume [ID] [--profile NAME]` | Same as [`tongs-agents resume`](resume.md) inside the session: without ID it lists the sessions it can resume under the prompt; with an ID or a unique prefix it adds a pane that resumes that session in its recorded folder, with the matching profile. A session that already runs in this workspace is refused; a warning follows the result when the session still runs elsewhere. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
 
 The line is split like a shell line (`run alpha ~/src -- --resume 'two
 words'`) but never run through a shell: a first word that is not a verb, such
@@ -137,7 +139,7 @@ help.
 
 | Key | Action |
 | --- | --- |
-| Enter | Run the line. The result (`started alpha in /src/app with --resume`) or the error (an unknown profile, a missing folder, an argparse usage error with the usage line) is shown under the prompt; a refused line stays in the prompt to be fixed. |
+| Enter | Run the line. The result (`started alpha in /src/app with --resume`) or the error (an unknown profile, a missing folder, an argparse usage error with the usage line) is shown under the prompt; a refused line stays in the prompt to be fixed, and the line of a command that fails while it runs (a pane the multiplexer cannot start, a session that cannot be resumed) is put back into the prompt unless you typed something new meanwhile. |
 | Up, Down | Older and newer lines from the history. The history keeps the last 100 submitted lines, in memory only, for as long as the sidebar runs; Down past the newest line brings back what you were typing. |
 | Tab | Completes the word at the end of the line: the verb, a profile name, or a folder (`~` expanded, relative to the sidebar's folder, hidden folders only after a typed dot). A folder with spaces is quoted after a bare `~/`, and Tab keeps completing inside a quoted word. When several remain it extends to their common start and lists them under the prompt. Arguments after `--` and options are not completed. |
 | Escape | Closes the prompt and returns to the agents list. |

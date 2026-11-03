@@ -2,6 +2,7 @@
 
 from tongs_agents.multiplexers.base import (
     HOME_PANE_NAME,
+    LAYOUT_OPTION,
     LAYOUT_SINGLE,
     LAYOUT_SPLIT,
     LAYOUTS,
@@ -20,6 +21,7 @@ from tongs_agents.multiplexers.zellij import ZellijMultiplexer
 __all__ = [
     "HOME_PANE_NAME",
     "LAYOUTS",
+    "LAYOUT_OPTION",
     "LAYOUT_SINGLE",
     "LAYOUT_SPLIT",
     "SESSION_EXITED",

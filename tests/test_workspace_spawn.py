@@ -138,6 +138,33 @@ def test_spawn_profiles_runs_the_launcher_for_each_profile():
         assert (stored.state, stored.session, stored.multiplexer) == ("pending", "agents", "zellij")
 
 
+class NoticingMux(FakeMux):
+    """A FakeMux whose spawns leave a placement notice, as Zellij's does."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.notices = []
+
+    def spawn(self, session, argv, **kwargs):
+        self.notices.append(f"notice for {kwargs.get('name')}")
+        return super().spawn(session, argv, **kwargs)
+
+    def take_notices(self):
+        notices, self.notices = self.notices, []
+        return notices
+
+
+def test_placement_notices_go_to_the_callers_list_or_stderr(capsys):
+    mux = NoticingMux()
+    notices = []
+    workspace_spawn.spawn_profiles(mux, "agents", [profile("alpha")], notices=notices)
+    assert notices == ["notice for alpha"]
+    assert capsys.readouterr().err == ""
+    workspace_spawn.spawn_profiles(mux, "agents", [profile("beta")])
+    assert capsys.readouterr().err == "tongs-agents: notice: notice for beta\n"
+    assert workspace_spawn.take_notices(FakeMux()) == []
+
+
 def test_spawn_profiles_stops_at_the_first_failure():
     mux = FakeMux(fail_spawn={"beta"})
     with pytest.raises(MultiplexerError):

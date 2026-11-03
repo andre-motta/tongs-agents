@@ -274,21 +274,22 @@ class AppShell:
         if profile is None or not self._in_session():
             self.call_from_thread(self._palette_failed, name, "profile is no longer configured")
             return
+        notices: list[str] = []
         try:
             workspace_spawn.spawn_profiles(
                 self.palette_multiplexer, self.palette_session, [profile],
-                folder=folder, args=args,
+                folder=folder, args=args, notices=notices,
             )
         except (MultiplexerError, LaunchError, OSError) as error:
             detail = getattr(error, "detail", None) or str(error)
-            self.call_from_thread(self._palette_failed, name, detail)
+            self.call_from_thread(self._palette_failed, name, detail, notices)
             return
         message = f"Started {name}"
         if folder is not None:
             message += f" in {folder}"
         if args:
             message += f" with {shlex.join(args)}"
-        self.call_from_thread(self._palette_spawned, message)
+        self.call_from_thread(self._palette_spawned, message, notices)
 
     @work(thread=True, group="palette-spawn")
     def palette_open_tongs(self) -> None:
@@ -302,9 +303,11 @@ class AppShell:
             )
         except (MultiplexerError, OSError) as error:
             detail = getattr(error, "detail", None) or str(error)
-            self.call_from_thread(self._palette_failed, "tongs", detail)
+            self.call_from_thread(self._palette_failed, "tongs", detail,
+                                  workspace_spawn.take_notices(self.palette_multiplexer))
             return
-        self.call_from_thread(self._palette_spawned, "Opened tongs")
+        self.call_from_thread(self._palette_spawned, "Opened tongs",
+                              workspace_spawn.take_notices(self.palette_multiplexer))
 
     @work(thread=True, group="palette-spawn")
     def palette_open_chat(self) -> None:
@@ -317,13 +320,23 @@ class AppShell:
             )
         except (MultiplexerError, OSError) as error:
             detail = getattr(error, "detail", None) or str(error)
-            self.call_from_thread(self._palette_failed, "chat", detail)
+            self.call_from_thread(self._palette_failed, "chat", detail,
+                                  workspace_spawn.take_notices(self.palette_multiplexer))
             return
-        self.call_from_thread(self._palette_spawned, "Opened chat")
+        self.call_from_thread(self._palette_spawned, "Opened chat",
+                              workspace_spawn.take_notices(self.palette_multiplexer))
 
-    def _palette_spawned(self, message: str) -> None:
+    def notify_placement(self, notices) -> None:
+        """Show placement notices from the multiplexer (a Zellij stack that is gone)."""
+        for message in notices:
+            self.notify(message[0].upper() + message[1:], title="Agent stack",
+                        severity="warning", timeout=15)
+
+    def _palette_spawned(self, message: str, notices=()) -> None:
         self.notify(message, timeout=3)
+        self.notify_placement(notices)
         self.agents_panel.poll()
 
-    def _palette_failed(self, name: str, detail: str) -> None:
+    def _palette_failed(self, name: str, detail: str, notices=()) -> None:
         self.notify(f"{name}: {detail}", title="Spawn failed", severity="error", timeout=15)
+        self.notify_placement(notices)

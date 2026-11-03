@@ -186,6 +186,7 @@ state (`STARTING`, `RUNNING` or `EXITED`).
 | `n` | Jump to the next agent that needs you (waiting, or idle for more than two minutes) |
 | `+` | Add an agent: profile, folder and arguments |
 | `m` | Show or hide the chat panel ([tutorial 5](chat-and-web.md)) |
+| `u` | Resume the row's harness session in a new pane, for an agent that has ended ([resume](../resume.md#in-the-sidebar)) |
 | `r` | Refresh |
 | `q` | Quit the sidebar |
 | Ctrl+P | Command palette |
