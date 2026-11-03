@@ -156,18 +156,7 @@ class CanonicalConfig:
 
     def profiles_for(self, target: ProfileTarget) -> tuple[str, ...]:
         """The profiles whose harness config home is ``target``."""
-        names = []
-        for profile in self.profiles.values():
-            harness, directory, problem = cli.profile_home(profile)
-            if harness != target.harness or problem is not None:
-                continue
-            home = cli._make_target(harness, directory, "profile").directory
-            wanted = target.config_dir
-            if wanted is not None:
-                wanted = cli._make_target(harness, wanted, "target").directory
-            if home == wanted:
-                names.append(profile.name)
-        return tuple(names)
+        return profiles_for(self.profiles, target)
 
     def skills_for_target(self, target: ProfileTarget) -> tuple[Skill, ...]:
         return self.skills_for(target.harness, self.profiles_for(target))
@@ -199,6 +188,26 @@ class CanonicalConfig:
             server for server in self.mcp_servers.values()
             if server.scope.applies(harness, names) and (include_disabled or server.enabled)
         )
+
+
+def profiles_for(profiles: Mapping[str, Profile], target: ProfileTarget) -> tuple[str, ...]:
+    """The names in ``profiles`` whose harness config home is ``target``.
+
+    Homes are normalized the way the engine resolves its targets, so a
+    profile matches exactly the target the engine plans for it.
+    """
+    names = []
+    for profile in profiles.values():
+        harness, directory, problem = cli.profile_home(profile)
+        if harness != target.harness or problem is not None:
+            continue
+        home = cli._make_target(harness, directory, "profile").directory
+        wanted = target.config_dir
+        if wanted is not None:
+            wanted = cli._make_target(harness, wanted, "target").directory
+        if home == wanted:
+            names.append(profile.name)
+    return tuple(names)
 
 
 def render_instructions(files: Iterable[InstructionFile]) -> str:

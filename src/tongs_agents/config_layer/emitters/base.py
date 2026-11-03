@@ -13,12 +13,20 @@ class BaseEmitter:
     """Implements the protocol's ``plan`` on top of ``plan_full``.
 
     ``plan`` returns only file changes, as the protocol defines. The engine
-    should call ``plan_full`` instead, which also returns the harness CLI
-    steps, manifest entries, notes and conflicts, and apply it the way
-    ``_common.apply_plan`` does.
+    calls ``plan_full``, which also returns the harness CLI steps, manifest
+    entries, entry states (``items``), notes and conflicts, and runs each
+    step with ``run_step`` after the file changes commit.
     """
 
     harness_id = ""
+
+    def run_step(self, step: _common.CommandStep) -> tuple[bool, str]:
+        """Run one planned CLI step: (succeeded, the last error line)."""
+        return _common.run_step(step)
+
+    def step_entries(self, entries, step: _common.CommandStep, ok: bool | None) -> dict:
+        """The manifest entries before (``ok`` None) or after one CLI step."""
+        return _common.step_entries(entries, step, ok)
 
     def plan(self, config: Any, target: ProfileTarget) -> list[Change]:
         return self.plan_full(config, target).changes

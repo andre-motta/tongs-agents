@@ -45,6 +45,9 @@ OWNER = "tongs-agents"
 BACKUP_SUFFIX = ".tongs-agents.bak"
 MAX_OWNED_BYTES = 1024 * 1024
 MAX_EDIT_BYTES = 4 * 1024 * 1024
+# A file a harness owns (Claude Code's .claude.json) that tongs-agents only
+# reads back or copies into a drift backup; it can be far larger than ours.
+HARNESS_FILE_MAX_BYTES = 64 * 1024 * 1024
 MARKER_KEYS = ("owner", "schema_version", "managed_paths")
 FORMATS = ("json", "md", "toml", "kdl", "hash", "slash")
 MANIFEST_SCHEMA = 1
