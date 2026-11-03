@@ -1,10 +1,13 @@
-# Agent chat
+---
+title: "Agent chat"
+description: "A chat between you and the agent panes you grant, with mentions, wake and MCP chat tools."
+---
 
 You and the agent panes tongs-agents launched can talk in a small chat: you
 post from the sidebar or the CLI, granted agents post and read through three
 MCP tools on the `tongs-agents` server. Chat is off for every session until
 you grant it, one pane at a time. The approved design is
-[agent chat](work/agent-chat.md).
+[agent chat](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-chat.md).
 
 | Tool | Arguments | Returns |
 | --- | --- | --- |

@@ -1,4 +1,7 @@
-# App settings, command palette and theme
+---
+title: "App settings, command palette and theme"
+description: "Defaults for the workspace, the sidebar and the monitor, the command palette and the theme."
+---
 
 `tongs-agents monitor` and the workspace sidebar share one app shell: the same
 header and footer, a command palette (`Ctrl+P`) and a theme. Their defaults,

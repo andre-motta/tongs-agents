@@ -1,4 +1,7 @@
-# Installing tongs-agents
+---
+title: "Installing tongs-agents"
+description: "Install tongs-agents and see what install changes in Claude Code, Codex and Pi files."
+---
 
 ## Get the package
 

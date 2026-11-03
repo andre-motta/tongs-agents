@@ -1,4 +1,9 @@
-# Tutorial: driving agents
+---
+title: "Tutorial: driving agents"
+description: "Send prompts to agent panes, read them and wait for them, then let one agent drive another over MCP."
+sidebar:
+  order: 4
+---
 
 tongs-agents can type into the panes it started: paste a prompt and press
 Enter, read the screen, and wait until the agent is done. In this tutorial

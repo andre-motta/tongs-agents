@@ -1,11 +1,14 @@
-# Config layer: `tongs-agents config`
+---
+title: "Config layer: tongs-agents config"
+description: "Keep instructions, skills and MCP servers in one dotfiles directory and emit them into every harness."
+---
 
 `tongs-agents config` emits one harness-agnostic dotfiles directory into the
 config home of every Claude Code, Codex and Pi profile, reports drift, and
 captures harness-side edits back. The directory format is
-[schema `tongs-agents-dotfiles/1`](work/dotfiles-schema-draft.md); where each
+[schema `tongs-agents-dotfiles/1`](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/dotfiles-schema-draft.md); where each
 item lands per harness is the approved
-[emitter strategy](work/emitter-strategy.md).
+[emitter strategy](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/emitter-strategy.md).
 
 Emitters for Claude Code, Codex and Pi ship with tongs-agents. A broken
 emitter module is reported as an error and exits 1. Any unexpected failure in
@@ -67,7 +70,7 @@ a harness does not get yet.
 ## Harness CLI steps
 
 Claude Code and Pi keep MCP servers in files they own, so those are changed
-through the harness CLI, as the [emitter strategy](work/emitter-strategy.md)
+through the harness CLI, as the [emitter strategy](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/emitter-strategy.md)
 decides:
 
 - Claude Code: `claude mcp add --scope user` and `claude mcp remove --scope

@@ -1,4 +1,7 @@
-# Agent profiles
+---
+title: "Agent profiles"
+description: "Define the agents tongs-agents starts, each with its own command, config dir, cwd, env and model arguments."
+---
 
 A profile names a command that tongs-agents can start in a multiplexer pane.
 Any argv command can be a profile: a harness on `PATH`, a harness with its own

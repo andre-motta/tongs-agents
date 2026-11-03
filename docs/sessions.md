@@ -1,4 +1,7 @@
-# Session store
+---
+title: "Session store"
+description: "The JSON session records hooks write, who reads them and how they are cleaned up."
+---
 
 Hooks, `tongs-agents notify` and bridges write one JSON record per agent
 session to the sessions directory, `paths.sessions_dir()`:

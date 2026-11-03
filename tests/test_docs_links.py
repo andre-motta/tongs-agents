@@ -6,6 +6,9 @@ match one of its headings (GitHub's anchor rules). README.md uses absolute
 ``github.com/andre-motta/tongs-agents/blob/main/...`` links so they also work on
 PyPI; those are checked against the checkout the same way.
 
+A leading YAML frontmatter block (``---`` ... ``---``, read by the tongs.tools
+Starlight site) is skipped: it is neither prose nor a code block.
+
 Every ``tongs-agents ...`` line in a fenced shell block of README.md, the docs
 pages and the tutorials is parsed with the real CLI parser, so a renamed verb
 or flag fails here. Lines written as usage syntax (``[OPTION]``, ``<value>``,
@@ -44,10 +47,20 @@ def _user_pages() -> list[Path]:
     return [page for page in _pages() if "work" not in page.relative_to(ROOT).parts[:2]]
 
 
+def _body_lines(text: str):
+    """(line number, line) after a leading frontmatter block, if there is one."""
+    lines = list(enumerate(text.splitlines(), 1))
+    if lines and lines[0][1].strip() == "---":
+        for index, (_, line) in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                return lines[index + 1:]
+    return lines
+
+
 def _prose_lines(text: str):
-    """Lines outside fenced code blocks, with their line numbers."""
+    """Lines outside frontmatter and fenced code blocks, with their line numbers."""
     fenced = None
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in _body_lines(text):
         match = FENCE.match(line)
         if match:
             if fenced is None:
@@ -64,7 +77,7 @@ def _fenced_blocks(text: str):
     block = None
     language = ""
     marker = ""
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in _body_lines(text):
         stripped = line.strip()
         if block is None:
             match = FENCE.match(line)
@@ -231,6 +244,15 @@ def test_shown_command_parses(where, argv):
         assert error.code == 0, f"{where}: {shown}"
         return
     assert args.command is not None, f"{where}: {shown}"
+
+
+def test_frontmatter_is_not_prose():
+    text = "---\ntitle: \"A [page](missing.md)\"\n# not a heading\n---\n\n## Real\n"
+    assert [line for _, line in _prose_lines(text)] == ["", "## Real"]
+    assert [number for number, _ in _prose_lines(text)] == [5, 6]
+    assert [line for _, line in _prose_lines("---\nno closing marker\n")] == [
+        "---", "no closing marker",
+    ]
 
 
 def test_shell_lines_split_like_a_shell():

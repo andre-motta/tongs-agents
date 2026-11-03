@@ -1,18 +1,25 @@
-# Sandboxed profiles (OpenShell)
+---
+title: "Sandboxed profiles (OpenShell)"
+description: "Reference for profiles that run their agent in an NVIDIA OpenShell sandbox: keys, launch, sandbox commands, access requests and the setup wizard."
+---
 
 A profile with a `sandbox` table runs its agent inside an
 [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) sandbox, still in its
-own Zellij pane, with its status in the sidebar like any other agent. The
-design and its approval record are in
-[openshell-sandbox.md](work/openshell-sandbox.md) (#34); this page describes
-what M7-A (#35), M7-B (#36), M7-C (#37) and M7-D (#38) implement.
+own Zellij pane, with its status in the sidebar like any other agent. This
+page is the reference for the profile keys, the launcher, the `sandbox`
+commands, access requests and the setup wizard. For a step-by-step
+introduction, follow the [sandboxed agents tutorial](tutorials/sandbox.md).
+The design and its approval record are in
+[openshell-sandbox.md](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/openshell-sandbox.md) (#34).
 
 Status: **instrumented only.** Every OpenShell call has been exercised against
 the fake CLI in `tests/fixtures/fake_openshell/`, which reproduces the argument
 shapes and `sandbox get -o json` keys of the OpenShell CLI at upstream
 `ba302a6` (equal to v0.1.6 and midstream v0.1.6-rhaiv.4). The live check on a
 rootless Podman gateway with upstream v0.1.6 and a midstream build is pending
-the maintainer's run (row 21, see [Live validation](#live-validation)).
+the maintainer's run (row 21, see [Live validation](#live-validation);
+[#109](https://github.com/andre-motta/tongs-agents/issues/109),
+[#116](https://github.com/andre-motta/tongs-agents/issues/116)).
 
 ## Before you start
 
@@ -65,7 +72,7 @@ you to run.
 3. **Network and credentials.** Network presets for the generated policy;
    everything else stays denied and goes through
    [access requests](#access-requests). The harness's model API is checked
-   by default. Credentials are OpenShell provider names (row 13), suggested
+   by default; `--network none` selects no preset, so all egress is denied. Credentials are OpenShell provider names (row 13), suggested
    per preset:
 
    | Preset | Allows | Provider (type) |
@@ -137,7 +144,7 @@ cwd = "~/src/project"          # its contents are uploaded into workdir
 
 [profiles.claude-boxed.sandbox]
 image = "registry.example.com/org/claude-agent:1"   # --from
-providers = ["anthropic", "github"]                 # --provider, repeatable
+providers = ["claude-code", "github"]               # --provider, repeatable
 policy = "~/policies/claude.yaml"                   # --policy (a host file)
 # name = "my-box"            # default: tongs-<profile>, dashes for underscores
 # workdir = "/sandbox/workspace"

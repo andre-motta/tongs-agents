@@ -44,6 +44,21 @@ hooks (hook.py)  -->  $XDG_STATE_HOME/tongs-agents/sessions/*.json  <--  discove
 - **cli.py**: Entry point for `tongs-agents` command.
 - **profiles.py**, **launches.py**, **launch.py**: agent profiles from `config.toml`, owned launch records and the in-pane launcher. See [docs/profiles.md](docs/profiles.md).
 
+## Docs
+
+User documentation lives in [docs/](docs/README.md): tutorials in
+`docs/tutorials/`, how-to and reference pages in `docs/`. The tongs website,
+www.tongs.tools, publishes these pages as its `/agents/` section from a
+pinned tongs-agents version; `docs/work/` holds internal design records and
+is not published.
+
+Every published page starts with a YAML frontmatter block with a `title` and
+a one-sentence `description`; the site renders `title` as the page heading,
+so do not repeat it as a `# ` heading. Link between pages with relative
+links, and list a new page in [docs/README.md](docs/README.md).
+`pytest tests/test_docs_links.py tests/test_docs_frontmatter.py` checks
+links, frontmatter and every `tongs-agents` command shown in a shell block.
+
 ## Agent-led initiatives
 
 For substantial agent-led work, follow [docs/SDLC.md](docs/SDLC.md), including

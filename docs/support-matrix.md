@@ -1,8 +1,11 @@
-# Support matrix
+---
+title: "Support matrix"
+description: "What tongs-agents supports for each harness, multiplexer, terminal and platform, with the evidence for each claim."
+---
 
 This page holds the evidence-based harness and terminal support matrices for
 tongs-agents. It describes what the code on `main` does today. Planned work is
-tracked in the [agent workspace plan](work/agent-workspace-plan.md).
+tracked in the [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md).
 
 ## Harness support
 
@@ -10,7 +13,7 @@ The support matrix separates lifecycle ingestion from process identity and
 focus. A lifecycle event does not by itself prove that a process is
 discoverable, that a terminal target can be selected, or that a desktop window
 can be activated. See the [adapter author guide](harness-adapters.md) and
-the implemented [event, identity and focus contract](work/harness-contract.md)
+the implemented [event, identity and focus contract](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/harness-contract.md)
 before adding another harness.
 
 | Harness | Lifecycle ingestion | Process identity | Terminal selection | GUI window activation | MCP consumer access | Native harness MCP registration |
@@ -46,11 +49,11 @@ in place of agents. It runs locally and in the hosted `workspace-validation`
 job on both pinned Zellij releases
 ([JSON](../validation/evidence/workspace-linux-x86_64.json)). The maintainer's
 hands-on run with real profiles has not been recorded yet
-([runbook](work/workspace-live-run.md)), so no workspace row is labelled live.
+([runbook](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/workspace-live-run.md)), so no workspace row is labelled live.
 
 | Multiplexer | Workspace session and spawn request | In-session rerun | Row focus from the sidebar | Evidence |
 | --- | --- | --- | --- | --- |
-| **Zellij 0.44.2 and 0.45.1** (Linux x86_64) | Yes: `workspace --profile ... --no-tongs` creates the session in under 5 s with the sidebar plus one pane per profile; the sidebar consumes the spawn request once and removes the layout | Yes: run inside the session it adds panes to the same session, keeps one sidebar and starts no second server | Yes: Enter on a hook or launch row selects that pane for the most recent input client, confirmed by `list-clients` with a second client attached; window activation is skipped, never attempted | instrumented (validator on both pins, [JSON](../validation/evidence/workspace-linux-x86_64.json)); mocked; live run pending ([runbook](work/workspace-live-run.md)) |
+| **Zellij 0.44.2 and 0.45.1** (Linux x86_64) | Yes: `workspace --profile ... --no-tongs` creates the session in under 5 s with the sidebar plus one pane per profile; the sidebar consumes the spawn request once and removes the layout | Yes: run inside the session it adds panes to the same session, keeps one sidebar and starts no second server | Yes: Enter on a hook or launch row selects that pane for the most recent input client, confirmed by `list-clients` with a second client attached; window activation is skipped, never attempted | instrumented (validator on both pins, [JSON](../validation/evidence/workspace-linux-x86_64.json)); mocked; live run pending ([runbook](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/workspace-live-run.md)) |
 | **Zellij older than 0.44.2** | No: `workspace` stops and `doctor` reports an error | -- | -- | mocked; the [version floor](../validation/evidence/zellij-version-floor-fedora44.json) is live for pane selection |
 | **Zellij newer than 0.45.1** | Allowed with a `doctor` warning | Unvalidated | Unvalidated | mocked |
 | **Zellij on macOS or Linux aarch64** | Not run | Unvalidated | Unvalidated | unvalidated |

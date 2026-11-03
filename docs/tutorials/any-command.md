@@ -1,4 +1,9 @@
-# Tutorial: any command as a pane
+---
+title: "Tutorial: any command as a pane"
+description: "Run any command as a workspace pane and report its status with tongs-agents notify."
+sidebar:
+  order: 2
+---
 
 Claude Code, Codex and Pi report their own status through hooks. Anything
 else (a test watcher, a build, a deploy script, an agent without hooks) can

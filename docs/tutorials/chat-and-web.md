@@ -1,4 +1,9 @@
-# Tutorial: agent chat and web watching
+---
+title: "Tutorial: agent chat and web watching"
+description: "Grant agents a chat, mention and wake them, and watch the workspace read-only from a phone."
+sidebar:
+  order: 5
+---
 
 Agent chat is a small chat room for you and the agents you grant: you post
 from the sidebar or the CLI, granted agents read and post through three MCP

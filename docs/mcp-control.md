@@ -1,4 +1,7 @@
-# MCP agent control
+---
+title: "MCP agent control"
+description: "Let an agent start, prompt and watch other agents through opt-in MCP tools."
+---
 
 An agent running in a pane that tongs-agents launched can start, prompt and
 watch other agents through four MCP tools on the `tongs-agents` server. They
