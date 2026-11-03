@@ -21,6 +21,7 @@ from tongs_agents.app_config import NOTIFY_LEVELS
 from tongs_agents.attention import Attention, attention_state
 from tongs_agents.focus import focus_notification, focus_session
 from tongs_agents.models import FleetSession, FocusResult, SessionStatus, format_age
+from tongs_agents.sandbox import state as sandbox_state
 from tongs_agents.sessions_feed import (
     SessionFeed,
     attention_rows,
@@ -28,7 +29,11 @@ from tongs_agents.sessions_feed import (
     visible_sessions,
 )
 from tongs_agents.widgets.detail_panel import DetailPanel
-from tongs_agents.widgets.session_table import FULL_MIN_WIDTH, SessionTable
+from tongs_agents.widgets.session_table import (
+    COMPACT_MIN_NAME_WIDTH,
+    FULL_MIN_WIDTH,
+    SessionTable,
+)
 
 DEFAULT_CHILD_IDS = {
     "summary": "summary-bar",
@@ -36,6 +41,68 @@ DEFAULT_CHILD_IDS = {
     "detail": "detail-panel",
     "search": "search-input",
 }
+
+SANDBOX_COLUMN_WIDTHS = {"compact": 3, "full": 16}
+
+
+def sandbox_launches() -> dict[str, str]:
+    """Launch id to sandbox name for every recorded sandboxed launch; never raises."""
+    try:
+        return {record.launch_id: record.sandbox for record in sandbox_state.list_records()}
+    except (OSError, ValueError):
+        return {}
+
+
+class SandboxSessionTable(SessionTable):
+    """SessionTable with a sandbox column while any shown row runs in an OpenShell sandbox.
+
+    The column is added after the others only then, so a fleet without
+    sandboxed agents keeps the plain layout. Compact rows mark the row
+    (``box``); full rows show the sandbox name.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.sandboxes: dict[str, str] = {}
+        self._sandbox_column = False
+
+    def _wants_sandbox_column(self) -> bool:
+        return any(session.identity in self.sandboxes for session in self._sessions)
+
+    def _name_width(self) -> int:
+        width = super()._name_width()
+        if self._sandbox_column:
+            width -= SANDBOX_COLUMN_WIDTHS["compact"] + 2 * self.cell_padding
+        return max(COMPACT_MIN_NAME_WIDTH, width)
+
+    def _ensure_layout(self) -> bool:
+        wanted = self._wants_sandbox_column()
+        if wanted != self._sandbox_column:
+            self._sandbox_column = wanted
+            self._layout = None
+        changed = super()._ensure_layout()
+        if changed and wanted:
+            kind = self._layout[0] if self._layout else "full"
+            label = "Box" if kind == "compact" else "Sandbox"
+            self.add_column(label, key="sandbox", width=SANDBOX_COLUMN_WIDTHS[kind])
+        return changed
+
+    def _row(self, s: FleetSession) -> tuple[Text, ...]:
+        row = super()._row(s)
+        if not self._sandbox_column:
+            return row
+        name = self.sandboxes.get(s.identity, "")
+        if self._layout and self._layout[0] == "compact":
+            cell = Text("box" if name else "", style="cyan")
+        else:
+            cell = Text(name, style="cyan", no_wrap=True, overflow="ellipsis")
+        return (*row, cell)
+
+    def set_sessions(self, sessions: list[FleetSession],
+                     sandboxes: Mapping[str, str] | None = None) -> None:
+        if sandboxes is not None:
+            self.sandboxes = dict(sandboxes)
+        super().set_sessions(sessions)
 
 
 class AgentsPanel(Widget):
@@ -118,6 +185,7 @@ class AgentsPanel(Widget):
         self.compact = compact
         self.child_ids = {**DEFAULT_CHILD_IDS, **(child_ids or {})}
         self._all_sessions: list[FleetSession] = []
+        self._sandbox_launches: dict[str, str] = {}
         self._notified: set[str] = set()
         self._search_query = ""
         self._status_filter = ""
@@ -126,7 +194,7 @@ class AgentsPanel(Widget):
     def compose(self) -> ComposeResult:
         ids = self.child_ids
         yield Static(id=ids["summary"], classes="agents-summary")
-        yield SessionTable(id=ids["table"], compact=self.compact)
+        yield SandboxSessionTable(id=ids["table"], compact=self.compact)
         yield DetailPanel(id=ids["detail"])
         yield Input(placeholder="Filter agents...", id=ids["search"])
 
@@ -157,18 +225,23 @@ class AgentsPanel(Widget):
     @work(thread=True, group="agents-poll")
     def poll(self) -> None:
         sessions = self.feed.snapshot()
-        self.app.call_from_thread(self.update_sessions, sessions)
+        launches = sandbox_launches()
+        self.app.call_from_thread(self.update_sessions, sessions, launches)
 
     @property
     def _live(self) -> bool:
         # is_mounted stays True after removal; is_attached tracks the DOM link.
         return self.is_mounted and self.is_attached
 
-    def update_sessions(self, sessions: list[FleetSession]) -> None:
+    def update_sessions(self, sessions: list[FleetSession],
+                        sandbox_launches: Mapping[str, str] | None = None) -> None:
+        """Show ``sessions``; ``sandbox_launches`` maps launch ids to sandbox names."""
         # A poll can land after the panel was removed and its children are gone.
         if not self._live:
             return
         self._all_sessions = list(sessions)
+        if sandbox_launches is not None:
+            self._sandbox_launches = dict(sandbox_launches)
         self._notify_new(self._all_sessions)
         self._render_view()
 
@@ -185,7 +258,17 @@ class AgentsPanel(Widget):
             return
         shown = self.shown_sessions()
         self._update_summary(shown)
-        self.table.set_sessions(shown)
+        table = self.table
+        if isinstance(table, SandboxSessionTable):
+            table.set_sessions(shown, sandboxes=self.sandbox_names(shown))
+        else:
+            table.set_sessions(shown)
+
+    def sandbox_names(self, sessions: list[FleetSession]) -> dict[str, str]:
+        """Session identity to sandbox name for the rows that run in a sandbox."""
+        launches = self._sandbox_launches
+        return {s.identity: launches[s.launch_id] for s in sessions
+                if s.launch_id and s.launch_id in launches}
 
     def on_resize(self) -> None:
         if self._live and self._all_sessions:

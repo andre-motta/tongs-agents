@@ -5,7 +5,7 @@ A profile with a `sandbox` table runs its agent inside an
 own Zellij pane, with its status in the sidebar like any other agent. The
 design and its approval record are in
 [openshell-sandbox.md](work/openshell-sandbox.md) (#34); this page describes
-what M7-A (#35) implements.
+what M7-A (#35) and M7-B (#36) implement.
 
 Status: **instrumented only.** Every OpenShell call has been exercised against
 the fake CLI in `tests/fixtures/fake_openshell/`, which reproduces the argument
@@ -184,6 +184,96 @@ unreadable namespace of the sidebar or of the process never skips it.
 
 Chat in sandboxed sessions (row 11) is M5 work; the bridge has the seam
 (`relay_chat`) but relays nothing yet.
+
+## Managing sandboxes
+
+`tongs-agents sandbox` manages the sandboxes tongs-agents created. Every
+action touches only a sandbox carrying a `tongs-agents.profile` or
+`tongs-agents.launch` label: an unlabelled sandbox is refused by name and
+skipped by `list` and `prune` (row 20). `NAME` is the sandbox name (`list`
+shows it); the gateway is `-g`, else the profile's `sandbox.gateway`, else
+openshell's default.
+
+| Command | What it runs |
+| --- | --- |
+| `sandbox list [--json]` (default) | `openshell sandbox list --limit 1000 -o json` on the default gateway and every profile gateway, filtered to labelled sandboxes, with whether an agent pane runs in each |
+| `sandbox status NAME [--json]` | `openshell sandbox get NAME -o json` |
+| `sandbox start NAME` | `openshell sandbox start NAME`, unless it is already Ready |
+| `sandbox stop NAME [--force]` | `openshell sandbox stop NAME`, unless it is already stopped |
+| `sandbox delete NAME... [--yes] [--force]` | `openshell sandbox delete NAME`; an absent sandbox is reported and skipped |
+| `sandbox prune [--all] [--yes]` | deletes labelled sandboxes whose profile is no longer configured (with `--all`, every labelled one); never one an agent pane runs in |
+| `sandbox pull NAME DEST [--path P] [--workdir W]` | `openshell sandbox download NAME <workdir>/<P> DEST` |
+| `sandbox logs NAME [-n N] [--since S] [--source all\|gateway\|sandbox]` | `openshell logs NAME -n N` (never `--tail`) |
+| `sandbox policy show NAME [--full]` | `openshell policy get NAME` |
+| `sandbox policy check [NAME] [--policy F] [--boundary F]`, alias `sandbox diff` | a diff, then `openshell-prover check F --boundary <active policy>` |
+| `sandbox advisor on\|off NAME` | `openshell settings set NAME --key agent_policy_proposals_enabled --value true\|false` |
+| `sandbox sync` | one bridge pass, like `python -m tongs_agents.sandbox sync` |
+
+Lifecycle commands are idempotent: starting a Ready sandbox, stopping a
+stopped one (`Stopped`, `Suspending`, `Suspended`, `Completed`), deleting an
+absent one and pruning twice all succeed without calling OpenShell again.
+`stop` and `delete` refuse a sandbox an agent pane is still running in (a
+recorded launch whose pane process is alive) unless `--force`. Deleting
+discards every file in the sandbox, so `delete` asks first, and off a
+terminal needs `--yes`; `prune` without `--yes` off a terminal only lists
+what it would delete. `prune` refuses to run while the config file has an
+invalid profile, so a typo never makes configured sandboxes look orphaned;
+`list` then warns and queries only the default gateway.
+
+`pull` copies out of the sandbox's working directory (the profile's
+`sandbox.workdir`, else the one recorded at launch, else
+`/sandbox/workspace`); `--path` is relative to it and may not use `..`.
+OpenShell itself only downloads from inside that directory. `DEST` must not
+exist or must be an empty directory, so a pull never overwrites host files.
+
+`policy check` compares a candidate policy, `--policy` or the profile's
+`sandbox.policy`, with the sandbox's active policy
+(`openshell sandbox get NAME --policy-only`) or with `--boundary`, prints a
+unified diff, then runs `openshell-prover check <candidate> --boundary
+<active policy>` (row 17). The prover is optional: without it on `PATH` the
+diff is shown unproved and the command still succeeds. A non-zero prover exit
+(findings or failure) makes the command exit 1. Nothing here applies a
+policy, approves a rule, changes the approval mode or writes a `--global`
+setting (rows 14, 16); `advisor` changes only the named sandbox.
+
+Text from the gateway and the sandbox (logs, policies, labels) is printed
+with terminal escape sequences and control characters removed, because an
+agent can write it.
+
+### Doctor
+
+When a profile is sandboxed or `openshell` is on `PATH`, `tongs-agents doctor`
+adds:
+
+- `openshell`: the CLI's path, version and flavour (an error below 0.1.0 or
+  when a sandboxed profile has no CLI, a warning below 0.1.6 or above 0.1.x);
+- `openshell-gateway`: `openshell [-g G] status -o json` (5 second timeout)
+  for each gateway a sandboxed profile uses, a warning when it fails.
+  tongs-agents never starts or logs in to a gateway;
+- `openssh`: an `ssh` client, which uploads, `create --upload` and `pull`
+  need;
+- `landlock` (Linux): the kernel's Landlock ABI through
+  `landlock_create_ruleset`; OpenShell needs 3 or newer;
+- `openshell-prover`: an info line when the prover is not installed;
+- `openshell-telemetry`: upstream gateways send anonymous telemetry by
+  default and midstream (`-rhaiv`) images build it out; the opt-out is
+  `OPENSHELL_TELEMETRY_ENABLED=false` in the gateway's own environment.
+  tongs-agents adds no telemetry and never changes gateway configuration.
+
+### Sidebar
+
+While any listed agent runs in a sandbox, the agents table gains a last
+column: `Sandbox` with the sandbox name at full width, `Box` with a `box`
+marker in compact rows. Rows are matched to sandboxes through their launch id
+and the launch records under `$XDG_STATE_HOME/tongs-agents/sandbox/`; without
+sandboxed agents the table keeps its usual columns.
+
+Every command above is instrumented against the fake CLI and a fake
+`openshell-prover` (`tests/fixtures/fake_openshell/`). The shapes of
+`sandbox list|start|stop|download`, `sandbox get --policy-only`, `policy get`,
+`logs`, `status -o json` and `openshell-prover check` and its exit status are
+unvalidated against a live gateway and a prover release until the
+maintainer's run (row 21).
 
 ## Live validation
 
