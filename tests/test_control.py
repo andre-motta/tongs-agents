@@ -251,8 +251,8 @@ def test_every_refusal_path_exits_5_and_touches_no_pane(world, case):
     assert outcomes == [("send", "refused", 5), ("read", "refused", 5)]
 
 
-def test_a_tmux_launch_is_unsupported(world):
-    record = world.launch("8", pid=4008, multiplexer="tmux")
+def test_a_launch_without_pane_control_is_unsupported(world):
+    record = world.launch("8", pid=4008, multiplexer="screen")
     with pytest.raises(control.ControlUnsupported) as caught:
         control.send(record.launch_id, "hi", actor="test", settings=world.settings)
     assert caught.value.exit_code == control.EXIT_UNSUPPORTED == 6

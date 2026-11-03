@@ -1,4 +1,4 @@
-"""``tongs-agents workspace``: open the agent workspace in Zellij.
+"""``tongs-agents workspace``: open the agent workspace in Zellij or tmux.
 
 Inside Zellij it spawns the requested profiles into the current session and
 adds a sidebar pane when none is listed; it never execs. Outside Zellij it
@@ -9,9 +9,18 @@ deleted first, or with ``--resurrect`` attached to as it is. Launch records
 and runtime files written for a new session are removed again when anything
 fails before the exec. Every agent pane goes through ``workspace_spawn``.
 
-``[workspace]`` in the config file supplies the session name, whether to add
-the tongs tab, and the profiles a new session starts with when no
-``--profile`` is given; the flags override it.
+With ``--multiplexer tmux`` (#24) the same verb drives tmux. Inside tmux
+(``TMUX`` set) it adds the profiles and, when none is listed, a sidebar pane
+to the current session and never nests or execs. Outside tmux it spawns into
+a running session, or creates the session detached with the sidebar as its
+first pane and spawns the profiles through ``workspace_spawn``; then it execs
+``tmux attach-session``. tmux has no EXITED sessions and no tongs tab, so
+``--resurrect`` and ``--tongs`` change nothing there. It is refused inside
+Zellij, so agent panes never inherit a Zellij pane identity.
+
+``[workspace]`` in the config file supplies the session name, the
+multiplexer, whether to add the tongs tab, and the profiles a new session
+starts with when no ``--profile`` is given; the flags override it.
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ from importlib import resources
 from tongs_agents import workspace_spawn
 from tongs_agents.app_config import (
     DEFAULT_SESSION,
+    MULTIPLEXERS,
     SESSION_RE,
     AppConfigError,
     load_app_config,
@@ -53,7 +63,8 @@ from tongs_agents.profiles import ProfileError, load_profiles, profiles_path
 from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME, SpawnRequestError
 
 NAME = "workspace"
-HELP = "Open the agent workspace: a Zellij session with the sidebar and profile panes"
+HELP = ("Open the agent workspace: a Zellij or tmux session with the sidebar and "
+        "profile panes")
 
 EXIT_ERROR = 1
 EXIT_USAGE = 2
@@ -65,6 +76,7 @@ _TONGS_BLOCK = re.compile(
 )
 CREATOR_ENV_DROP = ("TMUX", "TMUX_PANE", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID")
 TEMP_DIRS = ("/tmp", "/var/tmp")
+LABELS = {"zellij": ("Zellij", "ZELLIJ"), "tmux": ("tmux", "TMUX")}
 
 __all__ = ["DEFAULT_SESSION", "SIDEBAR_PANE_NAME", "LayoutError", "render_layout", "run"]
 
@@ -84,6 +96,11 @@ def add_arguments(parser):
         help=f"Zellij session name (default: [workspace] session, else {DEFAULT_SESSION!r})",
     )
     parser.add_argument(
+        "--multiplexer", choices=MULTIPLEXERS, default=None,
+        help="The multiplexer that hosts the workspace "
+             "(default: [workspace] multiplexer, else zellij)",
+    )
+    parser.add_argument(
         "--tongs", action=argparse.BooleanOptionalAction, default=None,
         help="Open a tongs tab in a new session when tongs is on PATH "
              "(default: [workspace] tongs_tab, else on)",
@@ -97,7 +114,8 @@ def add_arguments(parser):
     output = parser.add_mutually_exclusive_group()
     output.add_argument(
         "--print-command", action="store_true",
-        help="Prepare the workspace and print the zellij command instead of running it",
+        help="Prepare the workspace and print the zellij or tmux command instead "
+             "of running it",
     )
     output.add_argument(
         "--print-alias", action="store_true",
@@ -196,6 +214,8 @@ def _self_command() -> list[str]:
 
 def alias_line(args, session: str) -> str:
     command = [*_self_command(), NAME]
+    if getattr(args, "multiplexer", None) is not None:
+        command += ["--multiplexer", args.multiplexer]
     for name in args.profiles:
         command += ["--profile", name]
     if session != DEFAULT_SESSION:
@@ -214,18 +234,21 @@ def creator_env(base=None) -> dict[str, str]:
 
 
 def _inside(mux, args, profiles) -> int:
+    label, variable = LABELS[mux.name]
     here = mux.in_session()
     if here is None:
-        return _error("ZELLIJ is set but the current Zellij session cannot be identified")
+        return _error(
+            f"{variable} is set but the current {label} session cannot be identified"
+        )
     if args.session is not None and args.session != here.session:
         return _error(
-            f"already inside Zellij session {here.session!r}; refusing to use "
-            f"--session {args.session!r} (run it outside Zellij, or drop --session)",
+            f"already inside {label} session {here.session!r}; refusing to use "
+            f"--session {args.session!r} (run it outside {label}, or drop --session)",
             EXIT_USAGE,
         )
     if args.print_command:
         return _error(
-            "nothing to print inside a Zellij session; run without --print-command",
+            f"nothing to print inside a {label} session; run without --print-command",
             EXIT_USAGE,
         )
     if args.resurrect:
@@ -349,9 +372,73 @@ def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -
     return EXIT_ERROR
 
 
+def _outside_tmux(mux, args, session: str, profiles, new_profiles) -> int:
+    """Spawn into a running tmux session, or create it detached; then attach.
+
+    A new session's first pane is the sidebar; the profiles are split into
+    its window. Nothing is cleaned up on failure: the session stays and can
+    be attached to.
+    """
+    if args.resurrect:
+        _notice("ignoring --resurrect: tmux keeps no EXITED sessions")
+    if args.tongs:
+        _notice("ignoring --tongs: a tmux workspace has no tongs tab")
+    try:
+        if mux.session_state(session) == SESSION_RUNNING:
+            if args.print_command:
+                if profiles:
+                    _notice(
+                        f"session {session!r} is running; the printed command only "
+                        f"attaches and does not start {_profile_names(profiles)} "
+                        "(run without --print-command to start them)"
+                    )
+            else:
+                workspace_spawn.spawn_profiles(mux, session, profiles)
+                workspace_spawn.ensure_sidebar(mux, session)
+        else:
+            if isinstance(new_profiles, _Refused):
+                return _error(str(new_profiles), new_profiles.code)
+            mux.spawn(session, workspace_spawn.sidebar_argv(),
+                      name=SIDEBAR_PANE_NAME, focus=False)
+            workspace_spawn.spawn_profiles(mux, session, new_profiles)
+            if args.print_command:
+                _notice(
+                    f"started the detached tmux session {session!r}; run the command "
+                    "below to attach to it"
+                )
+        argv = mux.attach_argv(session)
+    except (MultiplexerError, LaunchError, UnsafePathError, OSError) as error:
+        return _error(getattr(error, "detail", None) or str(error))
+    if args.print_command:
+        print(shlex.join(argv))
+        return 0
+    try:
+        os.execvpe(argv[0], argv, creator_env())
+    except OSError as error:
+        return _error(f"cannot run {argv[0]}: {error.strerror or error}")
+    return EXIT_ERROR
+
+
+def _run_tmux_workspace(args, session, profiles, default_profiles) -> int:
+    if os.environ.get("ZELLIJ") is not None:
+        return _error(
+            "refusing --multiplexer tmux inside Zellij; run it outside Zellij",
+            EXIT_USAGE,
+        )
+    mux = get_multiplexer("tmux")
+    available, detail = mux.available()
+    if not available:
+        return _error(f"{detail}; run 'tongs-agents doctor' for details")
+    if os.environ.get("TMUX"):
+        return _inside(mux, args, profiles)
+    return _outside_tmux(mux, args, session, profiles, profiles or default_profiles)
+
+
 def run(args) -> int:
     if _is_windows():
-        return _error("unsupported on Windows (it needs Zellij on Linux or macOS)", EXIT_USAGE)
+        return _error(
+            "unsupported on Windows (it needs Zellij or tmux on Linux or macOS)", EXIT_USAGE
+        )
     try:
         settings = load_app_config().workspace
     except AppConfigError as error:
@@ -371,6 +458,9 @@ def run(args) -> int:
     if args.print_alias:
         print(alias_line(args, session))
         return 0
+    multiplexer = getattr(args, "multiplexer", None) or settings.multiplexer
+    if multiplexer == "tmux":
+        return _run_tmux_workspace(args, session, profiles, default_profiles)
     mux = get_multiplexer("zellij")
     available, detail = mux.available()
     if not available:

@@ -130,7 +130,7 @@ def test_get_multiplexer_returns_the_zellij_protocol_adapter():
     assert isinstance(mux, Multiplexer)
     assert mux.name == "zellij"
     with pytest.raises(Unsupported):
-        get_multiplexer("tmux")
+        get_multiplexer("screen")
     assert issubclass(Unsupported, MultiplexerError)
 
 

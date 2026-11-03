@@ -3,7 +3,9 @@
 `tongs-agents workspace` opens a Zellij session with the tongs-agents sidebar
 and one pane per requested [profile](profiles.md). It needs Zellij 0.44.2 or
 newer (0.45.1 is the newest validated release) on Linux or macOS; on Windows
-it prints that the workspace is unsupported and exits 2.
+it prints that the workspace is unsupported and exits 2. With
+`--multiplexer tmux` it uses tmux 3.2 or newer instead; see
+[tmux](#tmux).
 
 ```console
 tongs-agents workspace --profile claude-alt --profile codex-review
@@ -11,11 +13,13 @@ tongs-agents workspace --session work --profile pi-local --no-tongs
 tongs-agents workspace --resurrect
 tongs-agents workspace --print-command --profile claude-alt
 tongs-agents workspace --print-alias --profile claude-alt
+tongs-agents workspace --multiplexer tmux --profile claude-alt
 ```
 
 | Option | Meaning |
 | --- | --- |
 | `--profile NAME` | Start an agent pane for this profile. Repeatable. Unknown names are refused before anything starts. Without it a new session starts `[workspace].default_profiles` (none by default) and an existing one gets only the sidebar. |
+| `--multiplexer {zellij,tmux}` | The multiplexer that hosts the workspace: `[workspace].multiplexer` from the config file, else `zellij`. See [tmux](#tmux). |
 | `--session NAME` | The Zellij session: `[workspace].session` from the config file, else `agents`. Names use letters, digits, `.`, `_` and `-` (at most 64 characters). |
 | `--tongs` / `--no-tongs` | Add, or do not add, the `tongs` tab to a new session. Without either, `[workspace].tongs_tab` decides (on by default) and the tab opens only when `tongs` is on `PATH`. |
 | `--resurrect` | When the session is EXITED, attach to it instead of deleting it and starting it fresh. Starts no new panes; without an EXITED session it changes nothing. |
@@ -132,6 +136,61 @@ through the same focus path as `tongs-agents focus`; hookless rows select
 their pane directly after checking that it is still listed. Spawn failures
 appear as notifications.
 
+## tmux
+
+`--multiplexer tmux` (or `multiplexer = "tmux"` in `[workspace]`) runs the
+same verb on tmux 3.2 or newer. `tmux -V` is read before anything starts; a
+missing or older tmux stops the command like a missing Zellij. Every tmux
+call names the server socket with `-S`: the one in `TMUX` inside tmux,
+otherwise tmux's default socket (`$TMUX_TMPDIR`, else `/tmp`, then
+`tmux-<uid>/default`). Because `-S` skips tmux's own check of that default
+directory, the workspace repeats it: `tmux-<uid>` is created as 0700 when
+missing, and the command stops unless it is a real directory (not a symlink)
+owned by you with no group or other access. Sessions are always named exactly
+(`=<session>`), so a prefix never selects another session.
+
+| Where you run it | Result |
+| --- | --- |
+| Inside tmux (`TMUX` is set) | Spawns the profiles into the current session and adds a sidebar pane if no live one is listed. It never nests, attaches or execs. A different `--session` and `--print-command` are refused. |
+| Outside tmux, session running | Spawns the profiles into that session (and a sidebar if it has none), then runs `tmux -S <socket> attach-session -t =<session>`. |
+| Outside tmux, no session | Creates the session detached (`new-session -d`) with the sidebar as its first pane, spawns the profiles through the same spawn path, then attaches as above. |
+| Inside Zellij | Refused with exit 2, so agent panes never inherit a Zellij pane identity. |
+
+Agent panes split the current window side by side and the row is spread
+evenly; when the window has no room left, the pane opens in a new window.
+Panes are named with the pane option `@tongs_agents_name`, which programs
+cannot overwrite the way they overwrite pane titles. Layouts beyond the
+sidebar plus panes are out of scope.
+
+tmux keeps no EXITED sessions, so `--resurrect` is ignored with a notice, and
+there is no tongs tab, so `--tongs` is ignored with a notice. With
+`--print-command` a missing session is created detached right away (with its
+sidebar and profiles) and the attach command is printed; for a running
+session it only prints the attach command. Nothing is removed when a later
+step fails: the session stays and can be attached to. A new session name may
+not contain `.` or `:`, because tmux up to 3.3 rewrites them.
+
+The launcher records the pane from `TMUX_PANE` and the socket from `TMUX`
+whenever `ZELLIJ` is not set; the session stays the workspace session the
+launch was created for. Pane control (`tongs-agents send`, `read`, `wait`,
+`agent-status`) goes through the same verification, per-pane lock and audit
+log as on Zellij. A paste is loaded into a uniquely named tmux buffer from
+stdin and pasted with `paste-buffer -p -r -d`: bracketed when the program
+asked for it, line feeds kept, buffer deleted. Enter is sent separately with
+`send-keys`, and `read` uses `capture-pane -p -J`. Focus selects the window
+and pane and reads the active pane back with `display-message`; it never
+raises a client or an emulator window. `subscribe` is unsupported on tmux.
+
+The sidebar runs on whichever multiplexer encloses it (tmux when `TMUX` is
+set and `ZELLIJ` is not). On tmux it lists the panes the launcher started in
+its session; hook rows are matched by Zellij session, so they appear only in
+`tongs-agents monitor`.
+
+`validation/tmux_workspace.py` checks all of this against real tmux servers
+on private sockets (a `-L tongs-<token>` socket and the default socket under
+a private `TMUX_TMPDIR`), and `.github/workflows/tmux-mux.yml` runs it on
+Ubuntu's apt tmux and records the version.
+
 ## Doctor
 
 `tongs-agents doctor` adds:
@@ -154,3 +213,6 @@ hides the harness are reported by the core doctor checks and by
   when that sidebar spawned it.
 - Zellij restores layouts, not agent processes; resurrecting an EXITED
   session does not restart agents.
+- tmux closes a pane when its program exits (unless `remain-on-exit` is on),
+  so a finished agent's launch is refused by `send`, `read` and `wait`
+  (exit 5, pane not listed) instead of being reported as exited.

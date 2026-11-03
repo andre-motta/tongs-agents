@@ -19,6 +19,7 @@ The layout starts it as ``python -m tongs_agents.commands.sidebar``.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import threading
 
@@ -181,7 +182,8 @@ def run(args) -> int:
         print(f"tongs-agents sidebar: invalid spawn request token {token!r:.80}",
               file=sys.stderr)
         return EXIT_USAGE
-    mux = get_multiplexer("zellij")
+    in_tmux = os.environ.get("ZELLIJ") is None and bool(os.environ.get("TMUX"))
+    mux = get_multiplexer("tmux" if in_tmux else "zellij")
     here = mux.in_session()
     if here is None:
         print(
