@@ -12,6 +12,7 @@ from tongs_agents.terminal_apis.zellij import _run
 
 ZELLIJ_FLOOR = (0, 44, 2)
 ZELLIJ_CEILING = (0, 45, 1)
+ZELLIJ_VALIDATED = ZELLIJ_CEILING
 _VERSION = re.compile(r"zellij (\d{1,4})\.(\d{1,4})\.(\d{1,4})(?![0-9])")
 
 
