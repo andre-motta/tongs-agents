@@ -8,10 +8,15 @@ sidebar then spawns the profiles. An EXITED session of the same name is
 deleted first, or with ``--resurrect`` attached to as it is. Launch records
 and runtime files written for a new session are removed again when anything
 fails before the exec. Every agent pane goes through ``workspace_spawn``.
+
+``[workspace]`` in the config file supplies the session name, whether to add
+the tongs tab, and the profiles a new session starts with when no
+``--profile`` is given; the flags override it.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import shlex
@@ -21,6 +26,12 @@ import tempfile
 from importlib import resources
 
 from tongs_agents import workspace_spawn
+from tongs_agents.app_config import (
+    DEFAULT_SESSION,
+    SESSION_RE,
+    AppConfigError,
+    load_app_config,
+)
 from tongs_agents.commands.doctor import Check
 from tongs_agents.launches import LaunchError
 from tongs_agents.multiplexers import (
@@ -43,10 +54,8 @@ from tongs_agents.workspace_spawn import SIDEBAR_PANE_NAME, SpawnRequestError
 NAME = "workspace"
 HELP = "Open the agent workspace: a Zellij session with the sidebar and profile panes"
 
-DEFAULT_SESSION = "agents"
 EXIT_ERROR = 1
 EXIT_USAGE = 2
-SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}\Z")
 TEMPLATE = "agents.kdl.tmpl"
 _PLACEHOLDER = re.compile(r"@(PYTHON|SESSION|TOKEN|TONGS)@")
 _TONGS_BLOCK = re.compile(
@@ -56,7 +65,7 @@ _TONGS_BLOCK = re.compile(
 CREATOR_ENV_DROP = ("TMUX", "TMUX_PANE", "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_PANE_ID")
 TEMP_DIRS = ("/tmp", "/var/tmp")
 
-__all__ = ["SIDEBAR_PANE_NAME", "LayoutError", "render_layout", "run"]
+__all__ = ["DEFAULT_SESSION", "SIDEBAR_PANE_NAME", "LayoutError", "render_layout", "run"]
 
 
 class LayoutError(ValueError):
@@ -66,15 +75,17 @@ class LayoutError(ValueError):
 def add_arguments(parser):
     parser.add_argument(
         "--profile", dest="profiles", action="append", default=[], metavar="NAME",
-        help="Start an agent pane for this profile (repeatable)",
+        help="Start an agent pane for this profile (repeatable); without it a new "
+             "session starts [workspace] default_profiles",
     )
     parser.add_argument(
         "--session", default=None, metavar="NAME",
-        help=f"Zellij session name (default {DEFAULT_SESSION!r})",
+        help=f"Zellij session name (default: [workspace] session, else {DEFAULT_SESSION!r})",
     )
     parser.add_argument(
-        "--no-tongs", action="store_true",
-        help="Do not open a tongs tab, even when tongs is on PATH",
+        "--tongs", action=argparse.BooleanOptionalAction, default=None,
+        help="Open a tongs tab in a new session when tongs is on PATH "
+             "(default: [workspace] tongs_tab, else on)",
     )
     parser.add_argument(
         "--resurrect", action="store_true",
@@ -144,7 +155,8 @@ def render_layout(python: str, session: str, token: str, tongs: str | None,
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], text)
 
 
-def _profiles(names):
+def _profiles(names, defaults=()):
+    """The requested profiles and the configured default profiles, validated."""
     try:
         profiles = load_profiles()
     except ProfileError as error:
@@ -156,7 +168,16 @@ def _profiles(names):
             f"and {profiles_path()}",
             EXIT_USAGE,
         )
-    return [profiles[name] for name in names]
+    unknown = [name for name in defaults if name not in profiles]
+    if unknown:
+        # Only a new session uses the defaults, so a stale entry must not stop
+        # attaching to a running one; the new-session branch reports it.
+        return [profiles[name] for name in names], _Refused(
+            f"{profiles_path()}: workspace.default_profiles: unknown profile "
+            f"{unknown[0]!r:.80}; see 'tongs-agents profiles'",
+            EXIT_ERROR,
+        )
+    return [profiles[name] for name in names], [profiles[name] for name in defaults]
 
 
 class _Refused(Exception):
@@ -178,8 +199,8 @@ def alias_line(args, session: str) -> str:
         command += ["--profile", name]
     if session != DEFAULT_SESSION:
         command += ["--session", session]
-    if args.no_tongs:
-        command.append("--no-tongs")
+    if args.tongs is not None:
+        command.append("--tongs" if args.tongs else "--no-tongs")
     return f"alias {session}={shlex.quote(shlex.join(command))}"
 
 
@@ -221,7 +242,7 @@ def _notice(message: str) -> None:
 
 
 def _prepare_new_session(mux, zellij: str, session: str, profiles,
-                         no_tongs: bool) -> tuple[list[str], str, list]:
+                         tongs_tab: bool) -> tuple[list[str], str, list]:
     """Write the pending launches, the spawn request and the layout.
 
     Everything written here is removed again when a later step fails.
@@ -233,7 +254,7 @@ def _prepare_new_session(mux, zellij: str, session: str, profiles,
         token = workspace_spawn.write_spawn_request(
             session, [record.launch_id for record in records]
         )
-        tongs = None if no_tongs else shutil.which("tongs")
+        tongs = shutil.which("tongs") if tongs_tab else None
         layout = render_layout(sys.executable, session, token, tongs)
         path = workspace_spawn.write_layout(token, layout)
     except BaseException:
@@ -260,7 +281,8 @@ def _profile_names(profiles) -> str:
     return ", ".join(profile.name for profile in profiles)
 
 
-def _outside(mux, args, session: str, profiles) -> int:
+def _outside(mux, args, session: str, profiles, new_profiles, tongs_tab: bool) -> int:
+    """``profiles`` go into a running session, ``new_profiles`` into a new one."""
     token = None
     records = []
     try:
@@ -295,6 +317,8 @@ def _outside(mux, args, session: str, profiles) -> int:
                 workspace_spawn.ensure_sidebar(mux, session)
             argv = [zellij, "attach", session]
         else:
+            if isinstance(new_profiles, _Refused):
+                return _error(str(new_profiles), new_profiles.code)
             if state == SESSION_EXITED:
                 _notice(
                     f"session {session!r} is EXITED; deleting it and starting it "
@@ -302,7 +326,7 @@ def _outside(mux, args, session: str, profiles) -> int:
                 )
                 mux.delete_session(session)
             argv, token, records = _prepare_new_session(
-                mux, zellij, session, profiles, args.no_tongs
+                mux, zellij, session, new_profiles, tongs_tab
             )
     except (MultiplexerError, LaunchError, SpawnRequestError, LayoutError,
             UnsafePathError, OSError) as error:
@@ -326,14 +350,20 @@ def _outside(mux, args, session: str, profiles) -> int:
 def run(args) -> int:
     if _is_windows():
         return _error("unsupported on Windows (it needs Zellij on Linux or macOS)", EXIT_USAGE)
-    session = DEFAULT_SESSION if args.session is None else args.session
+    try:
+        settings = load_app_config().workspace
+    except AppConfigError as error:
+        return _error(str(error))
+    session = settings.session if args.session is None else args.session
+    tongs_tab = settings.tongs_tab if args.tongs is None else args.tongs
     if not valid_session(session):
         return _error(
             f"refused session name {session!r:.80}; use letters, digits, '.', '_' or '-'",
             EXIT_USAGE,
         )
+    defaults = () if args.profiles else settings.default_profiles
     try:
-        profiles = _profiles(args.profiles)
+        profiles, default_profiles = _profiles(args.profiles, defaults)
     except _Refused as refused:
         return _error(str(refused), refused.code)
     if args.print_alias:
@@ -345,7 +375,7 @@ def run(args) -> int:
         return _error(f"{detail}; run 'tongs-agents doctor' for details")
     if os.environ.get("ZELLIJ") is not None:
         return _inside(mux, args, profiles)
-    return _outside(mux, args, session, profiles)
+    return _outside(mux, args, session, profiles, profiles or default_profiles, tongs_tab)
 
 
 def _zellij_checks(binary) -> list[Check]:

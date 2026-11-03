@@ -17,6 +17,7 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import DataTable, Input, Static
 
+from tongs_agents.app_config import NOTIFY_LEVELS
 from tongs_agents.attention import Attention, attention_state
 from tongs_agents.focus import focus_notification, focus_session
 from tongs_agents.models import FleetSession, FocusResult, SessionStatus, format_age
@@ -28,8 +29,6 @@ from tongs_agents.sessions_feed import (
 )
 from tongs_agents.widgets.detail_panel import DetailPanel
 from tongs_agents.widgets.session_table import FULL_MIN_WIDTH, SessionTable
-
-NOTIFY_LEVELS = ("all", "waiting", "none")
 
 DEFAULT_CHILD_IDS = {
     "summary": "summary-bar",

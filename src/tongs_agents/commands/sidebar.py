@@ -8,6 +8,11 @@ pending launches; failures become notifications. Selecting a row focuses its
 pane: hook rows through ``focus.focus_session`` (its in-session branch), and
 hookless rows by selecting their pane directly after checking it is listed.
 
+It reads ``[ui]`` (refresh interval, notify level, theme) and ``[workspace]``
+(default profiles first in the palette, ``tongs_tab``) from the config file.
+An invalid config file does not stop it: the request is still consumed, with
+defaults and an error notification.
+
 The layout starts it as ``python -m tongs_agents.commands.sidebar``.
 """
 
@@ -20,9 +25,9 @@ import threading
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.widgets import Footer
 
 from tongs_agents import workspace_spawn
+from tongs_agents.app_config import AppConfig, AppConfigError, load_app_config
 from tongs_agents.models import FleetSession, FocusResult
 from tongs_agents.multiplexers import (
     Multiplexer,
@@ -30,8 +35,10 @@ from tongs_agents.multiplexers import (
     PaneRef,
     get_multiplexer,
 )
+from tongs_agents.palette import AppShell
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
+from tongs_agents.widgets.shell import AppFooter, AppHeader
 
 NAME = "sidebar"
 HELP = "Run the workspace sidebar inside a Zellij session"
@@ -69,7 +76,7 @@ def focus_launch_pane(mux: Multiplexer, current_session: str,
         return FocusResult(state="failed", reason=error.detail, backend=mux.name)
 
 
-class SidebarApp(FocusOnSelect, App):
+class SidebarApp(AppShell, FocusOnSelect, App):
     """The workspace sidebar: a compact AgentsPanel plus spawn-on-mount."""
 
     TITLE = "tongs-agents"
@@ -90,10 +97,15 @@ class SidebarApp(FocusOnSelect, App):
         token: str | None = None,
         compact: bool = True,
         feed: WorkspaceFeed | None = None,
-        refresh_interval: float = 2,
+        refresh_interval: float | None = None,
         socket_dir: str | None = None,
+        config: AppConfig | None = None,
+        config_error: str | None = None,
     ) -> None:
         super().__init__()
+        self.init_shell(config, multiplexer, session)
+        self.sub_title = session
+        self.config_error = config_error
         self.multiplexer = multiplexer
         self.session = session
         self.token = token
@@ -101,19 +113,29 @@ class SidebarApp(FocusOnSelect, App):
         self.feed = feed if feed is not None else WorkspaceFeed(
             session, multiplexer, socket_dir=socket_dir
         )
-        self.refresh_interval = refresh_interval
+        ui = self.app_config.ui
+        self.refresh_interval = (
+            ui.refresh_interval if refresh_interval is None else refresh_interval
+        )
+        self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
 
     def compose(self) -> ComposeResult:
+        yield AppHeader()
         yield AgentsPanel(
             self.feed,
             refresh_interval=self.refresh_interval,
+            notify_level=self.notify_level,
             compact=self.compact,
             id=self.agents_panel_id,
         )
-        yield Footer()
+        yield AppFooter()
 
     def on_mount(self) -> None:
+        self.mount_shell()
+        if self.config_error is not None:
+            self.notify(f"{self.config_error}; using defaults", title="Config",
+                        severity="error", timeout=15)
         if self.token is not None:
             self.consume_spawn_request()
 
@@ -145,6 +167,14 @@ class SidebarApp(FocusOnSelect, App):
         threading.Thread(target=_run, daemon=True).start()
 
 
+def load_config_or_defaults() -> tuple[AppConfig, str | None]:
+    """The app config, or the defaults plus the error when the file is invalid."""
+    try:
+        return load_app_config(), None
+    except AppConfigError as error:
+        return AppConfig(), str(error)
+
+
 def run(args) -> int:
     token = args.spawn_request
     if token is not None and not workspace_spawn.is_token(token):
@@ -160,8 +190,10 @@ def run(args) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
+    config, config_error = load_config_or_defaults()
     SidebarApp(
-        mux, here.session, token=token, compact=args.compact, socket_dir=here.socket_dir
+        mux, here.session, token=token, compact=args.compact or config.ui.compact,
+        socket_dir=here.socket_dir, config=config, config_error=config_error,
     ).run()
     return 0
 

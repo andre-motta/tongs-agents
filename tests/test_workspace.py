@@ -482,3 +482,86 @@ def test_doctor_reports_the_workspace_checks(monkeypatch):
     monkeypatch.setattr(workspace, "zellij_binary", lambda: None)
     names = [check.name for check in doctor.module_checks()]
     assert "workspace-zellij" in names
+
+
+def _app_config(tmp_path, text):
+    path = write_profiles(tmp_path, ["alpha", "beta"])
+    path.write_text(path.read_text() + text)
+    return path
+
+
+def test_workspace_section_supplies_session_profiles_and_tongs_tab(
+    env, tmp_path, runtime_dir,  # noqa: F811
+):
+    _, execs, _ = env
+    _app_config(tmp_path, '[workspace]\nsession = "work"\n'
+                          'default_profiles = ["beta"]\ntongs_tab = false\n')
+    assert _run() == "exec"
+    (_, argv, _), = execs.calls
+    assert argv[:3] == [ZELLIJ, "--session", "work"]
+    assert [record.profile for record in launches.list_records("work")] == ["beta"]
+    layout, = (runtime_dir / "layouts").iterdir()
+    text = layout.read_text()
+    assert TONGS not in text and 'tab name="tongs"' not in text
+
+
+def test_flags_override_the_workspace_section(env, tmp_path, runtime_dir):  # noqa: F811
+    _, execs, _ = env
+    _app_config(tmp_path, '[workspace]\nsession = "work"\n'
+                          'default_profiles = ["beta"]\ntongs_tab = false\n')
+    assert _run("--session", "other", "--profile", "alpha", "--tongs") == "exec"
+    (_, argv, _), = execs.calls
+    assert argv[:3] == [ZELLIJ, "--session", "other"]
+    assert [record.profile for record in launches.list_records()] == ["alpha"]
+    layout, = (runtime_dir / "layouts").iterdir()
+    assert f'command="{TONGS}"' in layout.read_text()
+
+
+def test_default_profiles_only_start_a_new_session(env, tmp_path, monkeypatch):
+    mux, execs, _ = env
+    _app_config(tmp_path, '[workspace]\ndefault_profiles = ["alpha", "beta"]\n')
+    mux.exists = True
+    assert _run() == "exec"
+    assert [call["name"] for call in mux.spawned] == [SIDEBAR_PANE_NAME]
+    mux.spawned.clear()
+    mux.panes.clear()
+    _inside(monkeypatch, mux)
+    assert _run() == 0
+    assert [call["name"] for call in mux.spawned] == [SIDEBAR_PANE_NAME]
+    assert launches.list_records() == []
+
+
+def test_an_unknown_default_profile_is_a_config_error(env, tmp_path, capsys):
+    mux, execs, _ = env
+    path = _app_config(tmp_path, '[workspace]\ndefault_profiles = ["gamma"]\n')
+    assert _run() == 1
+    err = capsys.readouterr().err
+    assert f"{path}: workspace.default_profiles: unknown profile 'gamma'" in err
+    assert execs.calls == [] and mux.spawned == []
+    assert launches.list_records() == []
+
+
+def test_an_unknown_default_profile_does_not_block_attaching(env, tmp_path):
+    mux, execs, _ = env
+    mux.exists = True
+    _app_config(tmp_path, '[workspace]\ndefault_profiles = ["gamma"]\n')
+    assert _run() == "exec"
+    (_, argv, _), = execs.calls
+    assert argv == [ZELLIJ, "attach", "agents"]
+
+
+def test_an_invalid_workspace_section_is_refused(env, tmp_path, capsys):
+    mux, execs, _ = env
+    path = _app_config(tmp_path, '[workspace]\nsession = "bad name"\n')
+    assert _run("--session", "fine") == 1
+    assert f"{path}: workspace.session" in capsys.readouterr().err
+    assert execs.calls == [] and mux.calls == []
+
+
+def test_print_alias_keeps_an_explicit_tongs_flag(env, capsys):
+    _, _, tools = env
+    tools["tongs-agents"] = "/opt/venv/bin/tongs-agents"
+    capsys.readouterr()
+    assert _run("--print-alias", "--tongs") == 0
+    out = capsys.readouterr().out
+    assert out == "alias agents='/opt/venv/bin/tongs-agents workspace --tongs'\n"

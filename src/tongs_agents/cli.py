@@ -1022,9 +1022,8 @@ def owned_settings_mcp(config):
 
 
 def cmd_monitor(args):
-    from tongs_agents.tui import FleetMonitorApp
-    app = FleetMonitorApp(refresh_interval=args.refresh, notify_level=args.notify)
-    app.run()
+    from tongs_agents.tui import run_monitor
+    return run_monitor(args)
 
 
 def cmd_focus(args):
@@ -1124,9 +1123,16 @@ def build_parser(modules=None):
     _add_dir_options(p_uninstall, "Remove")
 
     p_monitor = sub.add_parser("monitor", help="Launch TUI dashboard")
-    p_monitor.add_argument("--refresh", type=int, default=2, help="Refresh interval in seconds")
-    p_monitor.add_argument("--notify", choices=["all", "waiting", "none"], default="all",
-                           help="Notification level: all, waiting-only, or none")
+    p_monitor.add_argument("--refresh", type=float, default=None,
+                           help="Refresh interval in seconds "
+                                "(default: [ui] refresh_interval, else 2)")
+    p_monitor.add_argument("--notify", choices=["all", "waiting", "none"], default=None,
+                           help="Notification level: all, waiting-only, or none "
+                                "(default: [ui] notify_level, else all)")
+    p_monitor.add_argument("--compact", action=argparse.BooleanOptionalAction, default=None,
+                           help="Always use compact rows (default: [ui] compact)")
+    p_monitor.add_argument("--theme", default=None, metavar="NAME",
+                           help="Textual theme (default: [ui] theme, else textual-dark)")
 
     p_focus = sub.add_parser("focus", help="Focus terminal tab for a session")
     p_focus.add_argument("query", help="Repo name, session ID, or PID")
