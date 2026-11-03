@@ -1,4 +1,9 @@
-# Tutorial: one dotfiles directory for every harness
+---
+title: "Tutorial: one dotfiles directory for every harness"
+description: "Write instructions, skills and MCP servers once and apply them to every harness with tongs-agents config."
+sidebar:
+  order: 3
+---
 
 Claude Code, Codex and Pi each keep instructions, skills and MCP servers in
 their own files and formats. With tongs-agents you write them once, in one

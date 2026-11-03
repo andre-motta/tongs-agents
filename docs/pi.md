@@ -1,4 +1,7 @@
-# Pi lifecycle integration
+---
+title: "Pi lifecycle integration"
+description: "Report Pi agent status to tongs-agents through its packaged extension."
+---
 
 Pi support is optional. Install it after installing both Pi and
 tongs-agents:

@@ -1,4 +1,9 @@
-# Tutorial: your first workspace
+---
+title: "Tutorial: your first workspace"
+description: "Install tongs-agents, describe your agents as profiles, install hooks and open a workspace with the sidebar."
+sidebar:
+  order: 1
+---
 
 In this tutorial you install tongs-agents, describe four agents as profiles
 (two Claude Code config dirs, Codex and Pi), install their hooks, check the

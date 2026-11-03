@@ -1,4 +1,7 @@
-# Tongs Agents SDLC profile
+---
+title: "Tongs Agents SDLC profile"
+description: "The agent workflow, roles and approval gates this project uses for its own development."
+---
 
 Fleet Monitor adopts Agent SDLC **0.2.4**. Andre approved migrating from the
 earlier 0.1.0 baseline on 2026-10-09; the terminal focus initiative (#32, #47)
@@ -98,15 +101,15 @@ Issue and PR numbers recorded before the rename (2026-11-02) refer to the
 [claude-fleet-monitor tracker](https://github.com/andre-motta/claude-fleet-monitor/issues).
 
 - Active: tongs-agents, following the approved
-  [agent workspace plan](work/agent-workspace-plan.md) (milestones, exit
+  [agent workspace plan](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-workspace-plan.md) (milestones, exit
   gates and evidence labels). The M1 live run is tracked in
-  [workspace live run](work/workspace-live-run.md).
+  [workspace live run](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/workspace-live-run.md).
 - Delivered: terminal focus (#32, #47) in v0.8.0 and its follow-ups (#49 to
   #52) in v0.9.0, one PR per issue into `main`. See
-  [terminal focus](work/terminal-focus.md).
-- Historical: [harnesses and desktop](work/harnesses-desktop.md), delivered
+  [terminal focus](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/terminal-focus.md).
+- Historical: [harnesses and desktop](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/harnesses-desktop.md), delivered
   under 0.1.0 with Codex roles and a child-PR feature branch. ChatGPT
   conversation focus (#22, #28, #29) is closed as not supported
-  ([evidence](work/chatgpt-focus-evidence.md)). The Tongs desktop items (#21,
+  ([evidence](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/chatgpt-focus-evidence.md)). The Tongs desktop items (#21,
   #30) keep their recorded design gates; the saved
-  [desktop feature](work/desktop.md) still applies.
+  [desktop feature](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/desktop.md) still applies.

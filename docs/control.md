@@ -1,4 +1,7 @@
-# Driving agent panes
+---
+title: "Driving agent panes"
+description: "Paste prompts into agent panes, read their screens and wait for them with send, read, wait and agent-status."
+---
 
 `tongs-agents send`, `read`, `wait` and `agent-status` let a person or a
 script drive agents, but only in panes that tongs-agents spawned and can verify

@@ -1,10 +1,13 @@
-# Harness adapter guide
+---
+title: "Harness adapter guide"
+description: "The contract a harness integration follows to report status, for contributors adding one."
+---
 
 This guide describes the adapter boundary implemented by Fleet. It is a
 contributor contract for the built-in Claude Code, Codex and Pi integrations;
 it is not an arbitrary plugin loader. The [support matrix](support-matrix.md#harness-support)
 is the public capability summary. The detailed rules are in the implemented
-[event, identity and focus contract](work/harness-contract.md).
+[event, identity and focus contract](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/harness-contract.md).
 
 ## Start at the registry
 
@@ -174,7 +177,7 @@ environment to hook subprocesses (the Pi bridge spawns the hook with
 `process.env`), and so does Codex when run with `--no-daemon`. Under the
 shared Codex app-server daemon a later launch's hooks see the first launch's
 environment, so a Codex record may lack `launch` or carry another launch's
-values; see [harness-facts.md](work/harness-facts.md). That daemon also
+values; see [harness-facts.md](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/harness-facts.md). That daemon also
 runs a later session's `SessionEnd` about a minute late with the first
 launch's environment, so `session-end` never reads the launch variables: it
 creates no record, ends only the record keyed by its own native session id

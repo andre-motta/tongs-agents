@@ -1,4 +1,9 @@
-# Tutorial: tmux instead of Zellij
+---
+title: "Tutorial: tmux instead of Zellij"
+description: "Run the same workspace on tmux and learn what differs from Zellij."
+sidebar:
+  order: 7
+---
 
 Zellij is the default multiplexer, but the workspace also runs on tmux 3.2 or
 newer. Profiles, the sidebar, `notify`, `send`, `read` and `wait` work the

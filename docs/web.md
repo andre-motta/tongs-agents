@@ -1,8 +1,11 @@
-# Watching the workspace from a browser
+---
+title: "Watching the workspace from a browser"
+description: "Watch the agent workspace read-only from a browser or a phone with tongs-agents web."
+---
 
 `tongs-agents web` lets you watch the agent workspace read-only from a
 browser or a phone. It is off by default and follows the approved design in
-[agent chat and read-only web watching](work/agent-chat.md) (rows 16 and 17
+[agent chat and read-only web watching](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-chat.md) (rows 16 and 17
 and the M5-A review).
 
 Scope: Linux x86_64, where the Zellij web build is pinned. On any other

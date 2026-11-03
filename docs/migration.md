@@ -1,4 +1,7 @@
-# Upgrading from claude-fleet-monitor
+---
+title: "Upgrading from claude-fleet-monitor"
+description: "Move from claude-fleet-monitor 0.9.x to tongs-agents and clean up what the old install left."
+---
 
 tongs-agents replaces claude-fleet-monitor 0.9.x. It uses its own runtime
 names from its first release, so an old install is cleaned up rather than

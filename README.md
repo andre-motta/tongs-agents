@@ -82,7 +82,7 @@ walks through all of this step by step.
 | Let one agent start and prompt others (opt-in) | MCP `agents_*` tools | [MCP agent control](https://github.com/andre-motta/tongs-agents/blob/main/docs/mcp-control.md) |
 | A chat between you and the agents you grant, with mentions and wake | `chat` | [agent chat](https://github.com/andre-motta/tongs-agents/blob/main/docs/chat.md) |
 | Watch the workspace read-only from a browser or phone | `web` | [web watching](https://github.com/andre-motta/tongs-agents/blob/main/docs/web.md) |
-| Run an agent inside an NVIDIA OpenShell sandbox, still as a pane | profile `sandbox` table | [sandboxed profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/sandbox.md) |
+| Run an agent inside an NVIDIA OpenShell sandbox, still as a pane, and approve its access requests one at a time | profile `sandbox` table, `sandbox` | [tutorial](https://github.com/andre-motta/tongs-agents/blob/main/docs/tutorials/sandbox.md), [sandboxed profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/sandbox.md) |
 | MCP tools that let agents read the fleet and focus sessions | MCP `fleet_*` tools | [MCP tools](#mcp-tools) |
 | A pinned, checksum-verified Zellij download | `zellij`, `doctor --fix zellij` | [Zellij pins](https://github.com/andre-motta/tongs-agents/blob/main/docs/zellij-pins.md) |
 
@@ -93,7 +93,9 @@ binds 127.0.0.1 only.
 
 Sandboxed profiles have instrumented evidence only: every OpenShell call has
 been checked against a fake CLI, and the live run on a real gateway is
-pending. See [sandboxed profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/sandbox.md).
+pending. The [sandbox tutorial](https://github.com/andre-motta/tongs-agents/blob/main/docs/tutorials/sandbox.md)
+walks through setup, and [sandboxed profiles](https://github.com/andre-motta/tongs-agents/blob/main/docs/sandbox.md)
+is the reference.
 
 ## Support
 

@@ -1,4 +1,7 @@
-# Zellij pins and the managed download
+---
+title: "Zellij pins and the managed download"
+description: "The Zellij releases tongs-agents trusts and how it downloads a pinned, checksum-verified build."
+---
 
 tongs-agents supports Zellij from a floor release up to a validated ceiling.
 The releases it trusts are listed in one packaged table,
@@ -70,7 +73,7 @@ entry's `flavor` is `web`. Its asset is the official full build
 `binary_sha256` is required: the installer refuses a web pin without it.
 Hosted CI does not download web pins; they are checked by
 `python validation/zellij_web.py` (see [web watching](web.md)). The 0.45.1 web
-pin was approved with the [chat and web design](work/agent-chat.md) (row 17);
+pin was approved with the [chat and web design](https://github.com/andre-motta/tongs-agents/blob/main/docs/work/agent-chat.md) (row 17);
 its digests match the release's published checksum.
 
 ## Bumping a pin

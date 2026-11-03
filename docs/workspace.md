@@ -1,4 +1,7 @@
-# Agent workspace
+---
+title: "Agent workspace"
+description: "Open a Zellij or tmux session with the tongs-agents sidebar and one pane per agent profile."
+---
 
 `tongs-agents workspace` opens a Zellij session with the tongs-agents sidebar
 and one pane per requested [profile](profiles.md). It needs Zellij 0.44.2 or
