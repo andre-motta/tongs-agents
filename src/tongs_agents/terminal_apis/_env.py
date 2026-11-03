@@ -1,24 +1,14 @@
 """Env-only, never-raising capture helpers for terminal adapters."""
 
-import os
-
-MAX_VALUE_BYTES = 1024
+from tongs_agents._envcheck import MAX_VALUE_BYTES, bounded_env_value  # noqa: F401
 
 
 def bounded_env(names: tuple[str, ...]) -> dict[str, str]:
     captured = {}
     for name in names:
-        try:
-            value = os.environ.get(name)
-            if (
-                not isinstance(value, str)
-                or "\0" in value
-                or len(value.encode("utf-8")) > MAX_VALUE_BYTES
-            ):
-                continue
-        except Exception:
-            continue
-        captured[name] = value
+        value = bounded_env_value(name)
+        if value is not None:
+            captured[name] = value
     return captured
 
 

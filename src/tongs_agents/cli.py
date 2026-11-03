@@ -756,6 +756,15 @@ def _hook_events(harness):
     return CLAUDE_HOOK_EVENTS if harness == "claude" else CODEX_HOOK_EVENTS
 
 
+PI_PREREQUISITE = "Pi and tongs-agents-hook must be installed before enabling Pi"
+
+
+def _profile_only(target):
+    return bool(target.sources) and all(
+        source.startswith("profile ") for source in target.sources
+    )
+
+
 def _describe_sources(target):
     profiles = [source for source in target.sources if source.startswith("profile ")]
     return f" (for {', '.join(profiles)})" if profiles else ""
@@ -816,8 +825,14 @@ def cmd_install(args):
     if pi_targets:
         pi_cmd = shutil.which("pi")
         if pi_cmd is None or not Path(hook_cmd).is_absolute():
-            print("  Pi and tongs-agents-hook must be installed before enabling Pi")
-            pi_failed = True
+            requested = [target for target in pi_targets if not _profile_only(target)]
+            for target in pi_targets:
+                if _profile_only(target):
+                    print(f"  Warning: skipped Pi monitoring{_describe_sources(target)}: "
+                          f"{PI_PREREQUISITE}")
+            if requested:
+                print(f"  {PI_PREREQUISITE}")
+                pi_failed = True
         else:
             for target in pi_targets:
                 environment = None if target.directory is None else pi_environment(
@@ -1073,7 +1088,15 @@ def build_parser(modules=None):
     )
     sub = parser.add_subparsers(dest="command")
 
-    p_install = sub.add_parser("install", help="Install agent monitoring")
+    p_install = sub.add_parser(
+        "install", help="Install agent monitoring",
+        description=(
+            "Install agent monitoring. Without --agent or config dir options this covers "
+            "Claude Code, Codex and the config home of every profile. A pi profile is "
+            "skipped with a warning, not an error, when pi or tongs-agents-hook is not "
+            "installed; --agent pi or --pi-agent-dir still fail in that case."
+        ),
+    )
     p_install.add_argument(
         "--agent", choices=["claude", "codex", "pi", "all"],
         help="Install one agent integration; default: Claude Code, Codex and every profile",

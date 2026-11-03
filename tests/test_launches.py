@@ -251,3 +251,56 @@ def test_prune_removes_only_old_records_of_dead_processes(monkeypatch):
     assert not list(paths.launches_dir().glob(f".{old_dead.launch_id}.claim"))
     age(fresh_pending, 2)
     assert launches.prune(max_age_days=1) == 1
+
+
+def _set_mtime(path, days):
+    then = time.time() - days * 86400
+    os.utime(path, (then, then), follow_symlinks=False)
+
+
+def test_prune_removes_old_temp_files_and_orphaned_markers(monkeypatch):
+    monkeypatch.setattr(discovery, "get_process_info", lambda pid: None)
+    directory = paths.launches_dir(create=True)
+    kept = launches.create_pending(PROFILE, "agents", "zellij")
+    claimed = launches.claim(kept.launch_id, 4242, "s", None)
+    assert claimed.launch_id == kept.launch_id
+    live_marker = directory / f".{kept.launch_id}.claim"
+    old_tmp = directory / ".launch-tmp-abc.tmp"
+    new_tmp = directory / ".launch-tmp-def.tmp"
+    orphan = directory / f".{'e' * 32}.claim"
+    new_orphan = directory / f".{'f' * 32}.claim"
+    unrelated = directory / "notes.txt"
+    for path in (old_tmp, new_tmp, orphan, new_orphan, unrelated):
+        path.write_text("")
+    for path in (old_tmp, orphan, unrelated, live_marker):
+        _set_mtime(path, 8)
+    assert launches.prune() == 0
+    assert sorted(entry.name for entry in directory.iterdir()) == sorted([
+        f"{kept.launch_id}.json", live_marker.name, new_tmp.name, new_orphan.name,
+        unrelated.name,
+    ])
+
+
+@posix_only
+def test_prune_never_follows_a_symlinked_leftover(tmp_path):
+    directory = paths.launches_dir(create=True)
+    target = tmp_path / "target.tmp"
+    target.write_text("keep")
+    link = directory / ".launch-tmp-link.tmp"
+    link.symlink_to(target)
+    _set_mtime(link, 8)
+    launches.prune()
+    assert target.read_text() == "keep"
+
+
+@posix_only
+def test_read_does_not_block_on_a_fifo():
+    launch_id = "a" * 32
+    directory = paths.launches_dir(create=True)
+    os.mkfifo(directory / f"{launch_id}.json")
+    result = []
+    worker = threading.Thread(target=lambda: result.append(launches.get(launch_id)), daemon=True)
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert result == [None]

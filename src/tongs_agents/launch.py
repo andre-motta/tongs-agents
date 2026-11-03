@@ -142,6 +142,12 @@ def main(argv: list[str] | None = None) -> int:
             EXIT_USAGE,
             f"launch {args.launch_id} is for profile {pending.profile!r}, not {profile.name!r}",
         )
+    if pending.harness != profile.harness:
+        return _fail(
+            EXIT_USAGE,
+            f"launch {args.launch_id} was created for harness {pending.harness!r}, "
+            f"but profile {profile.name!r} now uses {profile.harness!r}",
+        )
     pid = os.getpid()
     info = discovery.get_process_info(pid)
     try:

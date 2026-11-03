@@ -40,6 +40,7 @@ class Check:
     message: str
     remediation: str = ""
     details: tuple[str, ...] = ()
+    leftover: bool = False
 
     def __post_init__(self):
         if self.level not in LEVELS:
@@ -167,6 +168,7 @@ def check_coinstall() -> list[Check]:
             f"tongs would load more than one agents plugin from {PLUGIN_GROUP}",
             f"Uninstall the old distribution, for example: pip uninstall {legacy.LEGACY_DISTRIBUTION}",
             tuple(f"{entry.name} = {entry.value}" for entry in [*old, *ours]),
+            leftover=bool(old),
         ))
     return checks
 
@@ -426,6 +428,10 @@ def exit_code(checks) -> int:
     return max((EXIT_CODES[check.level] for check in checks), default=0)
 
 
+def _is_leftover(check) -> bool:
+    return check.leftover or check.name.startswith("legacy")
+
+
 def _print_text(checks):
     print(f"Session directory: {paths.sessions_dir()}")
     for check in checks:
@@ -438,7 +444,7 @@ def _print_text(checks):
         if check.remediation:
             print(f"  Fix: {check.remediation}")
     print()
-    if not any(check.name.startswith("legacy") for check in checks if check.level != "ok"):
+    if not any(_is_leftover(check) for check in checks if check.level != "ok"):
         print("No claude-fleet-monitor leftovers found.")
     errors = sum(check.level == "error" for check in checks)
     warnings = sum(check.level == "warn" for check in checks)

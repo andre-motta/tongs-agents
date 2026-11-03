@@ -166,6 +166,26 @@ def test_duplicate_plugin_entry_point(installed, monkeypatch, capsys, entries):
     assert _find(checks, "error", "duplicate-plugin")
 
 
+@pytest.mark.parametrize("legacy_entry, leftovers_line", [(True, False), (False, True)])
+def test_leftover_line_follows_plugin_duplicates(monkeypatch, capsys, legacy_entry,
+                                                 leftovers_line):
+    ours = ("agents", "tongs_agents.tongs_plugin:FleetMonitorPlugin")
+    other = (
+        (legacy.LEGACY_TONGS_PLUGIN, f"{legacy.LEGACY_PACKAGE}.tongs_plugin:FleetMonitorPlugin")
+        if legacy_entry else ("agents-copy", ours[1])
+    )
+    points = [metadata.EntryPoint(name, value, doctor.PLUGIN_GROUP) for name, value in (ours, other)]
+    monkeypatch.setattr(doctor, "_plugin_entry_points", lambda: points)
+    monkeypatch.setattr(cli, "legacy_installed", lambda: [])
+    checks = doctor.check_coinstall()
+    assert [check.name for check in checks] == ["duplicate-plugin"]
+    assert "leftover" not in checks[0].to_json()
+    doctor._print_text(checks)
+    output = capsys.readouterr().out
+    assert "[ERROR] tongs would load more than one agents plugin" in output
+    assert ("No claude-fleet-monitor leftovers found." in output) is leftovers_line
+
+
 def test_single_plugin_entry_point_is_fine():
     one = [metadata.EntryPoint("agents", "tongs_agents.tongs_plugin:X", doctor.PLUGIN_GROUP)]
     original = doctor._plugin_entry_points

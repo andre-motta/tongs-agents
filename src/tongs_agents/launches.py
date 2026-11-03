@@ -102,9 +102,9 @@ def _record_path(launch_id: str) -> Path:
 
 
 def _read(path: Path) -> LaunchRecord | None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
+    # O_NONBLOCK keeps a FIFO planted at the record path from hanging the
+    # open; it has no effect on the regular file checked below.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError:
@@ -257,8 +257,34 @@ def _alive(record: LaunchRecord) -> bool:
     return record.process_start is None or info.start_token == record.process_start
 
 
+def _prune_leftovers(cutoff: float) -> None:
+    """Unlink interrupted temp files and claim markers without a valid record."""
+    try:
+        entries = list(paths.launches_dir().iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        name = entry.name
+        if name.startswith(".launch-tmp-"):
+            stale = True
+        elif name.startswith(".") and name.endswith(".claim"):
+            stale = get(name[1:-len(".claim")]) is None
+        else:
+            continue
+        try:
+            info = entry.lstat()
+            if stale and stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+                entry.unlink()
+        except OSError:
+            pass
+
+
 def prune(max_age_days: int = 7) -> int:
-    """Delete records older than ``max_age_days`` whose process is gone."""
+    """Delete records older than ``max_age_days`` whose process is gone.
+
+    Temp files from interrupted writes and orphaned claim markers older than
+    the same cutoff go too. Returns the number of records removed.
+    """
     cutoff = time.time() - max_age_days * 86400
     removed = 0
     for record in list_records():
@@ -271,4 +297,5 @@ def prune(max_age_days: int = 7) -> int:
             except FileNotFoundError:
                 pass
         removed += 1
+    _prune_leftovers(cutoff)
     return removed

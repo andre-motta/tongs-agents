@@ -35,6 +35,7 @@ Codex sessions --------/
 - `hook.py`: Claude Code and Codex hook handler. Receives events via stdin JSON, writes session status to the sessions directory, and tags the source agent. Captures terminal type and PID per session.
 - `discovery.py`: Shared module. Cross-platform process discovery (`/proc` on Linux, `lsof`/`ps` on macOS, `tasklist` on Windows). Reads/deduplicates/cleans session files. Used by all consumers.
 - `paths.py`: Runtime locations. `state_dir()` (`$TONGS_AGENTS_STATE_DIR`, else `$XDG_STATE_HOME/tongs-agents`, else `~/.local/state/tongs-agents`) and `sessions_dir()`; with `create=True` both are made private (0700) and symlinks are refused. `FLEET_DIR` is not read.
+- `_envcheck.py`: Dependency-free `bounded_env_value()`, the one bounded environment read shared by the hook's launch capture and `terminal_apis/_env.py`.
 - `legacy.py`: The only source module that spells claude-fleet-monitor 0.9.x markers (hook commands, `fleet` MCP key, module and bash-era `uv` form, Pi config and owner, `~/.claude/fleet`), used for cleanup and doctor.
 - `models.py`: Typed data models. `SessionStatus` enum, `FleetSession` frozen dataclass, `parse_session()` converter, `format_age()` utility.
 - `mcp_server.py`: FastMCP server exposing fleet tools to Claude Code and Codex sessions.

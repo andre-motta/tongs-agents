@@ -12,9 +12,12 @@ offline Pi configuration, then asks Pi to install the JavaScript extension that
 is packaged with Tongs Agents. The extension has no npm dependencies.
 It does not add an MCP server to Pi.
 
-The default `tongs-agents install` command continues to configure Claude Code
-and Codex only. Use `--agent all` to configure all three agents, or select one of
-`claude`, `codex` and `pi`.
+The default `tongs-agents install` command configures Claude Code, Codex and
+the config home of every profile, including `pi` profiles. When `pi` or
+`tongs-agents-hook` is not installed, a Pi home that only a profile asked for is
+skipped with a warning naming that profile, and install still succeeds. Use
+`--agent all` to configure all three agents, or select one of `claude`, `codex`
+and `pi`; those requests fail when Pi cannot be installed.
 
 Restart Pi sessions that were already running when you installed the extension
 so they load the monitoring bridge.

@@ -8,8 +8,9 @@
   when that is unset or relative.
 
 Directories created here are private (0700), never symlinks, owned by the
-current user, and never equal to, inside or a parent of the legacy
-claude-fleet-monitor session directory.
+current user, and never equal to or inside the legacy claude-fleet-monitor
+session directory. An ancestor of it (``$HOME``, for example) is allowed:
+tongs-agents only writes its own named children there.
 """
 
 from __future__ import annotations
@@ -63,7 +64,7 @@ def _refuse_legacy_overlap(path: Path) -> None:
         common = os.path.commonpath([owned, old])
     except ValueError:
         return
-    if common in (owned, old):
+    if common == old:
         raise UnsafePathError(
             f"{path}: overlaps the legacy session directory {legacy.legacy_sessions_dir()}"
         )
