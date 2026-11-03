@@ -5,6 +5,11 @@ The read-only ``fleet_*`` tools are always listed. The agent control tools
 registered only when ``[control].mcp_enabled`` is true when the server starts;
 their policy lives in ``mcp_control`` and every call is audited by
 ``control``. See docs/mcp-control.md.
+
+The chat tools (``chat_inbox``, ``chat_read``, ``chat_post``) are registered
+only when the server verifies its launch identity at start, and listed only
+while the maintainer has granted that launch chat; ``mcp_chat`` holds that
+policy. See docs/chat.md.
 """
 
 import asyncio
@@ -17,6 +22,7 @@ from tongs_agents import control
 from tongs_agents import focus as focus_module
 from tongs_agents.app_config import AppConfigError, load_app_config
 from tongs_agents.discovery import cleanup_ended_sessions, read_sessions
+from tongs_agents.mcp_chat import ChatGate, ChatServer
 from tongs_agents.mcp_control import McpControl, error_payload
 
 SERVER_NAME = "tongs-agents"
@@ -154,9 +160,11 @@ FLEET_TOOLS = (
 CONTROL_TOOLS = (agents_spawn, agents_send, agents_status, agents_wait)
 
 
-def create_server(control_enabled: bool = False) -> FastMCP:
-    """A server with the fleet tools, plus the control tools when enabled."""
-    server = FastMCP(SERVER_NAME)
+def create_server(control_enabled: bool = False,
+                  chat_gate: ChatGate | None = None) -> FastMCP:
+    """A server with the fleet tools, plus the control tools when enabled and
+    the chat tools when ``chat_gate`` verified this launch."""
+    server = ChatServer(SERVER_NAME, chat_gate)
     for tool in FLEET_TOOLS + (CONTROL_TOOLS if control_enabled else ()):
         server.add_tool(tool)
     return server
@@ -175,7 +183,7 @@ mcp = create_server()
 
 
 def main():
-    create_server(control_enabled()).run()
+    create_server(control_enabled(), ChatGate.start()).run()
 
 
 if __name__ == "__main__":
