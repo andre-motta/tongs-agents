@@ -1,10 +1,14 @@
 """Past agent sessions, read from the harnesses' own history stores (#133).
 
 Every store is read-only and bounded: at most ``MAX_ENTRIES`` directory
-entries are listed per store, the newest ``MAX_FILES`` transcripts (by
-modification time) are read, and ``MAX_SESSIONS`` are kept. A transcript is
-never loaded whole: its first ``HEAD_BYTES`` and last ``TAIL_BYTES`` are
-read, and only lines that name the wanted record type are parsed. Symlinks
+entries are listed per store, transcripts are read newest first (by
+modification time) until ``MAX_SESSIONS`` sessions are kept, and at most
+``MAX_FILES`` of them are read (``MAX_CODEX_FILES`` for Codex, where most
+rollouts are subagent threads that only their first line rules out). A
+transcript is never loaded whole: its first ``HEAD_BYTES`` and last
+``TAIL_BYTES`` are read (a Codex rollout: its first line, up to
+``FIRST_LINE_BYTES``, then ``HEAD_BYTES`` when it is kept), and only lines
+that name the wanted record type are parsed. Symlinks
 inside a store are skipped (files with ``O_NOFOLLOW``), unreadable or
 malformed lines and files are skipped, and nothing runs a subprocess. Only a
 short title leaves this module, never message bodies: the harness's own
@@ -22,7 +26,8 @@ characters with control characters removed.
   Subagent and review threads (``source`` is an object) are not listed.
   Title: the last ``thread_name`` for the id in ``session_index.jsonl``,
   else the first user prompt that is not injected context.
-- Pi, ``<agent dir>/sessions/--<encoded cwd>--/<ts>_<id>.jsonl``: the
+- Pi, ``<session dir>/--<encoded cwd>--/<ts>_<id>.jsonl``, the session dir
+  being ``<agent dir>/sessions`` unless the caller names another: the
   first line is the ``session`` header with ``id`` and ``cwd``. Title: the
   last ``session_info`` ``name`` (``/name``, ``--name``), else the first
   user prompt.
@@ -43,6 +48,7 @@ HARNESSES = ("claude", "codex", "pi")
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 MAX_ENTRIES = 20000
 MAX_FILES = 400
+MAX_CODEX_FILES = 4000
 MAX_SESSIONS = 200
 HEAD_BYTES = 64 * 1024
 TAIL_BYTES = 64 * 1024
@@ -252,16 +258,14 @@ def _read_codex(path: Path, home: Path, mtime: int,
         first = _first_line(handle)
         if first is None:
             return None
-        rest = handle.read(HEAD_BYTES)
-    [meta] = list(_records([first])) or [None]
-    payload = meta.get("payload") if isinstance(meta, dict) else None
-    if meta is None or meta.get("type") != "session_meta" or not isinstance(payload, dict):
-        return None
-    if isinstance(payload.get("source"), dict):
-        return None
-    session_id = payload.get("id")
-    if not _valid_id(session_id):
-        return None
+        meta = next(_records([first]), None)
+        payload = meta.get("payload") if meta is not None else None
+        if meta is None or meta.get("type") != "session_meta" or not isinstance(payload, dict):
+            return None
+        session_id = payload.get("id")
+        if isinstance(payload.get("source"), dict) or not _valid_id(session_id):
+            return None
+        rest = b"" if session_id in names else handle.read(HEAD_BYTES)
     cwd = payload.get("cwd")
     folder = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else ""
     title = names.get(session_id) or clean_title(
@@ -356,11 +360,13 @@ def _codex_days(sessions: Path, budget: list[int]) -> Iterator[Path]:
             yield from _subdirs(month, budget, newest_name_first=True)
 
 
-def transcripts(harness: str, home: Path, *, enough: int | None = None) -> list[tuple[float, Path]]:
+def transcripts(harness: str, home: Path, *, enough: int | None = None,
+                sessions: Path | None = None) -> list[tuple[float, Path]]:
     """The transcript files of ``home``, newest first, within ``MAX_ENTRIES`` entries.
 
     Codex day folders are walked newest first and the walk stops once
-    ``enough`` files were found (none: the whole budget).
+    ``enough`` files were found (none: the whole budget). ``sessions`` is
+    Pi's session dir when it is not ``home/sessions``.
     """
     budget = [MAX_ENTRIES]
     found: list[tuple[float, Path]] = []
@@ -373,7 +379,7 @@ def transcripts(harness: str, home: Path, *, enough: int | None = None) -> list[
             if enough is not None and len(found) >= enough:
                 break
     elif harness == "pi":
-        for folder in _subdirs(home / "sessions", budget):
+        for folder in _subdirs(sessions or home / "sessions", budget):
             _files(folder, budget, "", ".jsonl", found)
     found.sort(key=lambda item: item[0], reverse=True)
     return found
@@ -396,20 +402,25 @@ def read_transcript(harness: str, home: Path, path: Path, mtime: float,
     return None
 
 
-def scan(harness: str, home: Path) -> list[PastSession]:
-    """The newest sessions ``home`` holds for ``harness``, newest first."""
+def scan(harness: str, home: Path, *, sessions: Path | None = None) -> list[PastSession]:
+    """The newest sessions ``home`` holds for ``harness``, newest first.
+
+    Files are read newest first until ``MAX_SESSIONS`` are kept, at most
+    ``MAX_FILES`` (Codex: ``MAX_CODEX_FILES``) of them.
+    """
     names = codex_thread_names(home) if harness == "codex" else {}
-    sessions: list[PastSession] = []
+    limit = MAX_CODEX_FILES if harness == "codex" else MAX_FILES
+    kept: list[PastSession] = []
     seen: set[str] = set()
-    for mtime, path in transcripts(harness, home, enough=MAX_FILES)[:MAX_FILES]:
-        if len(sessions) >= MAX_SESSIONS:
+    for mtime, path in transcripts(harness, home, enough=limit, sessions=sessions)[:limit]:
+        if len(kept) >= MAX_SESSIONS:
             break
         session = read_transcript(harness, home, path, mtime, names)
         if session is None or session.session_id in seen:
             continue
         seen.add(session.session_id)
-        sessions.append(session)
-    return sessions
+        kept.append(session)
+    return kept
 
 
 def _named(harness: str, name: str, session_id: str) -> bool:
@@ -420,11 +431,12 @@ def _named(harness: str, name: str, session_id: str) -> bool:
     return name.endswith(f"_{session_id}.jsonl")
 
 
-def locate(harness: str, home: Path, session_id: str) -> PastSession | None:
+def locate(harness: str, home: Path, session_id: str, *,
+           sessions: Path | None = None) -> PastSession | None:
     """The session ``session_id`` in ``home``, also past the listing caps."""
     if not _valid_id(session_id):
         return None
-    for mtime, path in transcripts(harness, home):
+    for mtime, path in transcripts(harness, home, sessions=sessions):
         if _named(harness, path.name, session_id):
             session = read_transcript(harness, home, path, mtime)
             if session is not None and session.session_id == session_id:

@@ -16,7 +16,7 @@ from tests.test_command_line import _settle, _submit
 from tests.test_resume import SESSION, SIZE, _profiles, _record, _sidebar, _store
 from tests.test_run import _inside_zellij, _main
 from tests.test_workspace_spawn import FakeMux, runtime_dir  # noqa: F401
-from tongs_agents import history, launches
+from tongs_agents import history, launches, workspace_spawn
 from tongs_agents.commands import resume, run
 from tongs_agents.widgets.resume_picker import RUNNING_MARK, ResumePickerScreen
 
@@ -234,6 +234,21 @@ def test_codex_lists_user_threads_with_their_names(tmp_path, project):
     assert history.scan("codex", home)[0].title == "Ship the fix"
 
 
+def test_codex_keeps_user_threads_behind_many_subagent_rollouts(tmp_path, project,
+                                                                monkeypatch):
+    home = tmp_path / "codex"
+    codex_session(home, CODEX_ID, project, codex_user("old user work"), mtime=NOW - 999)
+    for index in range(30):
+        codex_session(home, f"01a1b2c3-0000-7000-8000-0000000001{index:02d}", project,
+                      source={"subagent": {"thread_spawn": {}}}, mtime=NOW - index)
+    monkeypatch.setattr(history, "MAX_FILES", 5)
+    [found] = history.scan("codex", home)
+    assert (found.session_id, found.title) == (CODEX_ID, "old user work")
+    monkeypatch.setattr(history, "MAX_CODEX_FILES", 30)
+    assert history.scan("codex", home) == []
+    assert history.locate("codex", home, CODEX_ID).session_id == CODEX_ID
+
+
 def test_codex_skips_a_first_line_past_its_bound(tmp_path, project, monkeypatch):
     home = tmp_path / "codex"
     codex_session(home, CODEX_ID, project)
@@ -255,6 +270,29 @@ def test_pi_takes_the_session_name_else_the_first_prompt(tmp_path, project):
     assert history.scan("pi", home)[0].title == "Docs pass"
     path.rename(path.with_name("2026-11-02T10-00-00-000Z_mismatch.jsonl"))
     assert history.scan("pi", home) == []
+
+
+def test_pi_session_dir_from_env_or_settings(tmp_path, project, _isolated, monkeypatch):
+    agent = _isolated / ".pi" / "agent"
+    agent.mkdir(parents=True)
+    custom, other = tmp_path / "pi-sessions", tmp_path / "pi-other"
+    pi_session(custom, PI_ID, project)
+    (custom / "sessions").rename(custom / "store")
+    (other / "store").mkdir(parents=True)
+    profiles = _profiles(tmp_path, '[profiles.pi]\ncommand = ["pi"]\n')
+    assert resume.history_homes(profiles) == [("pi", agent, None)]
+    (agent / "settings.json").write_text(json.dumps({"sessionDir": "relative/dir"}))
+    assert resume.history_homes(profiles) == [("pi", agent, None)]
+    (agent / "settings.json").write_text(json.dumps({"sessionDir": str(custom / "store")}))
+    [found] = resume.all_sessions(profiles)
+    assert (found.session_id, found.homes) == (PI_ID, (agent,))
+    monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(other / "store"))
+    assert resume.all_sessions(profiles) == []
+    profiles = _profiles(tmp_path, (
+        '[profiles.pi]\ncommand = ["pi"]\n'
+        f'[profiles.pi.env]\nPI_CODING_AGENT_SESSION_DIR = {json.dumps(str(custom / "store"))}\n'
+    ))
+    assert resume.lookup(profiles, PI_ID).session_id == PI_ID
 
 
 # -- Order, caps and lookup --
@@ -316,7 +354,7 @@ def test_all_sessions_merges_the_store_with_every_profiles_history(tmp_path, pro
 
 def test_sandboxed_profiles_add_no_history(tmp_path, project, _isolated):
     profiles = _three(tmp_path, project, _isolated)
-    assert [h for h, _ in resume.history_homes(profiles)] == ["claude", "codex", "pi"]
+    assert [h for h, _, _ in resume.history_homes(profiles)] == ["claude", "codex", "pi"]
     assert resume.history_homes({}) == []
 
 
@@ -418,6 +456,9 @@ def test_the_cli_resumes_each_harness_from_history(tmp_path, project, _isolated,
     assert _main("resume", prefix) == 0
     [record] = launches.list_records()
     assert (record.folder, record.args) == (str(project), args)
+    assert record.label == {"7c1d": "claude work", "01a1": "codex work",
+                            "01a0": "tidy the docs"}[prefix]
+    assert [call["name"] for call in mux.spawned][0] == record.label
 
 
 def test_the_cli_takes_dir_and_refuses_missing_folders(tmp_path, project, _isolated,
@@ -526,3 +567,11 @@ async def test_a_resume_launch_without_a_hook_row_is_found_by_its_pid(project):
         live = resume.LiveProcess(4242, "in this workspace", True)
         assert app._live_row(CODEX_ID, live).session_id == "other-session"
         assert app._live_row(CODEX_ID, resume.LiveProcess(1, "here", True)) is None
+
+
+def test_a_new_workspace_session_keeps_the_resume_label(tmp_path, project, _isolated):
+    profiles = _three(tmp_path, project, _isolated)
+    [record] = workspace_spawn.create_launches(
+        "zellij", SESSION, [profiles["pi"]], folder=str(project),
+        args=("--session", PI_ID), label="tidy the docs")
+    assert launches.get(record.launch_id).label == "tidy the docs"

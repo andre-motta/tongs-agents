@@ -67,11 +67,9 @@ past session, and resumes the same way.
 
 The sidebar only lists the panes of its own session, so `Resume session…`
 (or `:resume`) is the way to reach sessions that run in other terminals or
-that ended; `u` is for a row whose agent has ended in its pane. A pane
-resumed from the sidebar is named after the session's title (cut to 64
-characters), unless an earlier launch of the session was
-[renamed](workspace.md#renaming-an-agent): that name wins. Before anything
-starts, the sidebar checks where the session still runs:
+that ended; `u` is for a row whose agent has ended in its pane. A resumed
+pane is named as described under [What it starts](#what-it-starts). Before
+anything starts, the sidebar checks where the session still runs:
 
 - In this workspace: it is not resumed again. From the list, Enter shows
   that pane. Otherwise the sidebar says so and offers to show that pane
@@ -98,6 +96,7 @@ notification.
 | --- | --- |
 | Folder | DIR when given, else the session's recorded folder (from the store, else the transcript's working directory). A folder that no longer exists is refused, and so is a session with none; give DIR. Claude Code looks a session up in the project folder of its working directory, so resuming one elsewhere may not find it. |
 | Arguments | Claude Code `--resume ID`, Codex `resume ID`, Pi `--session ID`, appended to the profile's command for this launch only. |
+| Name | The name of an earlier launch of the session that was [renamed](workspace.md#renaming-an-agent), else the session's title (cut to 64 characters), else the profile name; from the sidebar and from the CLI alike. |
 | Profile | `--profile NAME` when given (it must run the same harness). Otherwise the profile recorded when the workspace started the session. Otherwise the one profile of that harness whose config dir holds the session's transcript; when several do (profiles sharing a config dir), the one the newest resume launch of that session used. |
 
 The transcript is how `resume` tells your config dirs apart, because the
@@ -128,9 +127,14 @@ recorded them for the session. The `PROFILE/CONFIG` column shows the profile
 Pi's flag comes from Pi's own documentation (`docs/cli.md` of Pi 1.5.0:
 `--session <path|id>` "opens a session by file path or full/partial ID, and
 resumes it in its working directory"), and Pi prints the same command as its
-own resume hint when it exits. A Pi session stored in a custom `sessionDir`
-(or `PI_CODING_AGENT_SESSION_DIR`) is not in the config dir, so it is listed
-only while its agent runs (from the store); pass `--profile` to resume it.
+own resume hint when it exits. Pi's sessions are read from its session dir:
+`PI_CODING_AGENT_SESSION_DIR` from the profile's `env`, else from the
+environment `tongs-agents` runs in, else `sessionDir` in the agent dir's
+`settings.json`, else `sessions` in the agent dir. Only an absolute path is
+followed (Pi resolves a relative one from the folder it starts in), and a
+project's `.pi/settings.json` and `--session-dir` in the profile's command
+are not read; a session stored there is listed only while its agent runs
+(from the store).
 
 ## Which sessions are listed
 
@@ -151,9 +155,11 @@ harness's history. It lists:
 | Pi | `sessions/<folder>/<time>_<id>.jsonl`, header `session` (id, `cwd`) | Its `/name` (`session_info`), else the first prompt |
 
 Reading is bounded so a long history stays fast: at most 20000 directory
-entries per config dir, the newest 400 transcripts read and 200 sessions
-kept per config dir, and per transcript only its first and last 64 KiB
-(Codex: its first line, up to 256 KiB, then 64 KiB). Symlinks inside a
+entries per config dir; transcripts are read newest first until 200
+sessions are kept, at most 400 of them (Codex: 4000, since most rollouts
+are subagent threads that only their first line rules out); per transcript
+only its first and last 64 KiB (Codex: its first line, up to 256 KiB, then
+64 KiB for a kept session without a thread name). Symlinks inside a
 history folder are skipped, unreadable or malformed files and lines are
 skipped, and no message text is shown except the title, cut to 64
 characters with control characters removed. A full session id beyond those

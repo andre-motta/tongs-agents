@@ -9,16 +9,21 @@
   under each profile's config dir (Claude Code `projects/*/ID.jsonl`, Codex
   `sessions/YYYY/MM/DD/rollout-*.jsonl`, Pi `sessions/*/*_ID.jsonl`), so a
   session closed long ago, or started before tongs-agents was installed, can
-  be resumed. Reading is read-only and bounded (newest transcripts first,
-  only the first and last 64 KiB of each, symlinks skipped), and only a
-  short title is shown: the harness's own title or name, else a prompt cut
-  to 64 characters. Codex subagent and review threads are not listed.
+  be resumed. Reading is read-only and bounded (newest transcripts first
+  until 200 sessions per config dir are kept, only the first and last
+  64 KiB of each, symlinks skipped), and only a short title is shown: the
+  harness's own title or name, else a prompt cut to 64 characters. Codex
+  subagent and review threads are not listed; only the first line of each
+  rollout is read to rule them out. Pi's session dir follows
+  `PI_CODING_AGENT_SESSION_DIR` (profile env, then environment) and an
+  absolute `sessionDir` in the agent dir's `settings.json`.
 - `:resume` without an ID (and `Resume session…`) opens a list of running
   (marked `●`) and past sessions across profiles, newest first, with title,
   folder, profile and age, filtered as you type. Enter resumes the chosen
   session in its original folder and names the agent after its title (a
-  name given with `R` to an earlier launch wins); on a session that already
-  runs in this workspace, Enter shows its pane instead.
+  name given with `R` to an earlier launch wins; `tongs-agents resume` from
+  a shell names it the same way); on a session that already runs in this
+  workspace, Enter shows its pane instead.
 - `tongs-agents resume ID [DIR]` and `:resume ID [DIR]`: DIR resumes the
   session in another folder. A folder that no longer exists is refused with
   a hint to pass DIR. The `tongs-agents resume` listing gains a `TITLE`

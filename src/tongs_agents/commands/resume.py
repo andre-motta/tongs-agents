@@ -40,6 +40,7 @@ entries use ``all_sessions``, ``lookup`` and ``plan``.
 from __future__ import annotations
 
 import dataclasses
+import json
 import os
 import re
 import sys
@@ -80,6 +81,9 @@ MAX_SCAN_ENTRIES = 20000
 DAY_SECONDS = 24 * 3600
 PENDING_LAUNCH_SECONDS = 30
 LIST_LIMIT = 50
+PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR"
+PI_SETTINGS_NAME = "settings.json"
+PI_SETTINGS_BYTES = 256 * 1024
 PICKER_LIMIT = 300
 NO_STATUS = "-"
 EPILOG = (
@@ -225,26 +229,62 @@ def recent_sessions(
     return sessions
 
 
-def history_homes(profiles: Mapping[str, Profile]) -> list[tuple[str, Path]]:
-    """The (harness, config dir) pairs whose history is listed, in profile order.
+def _pi_setting_dir(home: Path) -> Path | None:
+    """An absolute ``sessionDir`` in ``home/settings.json``, else None."""
+    try:
+        with open(home / PI_SETTINGS_NAME, "rb") as handle:
+            raw = handle.read(PI_SETTINGS_BYTES + 1)
+        if len(raw) > PI_SETTINGS_BYTES:
+            return None
+        data = json.loads(raw)
+    except (OSError, ValueError, RecursionError):
+        return None
+    value = data.get("sessionDir") if isinstance(data, dict) else None
+    if isinstance(value, str) and os.path.isabs(value):
+        return Path(os.path.normpath(value))
+    return None
+
+
+def pi_sessions_dir(profile: Profile, home: Path,
+                    environ: Mapping[str, str] | None = None) -> Path | None:
+    """The session dir ``profile`` runs Pi with when it is not ``home/sessions``.
+
+    ``PI_CODING_AGENT_SESSION_DIR`` from the profile's env, else from
+    ``environ``, else ``sessionDir`` in the agent dir's ``settings.json``;
+    only an absolute path counts (Pi resolves a relative one from the folder
+    it starts in). Project settings (``.pi/settings.json``) are not read.
+    """
+    environ = os.environ if environ is None else environ
+    for source in (profile.env, environ):
+        value = source.get(PI_SESSION_DIR_ENV)
+        if value:
+            return Path(os.path.normpath(value)) if os.path.isabs(value) else None
+    return _pi_setting_dir(home)
+
+
+def history_homes(profiles: Mapping[str, Profile]) -> list[tuple[str, Path, Path | None]]:
+    """The (harness, config dir, Pi session dir) whose history is listed, in profile order.
 
     The config dirs of the profiles that can resume a session unnamed (not
-    sandboxed), each once.
+    sandboxed), each once; the session dir is None for the default one.
     """
-    pairs: list[tuple[str, Path]] = []
+    stores: list[tuple[str, Path, Path | None]] = []
     for harness in RESUME_ARGS:
         for profile in _candidates(profiles, harness):
             home = profile_home(profile)
-            if home is not None and (harness, home) not in pairs:
-                pairs.append((harness, home))
-    return pairs
+            if home is None:
+                continue
+            sessions = pi_sessions_dir(profile, home) if harness == "pi" else None
+            if (harness, home, sessions) not in stores:
+                stores.append((harness, home, sessions))
+    return stores
 
 
 def past_sessions(profiles: Mapping[str, Profile]) -> list[history.PastSession]:
     """Every session the profiles' history stores hold, within ``history``'s caps."""
     found = []
-    for harness, home in history_homes(profiles):
-        found.extend(history.scan(harness, home))
+    for harness, home, sessions in history_homes(profiles):
+        found.extend(history.scan(harness, home, sessions=sessions))
     return found
 
 
@@ -293,8 +333,8 @@ def lookup(profiles: Mapping[str, Profile], text: str,
     sessions = all_sessions(profiles) if sessions is None else list(sessions)
     if text and not any(item.session_id.startswith(text) for item in sessions):
         located = [
-            entry for harness, home in history_homes(profiles)
-            if (entry := history.locate(harness, home, text)) is not None
+            entry for harness, home, store in history_homes(profiles)
+            if (entry := history.locate(harness, home, text, sessions=store)) is not None
         ]
         if located:
             sessions = merge(sessions, located)
@@ -898,8 +938,11 @@ def run(args) -> int:
     if live is not None:
         print(f"tongs-agents resume: warning: {warning_text(target, live)}", file=sys.stderr)
     print(f"tongs-agents resume: resuming {resumed.summary}", file=sys.stderr)
+    options = dict(resumed.options)
+    if resumed.label is not None:
+        options["label"] = resumed.label
     if os.environ.get("ZELLIJ") is not None:
-        return run_command._inside("zellij", args, resumed.profile, resumed.options)
+        return run_command._inside("zellij", args, resumed.profile, options)
     if os.environ.get("TMUX"):
-        return run_command._inside("tmux", args, resumed.profile, resumed.options)
-    return run_command._outside(args, settings, resumed.profile, resumed.options)
+        return run_command._inside("tmux", args, resumed.profile, options)
+    return run_command._outside(args, settings, resumed.profile, options)
