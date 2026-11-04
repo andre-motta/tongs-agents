@@ -25,7 +25,10 @@ Fixes from using the one-agent view of 0.10.1 with many agents.
   gone). If the home pane is closed, agents float right of the sidebar, or
   over its right three quarters with a notice when the sidebar fills the tab.
   A session created by 0.10.1 keeps its stacked column and new agents float
-  over it; start a new workspace session to get the new view (#124).
+  over it; the agents stacked there before stay under the floating ones, so
+  selecting one focuses it while it stays hidden (`Ctrl p` `w` does not hide
+  pinned panes). Close the floating agents to reach it, or start a new
+  workspace session, which avoids the mix (#124).
 - The Zellij sidebar can be resized again: it starts at a quarter of the
   width instead of a fixed 40 columns. When its pane changes size (the
   sidebar or the terminal was resized), it moves the agents it launched back

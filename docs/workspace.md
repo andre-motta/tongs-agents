@@ -32,8 +32,8 @@ main area; the others keep running out of view, keep reporting status, and
   agents overlap there and the one you select is raised to the top; the
   sidebar's rows are the only list of them, and no title lines take rows
   from the agent. A pinned pane stays shown while the sidebar has the focus
-  (Zellij's status bar says `FLOATING PANES VISIBLE`); `Ctrl p` `w` hides
-  them all until you select an agent again. The sidebar is a normal tiled
+  (Zellij's status bar says `FLOATING PANES VISIBLE`), and also when
+  floating panes are hidden with `Ctrl p` `w`. The sidebar is a normal tiled
   pane, a quarter of the width to start with: resize it (or the terminal)
   and the agents it started move along with the home pane. If you close the
   home pane, new agents float right of the sidebar, or, when the sidebar
@@ -41,8 +41,11 @@ main area; the others keep running out of view, keep reporting status, and
   so (a warning in the sidebar, a `notice:` line under its command line, a
   line on stderr for `run`, `notices` in an MCP `agents_spawn` reply). A
   session created by 0.10.1 still has its stacked column; agents started
-  there float over the whole column. Start a new workspace session to get
-  the new view.
+  there float over the whole column, and the agents already stacked in it
+  sit under them: selecting one of those focuses it, but it stays hidden
+  behind the floating agents (`Ctrl p` `w` does not hide pinned panes).
+  Close the floating agents to reach it, or start a new workspace session,
+  which avoids the mix.
 - **tmux**: the sidebar's window holds the sidebar and one agent, the main
   slot. Every other agent is parked in its own window (shown in the status
   bar under the agent's name) and is swapped into the main slot when you
@@ -381,8 +384,10 @@ included, against real tmux servers on private sockets (a
 tmux and records the version. `validation/workspace.py` checks the Zellij
 view on each pinned release: every agent floats pinned over the home pane, a
 row selection raises its pane and it stays shown with the sidebar focused,
-resizing the terminal and then the sidebar moves the agents along, and a
-spawn after closing the home pane floats beside the sidebar.
+resizing the terminal and then the sidebar moves the agents along and keeps
+them pinned, and after closing the home pane a spawn floats over the
+sidebar's right three quarters with a notice while the sidebar fills the tab,
+then beside it once a tiled pane is split off right of the sidebar.
 
 ## Doctor
 

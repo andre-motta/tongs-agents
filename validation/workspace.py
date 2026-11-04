@@ -27,10 +27,11 @@ checks that every agent pane is floating at the home pane's geometry (and
 raises its pane to the top (the last pane frame the first client drew is
 the target's) and that it stays shown when the sidebar is focused again,
 that resizing the clients and then the sidebar moves the launched agent
-panes onto the new home geometry (the real sidebar's ``align_agents``), and
-that a spawn after closing the home pane opens no new home pane and floats
-beside the sidebar, or over its right three quarters with a notice when the
-sidebar fills the tab.
+panes onto the new home geometry (the real sidebar's ``align_agents``) and
+keeps them pinned, and, after closing the home pane, that a spawn floats
+over the sidebar's right three quarters with a notice while the sidebar
+fills the tab, then beside the sidebar with no notice once a tiled pane is
+split off right of it; no home pane is opened again.
 """
 
 import argparse
@@ -70,6 +71,7 @@ from tongs_agents.commands import sidebar
 from tongs_agents.multiplexers import HOME_PANE_NAME, MultiplexerError
 from tongs_agents.multiplexers.zellij import (
     ACTIVATION_SKIPPED,
+    MIN_AGENT_COLUMNS,
     SIDEBAR_COVERED,
     ZellijMultiplexer,
 )
@@ -149,6 +151,7 @@ CLIENT_COLUMNS = 120
 WIDER_COLUMNS = 150
 RESIZE_WAIT = 10.0
 LAYOUT_WAIT = 5.0
+PANES_RETRY = 3.0
 FRAME_TITLE_RE = re.compile(r"\u250c ([^\u2500\u2502\u2510\u250c\n]+?) \u2500")
 PINNED_RE = re.compile(r"^\s*pinned true\s*$", re.M)
 IDLE_PANE = "import sys, time; time.sleep(600)"
@@ -336,14 +339,25 @@ class Session:
         """Attached clients; zellij 0.44.2 sometimes prints nothing, so empty is retried."""
         return wait_until(self._clients_once, 2) or {}
 
-    def panes(self):
+    def _panes_once(self):
         code, out, _ = self.action("list-panes", "--json")
-        if code != 0 or not out:
-            return []
+        if code != 0 or not out.strip():
+            return None
         try:
-            return [item for item in json.loads(out) if not item.get("is_plugin")]
+            panes = [item for item in json.loads(out) if not item.get("is_plugin")]
         except ValueError:
-            return []
+            return None
+        return panes or None
+
+    def panes(self):
+        """Terminal panes; empty or failed answers are asked again for a few seconds.
+
+        zellij 0.44.2 and 0.45.1 now and then answer list-panes with nothing
+        on a running session (#72), and a workspace session always has
+        terminal panes, so an empty answer is never taken as the result
+        before ``PANES_RETRY`` seconds have passed.
+        """
+        return wait_until(self._panes_once, PANES_RETRY) or []
 
     def sessions(self):
         code, out, _ = run([self.binary, "list-sessions", "--short", "--no-formatting"],
@@ -752,51 +766,105 @@ def top_title(client, candidates, wait=1.0):
     return titles[-1] if titles else None
 
 
+def viewport_columns(target, tab_id):
+    code, out, _ = target.action("list-tabs", "--json")
+    if code != 0 or not out:
+        return None
+    try:
+        tabs = json.loads(out)
+    except ValueError:
+        return None
+    return next((tab.get("viewport_columns") for tab in tabs
+                 if isinstance(tab, dict) and tab.get("tab_id") == tab_id), None)
+
+
+def sidebar_of(panes):
+    return next((pane for pane in panes
+                 if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME), {})
+
+
+def placement(root, session, target, tracker, name):
+    """Spawn ``name`` through the adapter; return its facts against the sidebar."""
+    mux = ZellijMultiplexer()
+    ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)], name=name)
+    tracker.sweep()
+    panes = target.panes()
+    sidebar_pane = sidebar_of(panes)
+    pane = next((item for item in panes if str(item.get("id")) == ref.pane_id), {})
+    x, y, width, rows = (pane.get(key) or 0 for key in
+                         ("pane_x", "pane_y", "pane_columns", "pane_rows"))
+    left = sidebar_pane.get("pane_x") or 0
+    right = left + (sidebar_pane.get("pane_columns") or 0)
+    viewport = viewport_columns(target, sidebar_pane.get("tab_id"))
+    return {
+        "home_reopened": any(item.get("title") == HOME_PANE_NAME for item in panes),
+        "floating_in_sidebar_tab": bool(pane.get("is_floating"))
+        and pane.get("tab_id") == sidebar_pane.get("tab_id"),
+        "rows_match_sidebar": (y, rows) == (sidebar_pane.get("pane_y"),
+                                            sidebar_pane.get("pane_rows")),
+        "viewport_columns": viewport,
+        "sidebar_fills_tab": viewport is not None and viewport - right < MIN_AGENT_COLUMNS,
+        "beside_sidebar": x == right and viewport is not None and width == viewport - right,
+        "covers_sidebar_right": left < x < right and x + width == right,
+        "sidebar_geometry": [sidebar_pane.get(key) for key in
+                             ("pane_x", "pane_y", "pane_columns", "pane_rows")],
+        "spawn_geometry": [x, y, width, rows],
+        "notices": mux.take_notices(),
+    }
+
+
 def home_recovery(root, session, target, tracker, observations):
-    """Close the home pane, spawn through the adapter, expect it beside the sidebar.
+    """Close the home pane, then spawn twice through the adapter.
 
     The sidebar of a ``single`` layout runs with ``--layout single``, so the
-    spawn floats right of the sidebar with the sidebar's rows, or over the
-    sidebar's right three quarters with a notice when the sidebar now fills
-    the tab. No home pane is opened again.
+    first spawn, with the sidebar filling the tab, floats over the sidebar's
+    right three quarters with the covered-sidebar notice. A tiled pane is
+    then split off right of the sidebar, and the second spawn floats over
+    everything right of the sidebar with no notice. No home pane is opened
+    again.
     """
     home, _ = overlay_of(target.panes())
     expect(home is not None, "the workspace has no home pane")
     code, _, _ = target.action("close-pane", "--pane-id", f"terminal_{home.get('id')}")
     closed = wait_until(lambda: overlay_of(target.panes())[0] is None, RESIZE_WAIT)
-    mux = ZellijMultiplexer()
-    ref = mux.spawn(session, [sys.executable, "-c", IDLE_PANE, str(root)], name="recovered")
+    covered = placement(root, session, target, tracker, "recovered")
+    sidebar_pane = sidebar_of(target.panes())
+    target.action("focus-pane-id", f"terminal_{sidebar_pane.get('id')}")
+    split_code, out, _ = target.action("new-pane", "--direction", "right", "--name", "filler",
+                                       "--", sys.executable, "-c", IDLE_PANE, str(root))
+    filler_id = out.strip().removeprefix("terminal_")
     tracker.sweep()
-    panes = target.panes()
-    sidebar_pane = next((pane for pane in panes
-                         if pane.get("title") == workspace_spawn.SIDEBAR_PANE_NAME), {})
-    pane = next((item for item in panes if str(item.get("id")) == ref.pane_id), {})
-    notices = mux.take_notices()
-    right = (sidebar_pane.get("pane_x") or 0) + (sidebar_pane.get("pane_columns") or 0)
+
+    def split():
+        panes = target.panes()
+        filler = next((pane for pane in panes if str(pane.get("id")) == filler_id), {})
+        side = sidebar_of(panes)
+        return (filler and not filler.get("is_floating")
+                and filler.get("pane_x") == (side.get("pane_x") or 0)
+                + (side.get("pane_columns") or 0))
+
+    split_ok = wait_until(split, RESIZE_WAIT)
+    beside = placement(root, session, target, tracker, "beside")
     observations["home_recovery"] = {
         "home_closed": bool(closed) and code == 0,
-        "home_reopened": any(item.get("title") == HOME_PANE_NAME for item in panes),
-        "spawn_floating_in_sidebar_tab": bool(pane.get("is_floating"))
-        and pane.get("tab_id") == sidebar_pane.get("tab_id"),
-        "rows_match_sidebar": (pane.get("pane_y"), pane.get("pane_rows"))
-        == (sidebar_pane.get("pane_y"), sidebar_pane.get("pane_rows")),
-        "beside_sidebar": pane.get("pane_x") == right,
-        "covers_sidebar_right": (pane.get("pane_x") or 0) > (sidebar_pane.get("pane_x") or 0)
-        and pane.get("pane_x") < right,
-        "sidebar_geometry": [sidebar_pane.get(key) for key in
-                             ("pane_x", "pane_y", "pane_columns", "pane_rows")],
-        "spawn_geometry": [pane.get(key) for key in
-                           ("pane_x", "pane_y", "pane_columns", "pane_rows")],
-        "notices": notices,
+        "covered": covered,
+        "filler_tiled_right_of_sidebar": bool(split_ok) and split_code == 0,
+        "beside": beside,
     }
     facts = observations["home_recovery"]
     expect(facts["home_closed"], "the home pane could not be closed")
-    expect(not facts["home_reopened"], "a home pane was opened again")
-    expect(facts["spawn_floating_in_sidebar_tab"] and facts["rows_match_sidebar"],
-           f"the spawn after closing the home pane is not in the agent area: {facts}")
-    expect((facts["beside_sidebar"] and not notices)
-           or (facts["covers_sidebar_right"] and notices == [SIDEBAR_COVERED]),
-           f"the spawn after closing the home pane is misplaced: {facts}")
+    for step in (covered, beside):
+        expect(not step["home_reopened"], "a home pane was opened again")
+        expect(step["floating_in_sidebar_tab"] and step["rows_match_sidebar"],
+               f"a spawn after closing the home pane is not in the agent area: {step}")
+    expect(covered["sidebar_fills_tab"] and covered["covers_sidebar_right"]
+           and covered["notices"] == [SIDEBAR_COVERED],
+           f"the spawn over a sidebar filling the tab is misplaced: {covered}")
+    expect(facts["filler_tiled_right_of_sidebar"],
+           f"no tiled pane could be split off right of the sidebar: {facts}")
+    expect(not beside["sidebar_fills_tab"] and beside["beside_sidebar"]
+           and not beside["notices"],
+           f"the spawn beside the sidebar is misplaced: {beside}")
 
 
 def resize(ptys, rows, columns):
@@ -841,12 +909,15 @@ def resize_alignment(target, observations):
     target.action("resize", "increase", "right")
     after_sidebar = wait_until(realigned(widened), RESIZE_WAIT)
     home_last, _ = overlay_of(target.panes())
+    floating = sum(1 for pane in target.panes() if pane.get("is_floating"))
     observations["resize_alignment"] = {
         "home_before": list(before),
         "home_after_clients": list(widened) if widened else None,
         "home_after_sidebar": list(box(home_last)) if home_last else None,
         "aligned_after_clients": bool(after_clients),
         "aligned_after_sidebar": bool(after_sidebar),
+        "floating_panes": floating,
+        "pinned_panes": pinned_panes(target, floating),
     }
     facts = observations["resize_alignment"]
     if not (after_clients and after_sidebar):
@@ -856,6 +927,8 @@ def resize_alignment(target, observations):
            f"the agents did not follow the home pane after a terminal resize: {facts}")
     expect(facts["aligned_after_sidebar"],
            f"the agents did not follow the home pane after a sidebar resize: {facts}")
+    expect(facts["pinned_panes"] == floating,
+           f"{facts['pinned_panes']} of {floating} floating panes are pinned after moving")
 
 
 def rerun_in_session(root, session, tongs_bin, target, tracker, observations):

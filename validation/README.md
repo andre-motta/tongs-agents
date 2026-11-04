@@ -269,9 +269,13 @@ control. The run checks, on the real Zellij server:
 - widening both clients, then the sidebar (`resize increase right`), moves
   every launched agent pane onto the new home geometry (the real sidebar
   pane's `align_agents`);
-- after the home pane is closed, a spawn through the adapter opens no new
-  home pane and floats with the sidebar's rows, right of it or, with the
-  covered-sidebar notice, over its right three quarters.
+- widening also keeps every floating pane pinned (`dump-layout` again);
+- after the home pane is closed, the sidebar fills the tab and a spawn
+  through the adapter floats with the sidebar's rows over its right three
+  quarters, reaching its right edge, with the covered-sidebar notice; once a
+  tiled pane is split off right of the sidebar, the next spawn floats over
+  everything right of the sidebar, to the viewport's edge, with no notice.
+  Neither opens a new home pane.
 
 The sidebar for the row checks runs headless in the validator process with the
 sidebar pane's Zellij identity, so that step is instrumented rather than a

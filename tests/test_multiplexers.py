@@ -1096,6 +1096,16 @@ def test_a_stacked_home_pane_from_0_10_1_covers_its_whole_column(fake):
     assert _actions(fake)[1][6:14] == OVER_HOME
 
 
+def test_a_0_45_1_stack_reports_every_member_at_the_column_geometry(fake):
+    # Recorded on 0.45.1: collapsed members are is_suppressed with the full box.
+    stacked = [dict(HOME, pane_columns=80, pane_rows=37, is_suppressed=True),
+               _pane(2, title="s1", pane_x=40, pane_y=1, pane_columns=80, pane_rows=37,
+                     is_suppressed=True),
+               _pane(3, title="s2", pane_x=40, pane_y=1, pane_columns=80, pane_rows=37)]
+    region = _mux()._agent_region("agents", [PLUGIN_PANE, SIDEBAR, *stacked])
+    assert region == (0, (40, 1, 80, 37), False)
+
+
 def test_list_panes_keeps_floating_and_suppressed_panes(fake):
     fake.responses["list-panes"] = _listing(
         SIDEBAR, HOME, *_agents(2), _pane(3, is_suppressed=True))
@@ -1210,6 +1220,26 @@ def test_a_sidebar_filling_its_tab_is_covered_on_the_right_with_a_notice(fake):
     assert mux.take_notices() == []
 
 
+def test_a_failed_spawn_over_the_sidebar_leaves_no_notice(fake):
+    full = dict(MARKED, pane_columns=160)
+    fake.responses["list-panes"] = _listing(full)
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    mux = _mux()
+    with pytest.raises(MultiplexerError, match="closed new pane 4"):
+        mux.spawn("agents", ["claude"])
+    assert mux.take_notices() == []
+
+
+def test_align_over_a_covered_sidebar_queues_no_notice(fake):
+    full = dict(MARKED, pane_columns=160)
+    fake.responses["list-panes"] = _listing(full, *_agents(4, pane_x=10))
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    mux = _mux()
+    assert mux.align_agents("agents", ["4"]) == ["4"]
+    assert mux.take_notices() == []
+
+
 def test_a_list_tabs_without_the_sidebars_tab_is_refused(fake):
     fake.responses["list-panes"] = _listing(MARKED)
     fake.responses["list-tabs"] = _tabs(tab_id=7)
@@ -1287,7 +1317,7 @@ def test_align_moves_only_the_given_floating_panes_that_moved_away(fake):
     )
     moved = _mux().align_agents("agents", ["2", "3", "4", "6", "7", "99"])
     assert moved == ["2", "3"]
-    target = ["-x", "60", "-y", "1", "--width", "100", "--height", "38"]
+    target = ["-x", "60", "-y", "1", "--width", "100", "--height", "38", "--pinned", "true"]
     assert _actions(fake) == [
         ["list-panes", "--json"],
         ["change-floating-pane-coordinates", "--pane-id", "terminal_2", *target],
@@ -1300,8 +1330,8 @@ def test_align_follows_the_area_beside_a_marked_sidebar(fake):
     fake.responses["list-tabs"] = _tabs(columns=160)
     mux = _mux()
     assert mux.align_agents("agents", ["2"]) == ["2"]
-    assert _actions(fake)[-1][-8:] == ["-x", "50", "-y", "1", "--width", "110",
-                                       "--height", "38"]
+    assert _actions(fake)[-1][-10:] == ["-x", "50", "-y", "1", "--width", "110",
+                                        "--height", "38", "--pinned", "true"]
     assert mux.take_notices() == []
 
 

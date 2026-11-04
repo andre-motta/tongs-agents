@@ -32,16 +32,17 @@ Placement is read back (the new pane is floating in the home pane's tab) and
 a pane that is not is closed again. ``list-panes`` reports no pinned flag
 (``dump-layout`` does).
 ``align_agents`` moves given floating panes to the current agent region with
-``change-floating-pane-coordinates`` (the sidebar calls it when its own pane
-is resized). A session created by 0.10.1, whose home pane heads a
-``stacked=true`` column, uses that whole column as the region.
+``change-floating-pane-coordinates --pinned true`` (the sidebar calls it when
+its own pane is resized). A session created by 0.10.1, whose home pane heads a
+``stacked=true`` column, uses that whole column as the region; the agents
+stacked there stay tiled under the floating ones.
 
 The home pane can be closed. When it is gone but the sidebar pane runs with
 ``--layout single`` (the workspace layout marks it), the region is what lies
 right of the sidebar in its tab (same rows, up to ``viewport_columns`` of
 ``list-tabs``). When the sidebar fills the tab (closing the home pane gives it
-the space), the region is the sidebar's right three quarters and
-``take_notices`` returns a notice saying so. A session whose sidebar carries
+the space), the region is the sidebar's right three quarters and, once a
+pane opened there, ``take_notices`` returns a notice saying so. A session whose sidebar carries
 no marker (split, or created before it existed) keeps the plain placement
 silently.
 """
@@ -502,9 +503,12 @@ class ZellijMultiplexer:
         if cwd is not None:
             options += ["--cwd", _cwd(cwd)]
         if name != SIDEBAR_PANE_NAME:
-            region = self._agent_region(session, self._pane_entries(session), notify=True)
+            region = self._agent_region(session, self._pane_entries(session))
             if region is not None:
-                ref = self._spawn_over(session, region, options, command)
+                tab_id, box, covered = region
+                ref = self._spawn_over(session, tab_id, box, options, command)
+                if covered:
+                    self.notices.append(SIDEBAR_COVERED)
                 if focus:
                     self.focus(ref)
                 return ref
@@ -541,7 +545,7 @@ class ZellijMultiplexer:
         region = self._agent_region(session, entries)
         if region is None:
             return []
-        tab_id, box = region
+        tab_id, box, _ = region
         moved = []
         for entry in entries:
             if (
@@ -555,17 +559,21 @@ class ZellijMultiplexer:
             self._action(
                 session, None, "change-floating-pane-coordinates",
                 "--pane-id", f"terminal_{entry['id']}", *_coordinates(box),
+                "--pinned", "true",
             )
             moved.append(str(entry["id"]))
         return moved
 
     def _agent_region(
-        self, session: str, entries: list[dict], *, notify: bool = False
-    ) -> tuple[int, tuple[int, int, int, int]] | None:
-        """``(tab_id, (x, y, columns, rows))`` where agents show, or None (split)."""
+        self, session: str, entries: list[dict]
+    ) -> tuple[int, tuple[int, int, int, int], bool] | None:
+        """``(tab_id, (x, y, columns, rows), covered)`` where agents show, or None (split).
+
+        ``covered`` is True when the region lies over the sidebar's right part.
+        """
         home = _home_anchor(entries)
         if home is not None:
-            return _geometry(home)[0], _home_region(entries, home)
+            return _geometry(home)[0], _home_region(entries, home), False
         sidebar = next((entry for entry in entries if _marks_single(entry)), None)
         if sidebar is None:
             return None
@@ -574,9 +582,7 @@ class ZellijMultiplexer:
             self._answered(session, None, "list-tabs", "--json").stdout, tab_id
         )
         box, covered = _beside_sidebar(sidebar, columns)
-        if covered and notify:
-            self.notices.append(SIDEBAR_COVERED)
-        return tab_id, box
+        return tab_id, box, covered
 
     def _new_ref(self, session: str, result) -> PaneRef:
         match = _NEW_PANE.fullmatch((result.stdout or "").strip())
@@ -588,11 +594,10 @@ class ZellijMultiplexer:
         return PaneRef(NAME, session, match.group(1), self._effective_socket_dir())
 
     def _spawn_over(
-        self, session: str, region: tuple[int, tuple[int, int, int, int]],
+        self, session: str, tab_id: int, box: tuple[int, int, int, int],
         options: list[str], command: list[str],
     ) -> PaneRef:
-        """Open a pinned floating pane over the region and read it back."""
-        tab_id, box = region
+        """Open a pinned floating pane over ``box`` in tab ``tab_id`` and read it back."""
         result = self._new_pane(
             session, "--tab-id", str(tab_id), "--floating", "--pinned", "true",
             *_coordinates(box), *options, "--", *command,

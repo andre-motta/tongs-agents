@@ -218,6 +218,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         self.init_approvals(self.feed, approval_interval)
         self.align_delay = align_delay
         self._align_timer = None
+        self._align_lock = threading.Lock()
 
     def compose(self) -> ComposeResult:
         yield AppHeader()
@@ -253,13 +254,18 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
 
     @work(thread=True, exclusive=True, group="align-agents")
     def align_agents(self) -> None:
-        """Move this session's launched panes onto the agent area; best effort."""
-        try:
-            panes = self.feed.launched_panes()
-            if panes:
-                self.multiplexer.align_agents(self.session, panes)
-        except Exception:  # noqa: BLE001, S110 - never disturb the sidebar for a layout nicety
-            pass
+        """Move this session's launched panes onto the agent area; best effort.
+
+        An exclusive worker does not stop a thread that already runs, so runs
+        are serialized: each reads the geometry after the previous one moved.
+        """
+        with self._align_lock:
+            try:
+                panes = self.feed.launched_panes()
+                if panes:
+                    self.multiplexer.align_agents(self.session, panes)
+            except Exception:  # noqa: BLE001, S110 - never disturb the sidebar for a layout nicety
+                pass
 
     def palette_commands(self) -> list[PaletteCommand]:
         commands = super().palette_commands()
