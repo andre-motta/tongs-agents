@@ -23,6 +23,12 @@ LISTED = ("token_1: created at 2026-11-03 15:31:08 [READ-ONLY]\n"
           "token_2: created at 2026-11-03 15:31:09 [READ-ONLY]\n")
 
 
+@pytest.fixture(autouse=True)
+def _no_usual_zellij(monkeypatch):
+    """Keep enable and disable from running a real zellij found on PATH."""
+    monkeypatch.setattr(web, "usual_binary", lambda: None)
+
+
 @pytest.fixture
 def linux(monkeypatch):
     monkeypatch.setattr(zellij_download, "_system", lambda: ("linux", "x86_64"))
@@ -520,3 +526,53 @@ def test_disable_without_the_web_build_drops_the_token_store(linux, monkeypatch,
     assert code == 0
     assert not store.exists()
     assert "Could not revoke" not in out
+
+
+# restart notice across the switch (#97)
+
+
+def _versions(monkeypatch, web_build, usual):
+    versions = {web_build: (0, 45, 1), "/usr/bin/zellij": usual}
+    monkeypatch.setattr(web, "usual_binary", lambda: "/usr/bin/zellij")
+    monkeypatch.setattr(web, "zellij_version", lambda binary: versions[binary])
+
+
+def test_enable_and_disable_say_to_restart_when_versions_differ(
+        linux, web_build, monkeypatch, capsys):
+    FakeZellij(monkeypatch)
+    _versions(monkeypatch, web_build, (0, 44, 2))
+
+    code, enabled, _ = _cli(monkeypatch, capsys, "web", "enable")
+    again_code, again, _ = _cli(monkeypatch, capsys, "web", "enable")
+    disable_code, disabled, _ = _cli(monkeypatch, capsys, "web", "disable")
+    off_code, off, _ = _cli(monkeypatch, capsys, "web", "disable")
+
+    assert (code, again_code, disable_code, off_code) == (0, 0, 0, 0)
+    for out in (enabled, disabled):
+        assert "Restart needed: the usual zellij is 0.44.2, not the web build's 0.45.1" in out
+        assert "quit 'agents' and run 'tongs-agents workspace' again" in out
+    assert "again after 'tongs-agents web disable'" in enabled
+    assert "Restart needed" not in again
+    assert "Restart needed" not in off
+
+
+@pytest.mark.parametrize("usual, expected", [
+    ((0, 45, 1), False),
+    (None, True),
+])
+def test_restart_notice_needs_a_known_matching_version(web_build, monkeypatch, usual, expected):
+    _versions(monkeypatch, web_build, usual)
+
+    notice = web.switch_notice(web_build, "agents", enabling=False)
+
+    assert (notice is not None) is expected
+    if expected:
+        assert "an unknown version" in notice
+
+
+def test_no_restart_notice_without_both_binaries(web_build, monkeypatch):
+    _versions(monkeypatch, web_build, (0, 44, 2))
+
+    assert web.switch_notice(None, "agents", enabling=True) is None
+    monkeypatch.setattr(web, "usual_binary", lambda: None)
+    assert web.switch_notice(web_build, "agents", enabling=True) is None

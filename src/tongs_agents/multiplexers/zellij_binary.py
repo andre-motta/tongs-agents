@@ -8,6 +8,13 @@ or above the floor wins; failing that the managed no-web binary in
 ``state_dir()/bin/zellij`` is used when it exists, and failing that the PATH
 binary is returned as it is so callers can report its version.
 
+That one choice serves every Zellij CLI call, including calls against a
+session that is already running. A session keeps the server version it was
+started with, so when the web build and the usual zellij differ in version a
+session started on one side of ``web enable`` or ``web disable`` is reached
+by a client of the other version; ``tongs-agents web`` tells the user to
+restart the workspace then (see docs/web.md).
+
 This module never downloads anything; ``tongs_agents.zellij_download`` does.
 It only reads the web state file that ``tongs_agents.commands.web`` writes.
 """
@@ -135,9 +142,11 @@ def _cached_version(binary: str) -> tuple[int, int, int] | None:
 
 def zellij_binary() -> str | None:
     """The zellij to run, in the order the module docstring gives."""
-    web = web_binary()
-    if web is not None:
-        return web
+    return web_binary() or usual_binary()
+
+
+def usual_binary() -> str | None:
+    """The zellij run while web watching is off: PATH at the floor, else managed."""
     found = path_binary()
     managed = managed_binary()
     if managed is None:

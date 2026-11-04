@@ -15,6 +15,11 @@ Off by default. ``web enable`` needs the pinned Zellij web build, which only
    ``zellij_binary()`` returns the web build and a new workspace session
    starts with web sharing on (for that session only).
 
+Every Zellij CLI call, including one against a running session, uses that
+single choice. When the usual zellij is not the web build's version, enable
+and disable say to restart the workspace, because a session keeps the server
+version it started with and a client of another version can miss it.
+
 Plain HTTP is used because the listener is loopback only; for a phone or
 another machine use an SSH local forward. Read-write tokens are not offered.
 
@@ -43,8 +48,10 @@ from tongs_agents.app_config import DEFAULT_SESSION, AppConfigError, load_app_co
 from tongs_agents.commands.doctor import Check
 from tongs_agents.multiplexers.zellij_binary import (
     WEB_DIR,
+    format_version,
     managed_web_binary,
     read_web_state,
+    usual_binary,
     web_state_path,
     zellij_version,
 )
@@ -343,6 +350,36 @@ def watch_url(port: int, session: str) -> str:
     return f"http://{LOOPBACK}:{port}/{urllib.parse.quote(session, safe='')}"
 
 
+def _shown(version: tuple[int, int, int] | None) -> str:
+    return format_version(version) if version else "an unknown version"
+
+
+def switch_notice(web_build: str | None, session: str, enabling: bool) -> str | None:
+    """What to restart when the web build and the usual zellij differ in version.
+
+    tongs-agents runs one zellij for every call, so after the switch a
+    workspace session started before it is reached by a client of another
+    version, which can hide the session or fail control.
+    """
+    usual = usual_binary()
+    if web_build is None or usual is None:
+        return None
+    web_version = zellij_version(web_build)
+    usual_version = zellij_version(usual)
+    if web_version is not None and web_version == usual_version:
+        return None
+    versions = (f"the usual zellij is {_shown(usual_version)}, not the web build's "
+                f"{_shown(web_version)}")
+    restart = f"quit {session!r} and run 'tongs-agents workspace' again"
+    if enabling:
+        return (f"Restart needed: {versions}, and tongs-agents now runs the web build for "
+                f"every Zellij call; {restart} before using it, and again after "
+                "'tongs-agents web disable'.")
+    return (f"Restart needed: {versions}, and tongs-agents now runs the usual zellij; "
+            f"a workspace session started while watching was on can be missed, so "
+            f"{restart}.")
+
+
 def _error(message: str, code: int = EXIT_ERROR) -> int:
     print(f"tongs-agents web: {redact(message)}", file=sys.stderr)
     return code
@@ -366,6 +403,7 @@ def enable(port: int | None = None) -> int:
     if problem is not None:
         return _error(problem)
     state = read_web_state()
+    was_enabled = state.get("enabled") is True
     previous = _state_port(state)
     port = port or previous or DEFAULT_PORT
     started = False
@@ -393,11 +431,15 @@ def enable(port: int | None = None) -> int:
           "then open the URL there.")
     print(f"A workspace session started before web watching was enabled is not shared; "
           f"quit {session!r} and run 'tongs-agents workspace' again to watch it.")
+    notice = None if was_enabled else switch_notice(binary, session, enabling=True)
+    if notice:
+        print(notice)
     return 0
 
 
 def disable() -> int:
     binary = managed_web_binary()
+    state = read_web_state()
     stopped = stop_server(binary)
     revoked = None
     if binary is not None and tokens_db().exists():
@@ -414,12 +456,15 @@ def disable() -> int:
             revoked = True
         except OSError:
             revoked = False
-    state = read_web_state()
     try:
         write_state(False, _state_port(state) or DEFAULT_PORT)
     except (paths.UnsafePathError, OSError) as error:
         return _error(f"cannot record that web watching is off: {error}")
     print("Web watching is off. New workspace sessions use the usual zellij.")
+    notice = (switch_notice(binary, workspace_session(), enabling=False)
+              if state.get("enabled") is True else None)
+    if notice:
+        print(notice)
     if revoked is False:
         print(f"Could not revoke the tokens in {tokens_db()}; delete that file to revoke them.")
     if not stopped:

@@ -27,6 +27,21 @@ The session must be started after `web enable`: a Zellij session can only be
 watched when it runs the web build with web sharing on. If the workspace was
 already running, quit it and run `tongs-agents workspace` again.
 
+### Restart across enable and disable
+
+tongs-agents runs one Zellij for every call, including focus and control of a
+session that is already running: the web build while watching is on, the
+usual Zellij (the one on `PATH` at or above 0.44.2, else the managed no-web
+build) while it is off. A running session keeps the server version it was
+started with, so when the usual Zellij is not 0.45.1, like the web build, a
+session started on one side of the switch is reached by a client of another
+version. That client can miss the session or fail to control it.
+
+So when the versions differ, restart the workspace both after `web enable`
+and after `web disable`: quit the session and run `tongs-agents workspace`
+again. Both commands print a "Restart needed" line naming the two versions
+when this applies; when the usual Zellij is already 0.45.1 they do not.
+
 From another device, use an SSH local forward rather than opening the port:
 
 ```console
@@ -54,8 +69,10 @@ then open `http://127.0.0.1:8083/<session>` on that device.
 - **Which Zellij runs.** While watching is enabled, tongs-agents uses the web
   build for the workspace, and a new workspace session starts with
   `options --web-sharing on` for that session only. When watching is off, the
-  usual Zellij is used and no session is shared. Your own Zellij config is
-  never read or changed.
+  usual Zellij is used and no session is shared. The choice applies to every
+  call, also against a running session, hence the
+  [restart](#restart-across-enable-and-disable) when the versions differ.
+  Your own Zellij config is never read or changed.
 - **Bind address.** The server uses a config that tongs-agents owns,
   `state_dir()/web/config.kdl`, which binds `127.0.0.1` only. Plain HTTP is
   used because traffic stays on the host. Other addresses, certificates and
@@ -88,6 +105,9 @@ then open `http://127.0.0.1:8083/<session>` on that device.
 - Not tested: a real browser, HTTPS, any address other than 127.0.0.1, the
   share plugin's runtime toggle, and Zellij 0.44.2 (no web build is pinned
   for it).
+- tongs-agents does not pick the Zellij per session from that session's
+  running server, so a session started before the switch needs the restart
+  above when the usual Zellij is not 0.45.1.
 - Zellij 0.45.1 names tokens `token_N` by count. After revoking one of several
   tokens the next mint can fail with "already exists"; run
   `tongs-agents web tokens revoke --all` and `web enable` again.
