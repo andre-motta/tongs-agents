@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
 
@@ -48,6 +49,7 @@ HOOK_EVENTS = {
     "tool-use": ("PreToolUse", TOOL),
 }
 PI_POINTS = {"before_agent_start": PROMPT, "tool_execution_end": TOOL}
+_RAW_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 
 
 @dataclass(frozen=True)
@@ -59,14 +61,46 @@ class HookIdentity:
     process_start: str
 
 
-def _replaced(launch_id: str) -> bool:
+_HEX_ESCAPE = re.compile(rb"\\u00[36][0-9a-fA-F]")
+
+
+def _may_name(path: str, needle: bytes) -> bool:
+    """False only when the file at ``path`` cannot hold ``needle`` as JSON text.
+
+    A JSON escape could spell the id another way; the id is lowercase hex,
+    so only a ``\\u003X`` or ``\\u006X`` escape keeps the file in, and other
+    escapes (a non-ASCII folder, an escaped quote) do not force a full parse.
+    A file that is not UTF-8 (a NUL in its first bytes: UTF-16 or UTF-32,
+    which ``json.loads`` also reads) is kept in too. A file that cannot be
+    opened names nothing, as in ``hook.read_launch_data``.
+    """
     try:
-        names = [entry.name for entry in os.scandir(paths.launches_dir())]
+        descriptor = os.open(path, _RAW_FLAGS)
     except OSError:
         return False
-    for name in names:
+    try:
+        raw = os.read(descriptor, hook._MAX_LAUNCH_RECORD_BYTES + 1)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return needle in raw or _HEX_ESCAPE.search(raw) is not None or b"\x00" in raw[:4]
+
+
+def _replaced(launch_id: str) -> bool:
+    """True when another launch record names ``launch_id`` in ``replaces``.
+
+    Only records whose raw bytes could name the id are parsed, so a granted
+    session's hook skips the JSON of every unrelated launch (#105).
+    """
+    needle = f'"{launch_id}"'.encode("ascii")
+    try:
+        entries = [(entry.name, entry.path) for entry in os.scandir(paths.launches_dir())]
+    except OSError:
+        return False
+    for name, path in entries:
         other = name[:-5] if name.endswith(".json") else ""
-        if other == launch_id or not is_launch_id(other):
+        if other == launch_id or not is_launch_id(other) or not _may_name(path, needle):
             continue
         data = hook.read_launch_data(other)
         if data is not None and data.get("replaces") == launch_id:

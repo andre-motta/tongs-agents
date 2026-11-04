@@ -788,3 +788,23 @@ def test_a_parked_window_named_at_spawn_is_named_literally(fake, mux):
     assert fake.tails()[2][:6] == ["new-window", "-d", "-t", "=agents:", "-n", "fix ##130"]
     assert fake.tails()[3] == ["set-option", "-p", "-t", "%7", tmux_mux.NAME_OPTION,
                                "fix #130"]
+
+
+def test_focused_panes_are_the_attached_clients_current_panes(fake, mux):
+    fake.answer("list-clients", "%3\n%7\n%3\n")
+    assert mux.focused_panes("agents") == {"%3", "%7"}
+    assert fake.tails() == [["list-clients", "-F", "#{pane_id}"]]
+
+
+def test_no_attached_client_means_no_focused_pane(fake, mux):
+    fake.answer("list-clients", "")
+    assert mux.focused_panes("agents") == set()
+
+
+@pytest.mark.parametrize("stdout, returncode", [("%3\nnot-a-pane\n", 0), ("", 1)])
+def test_focused_panes_refuses_unknown_output_or_failure(fake, mux, stdout, returncode):
+    fake.answer("list-clients", stdout, returncode)
+    with pytest.raises(MultiplexerError):
+        mux.focused_panes("agents")
+    with pytest.raises(MultiplexerError):
+        mux.focused_panes("-bad")

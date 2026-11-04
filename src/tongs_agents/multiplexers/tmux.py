@@ -562,6 +562,22 @@ class TmuxMultiplexer:
             if line.startswith(prefix)
         ]
 
+    def focused_panes(self, session: str) -> set[str]:
+        """Pane ids that any client of the tmux server shows (``list-clients``).
+
+        tmux marks the active pane of every window active whether a client is
+        attached or not, so only each attached client's current pane counts.
+        Clients of every session count, not only ``session``'s: a grouped
+        session (``new-session -t``) or a linked window shows the same panes,
+        and pane ids are unique per server. Control-mode clients count too.
+        """
+        _session(session)
+        output = self._tmux(None, "list-clients", "-F", "#{pane_id}")
+        panes = {line for line in output.splitlines() if line}
+        if not all(_PANE_ID.match(pane) for pane in panes):
+            raise MultiplexerError("unrecognized tmux list-clients output")
+        return panes
+
     def focus(self, ref: PaneRef) -> FocusResult:
         """Select ref's pane in its session and read it back; never raise.
 

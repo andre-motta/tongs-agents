@@ -7,6 +7,7 @@ multiplexer, process table and hook session records are faked.
 import json
 import os
 import stat
+import subprocess
 import threading
 import time
 
@@ -19,7 +20,9 @@ from tongs_agents.multiplexers.base import (
     PaneRef,
     Unsupported,
 )
+from tongs_agents.multiplexers.tmux import TmuxMultiplexer
 from tongs_agents.profiles import Profile
+from tongs_agents.terminal_apis import tmux as tmux_api
 
 SESSION = "agents"
 SOCKET_DIR = "/run/user/1000/zellij-test"
@@ -706,3 +709,22 @@ def test_unusable_audit_dir_only_warns(world, monkeypatch, capsys):
     monkeypatch.setattr(control, "_audit_dir", broken)
     control.audit("send", actor="cli", launch_id=None, outcome="ok", exit_code=0, data=b"x")
     assert "control audit not written" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("clients, focused", [("", False), ("%9\n", False), ("%9\n%3\n", True)])
+def test_tmux_client_focus_comes_from_attached_clients_not_the_pane_flag(
+        monkeypatch, clients, focused):
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append(argv[3:])
+        return subprocess.CompletedProcess(argv, 0, stdout=clients, stderr="")
+
+    monkeypatch.setattr(tmux_api.subprocess, "run", run)
+    socket = "/run/tmux-test/default"
+    ref = PaneRef("tmux", SESSION, "%3", socket)
+    pane = PaneInfo(ref, "t", None, False, True)
+    target = control.Target(None, ref, pane, TmuxMultiplexer(socket_dir=socket))
+    monkeypatch.setattr(control, "_verify", lambda launch_id: target)
+    assert control.client_focused("a" * 32) is focused
+    assert calls == [["list-clients", "-F", "#{pane_id}"]]

@@ -364,10 +364,11 @@ def verify(launch_id: str) -> PaneRef:
 def client_focused(launch_id: str) -> bool:
     """True when an attached client has the verified pane of ``launch_id`` focused.
 
-    Zellij answers from ``list-clients``; a multiplexer without a per-client
-    readback (tmux) answers with the pane's own focus flag, which errs toward
-    focused. Chat wake (#32) uses it so a wake never lands in a pane the
-    maintainer is typing in.
+    Zellij and tmux answer from their ``list-clients``, since tmux flags the
+    active pane of a window focused even with no client attached (#105); a
+    multiplexer without a per-client readback answers with the pane's own
+    focus flag, which errs toward focused. Chat wake (#32) uses it so a wake
+    never lands in a pane the maintainer is typing in.
     """
     target = _verify(launch_id)
     focused_panes = getattr(target.multiplexer, "focused_panes", None)

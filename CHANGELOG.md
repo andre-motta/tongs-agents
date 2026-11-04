@@ -1,5 +1,57 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- MCP control (#100): a refused or failed `agents_send` or `agents_spawn`
+  no longer uses up the caller's rate limit; `agents_wait` ends when the call
+  is cancelled or the server shuts down, or when the caller no longer
+  verifies, instead of holding the server for up to 600 s; the self-pane
+  check also compares the socket of the caller's launch record; and a tmux
+  launch is refused when its hook record names another `TMUX_PANE` or tmux
+  server socket. The hook now records a well-formed `TMUX_PANE` so that
+  check runs, and a malformed one is ignored; parallel sends or spawns of
+  one caller no longer queue behind the rate limit lock (a slot is reserved
+  and given back on refusal or failure); and `agents_wait` re-verifies the
+  caller about every 5 s, ending only after two failed checks in a row, so
+  one transient multiplexer error no longer ends it.
+- Sandbox bridge (#109): at the 4-session cap a new sandboxed session
+  replaces the launch's oldest ended record instead of being dropped (live
+  records still count, so a flood cannot bypass the cap), and `sync_all`
+  holds a private per-launch file lock from the store read through the
+  import, so two sidebars cannot each import up to the cap. The OpenShell
+  validator also checks where the harness config lands after a relaunch
+  upload into the reused sandbox.
+- Sandbox sync reporting (#109): `tongs-agents sandbox sync` and
+  `python -m tongs_agents.sandbox sync` print how many ended sessions were
+  replaced and how many launches were skipped as busy in another process; a
+  replacement is counted only once its import succeeds; and the OpenShell
+  validator treats a CLI failure while clearing the first upload as not
+  cleared, so the relaunch reuse check still runs and the relaunch config
+  check is marked not applicable.
+- Config layer (#113): `config apply` holds a store-wide lock, so a second
+  apply started meanwhile is refused before it writes anything; a forced
+  apply no longer leaves a stray `mcp.json` drift backup for a disabled Pi
+  server it leaves as is; and with a Pi older than 0.99.0, MCP servers the
+  dotfiles no longer want are listed as orphaned instead of pending.
+- Web watching (#97): when the usual zellij is not the web build's 0.45.1,
+  `web enable` and `web disable` print a "Restart needed" line, because every
+  Zellij call uses one binary and a running session keeps its own server
+  version; docs/web.md explains restarting the workspace across the switch.
+- The sidebar no longer exits when an access-request poll fails unexpectedly:
+  the error is shown once as a notification and polling goes on (#116).
+- While the sandbox column is shown, tables narrower than the full layout
+  plus that column (98 cells) use the compact layout instead of scrolling
+  sideways, and the summary bar switches with them (#116).
+- Chat delivery (#105): chat wake now works on tmux, which marks the active
+  pane of every window focused whether a client is attached or not; focus
+  comes from the panes the server's attached clients show (`tmux
+  list-clients`), grouped sessions and linked windows included. The
+  hook's check for a replacing launch record parses only records whose raw
+  bytes could name the launch, so with 1000 launch records it takes about
+  1.8 ms instead of 9.4 ms.
+
 ## 0.10.3 (experimental)
 
 ### Added
