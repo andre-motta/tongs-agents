@@ -1,28 +1,35 @@
 ---
-title: "Move your open sessions into the workspace"
-description: "Resume Claude Code, Codex and Pi sessions that run in other terminals as panes of the workspace with tongs-agents resume."
+title: "Resume your sessions in the workspace"
+description: "Resume Claude Code, Codex and Pi sessions, open in other terminals or closed long ago, as panes of the workspace with tongs-agents resume."
 ---
 
-You already have agent sessions open in other terminals and want them as
-panes of the workspace, with the sidebar watching them. `tongs-agents resume`
-starts each one again in the workspace through the harness's own resume:
-the conversation continues, in the folder it ran in, with the profile that
-uses its config dir.
+You have agent sessions open in other terminals, or closed days ago, and
+want them as panes of the workspace, with the sidebar watching them.
+`tongs-agents resume` starts each one again in the workspace through the
+harness's own resume: the conversation continues, in the folder it ran in,
+with the profile that uses its config dir. Past sessions come from the
+harnesses' own history, so a session started before tongs-agents was
+installed can be resumed too.
 
 ## Quick start
 
 ```console
 tongs-agents resume                 # list the sessions it can resume
 tongs-agents resume 3f2a            # resume one; a unique prefix of the id is enough
+tongs-agents resume 3f2a ~/src/app2 # resume it in another folder
 ```
 
 The list looks like this:
 
 ```text
-HARNESS  SESSION                               PROFILE/CONFIG  STATUS  AGE  FOLDER
-claude   3f2a9c1e-0000-4000-8000-000000000001  claude-main     idle    4m   ~/src/app
-codex    019a1b2c-0000-7000-8000-000000000002  codex-review    running 12s  ~/src/api
+HARNESS  SESSION                               PROFILE/CONFIG  STATUS   AGE  FOLDER     TITLE
+claude   3f2a9c1e-0000-4000-8000-000000000001  claude-main     idle     4m   ~/src/app  Fix the flaky login test
+codex    019a1b2c-0000-7000-8000-000000000002  codex-review    running  12s  ~/src/api  Review the pagination change
+pi       01a0c4d5-0000-7000-8000-00000000000d  pi              -        3d   ~/docs     Docs pass
 ```
+
+`STATUS` is the last hook status of a session whose agent still runs, and
+`-` for a past session read from history.
 
 Then, for each session:
 
@@ -44,8 +51,9 @@ harness has reported anything: its launch is pending (for up to 30 seconds)
 or its process runs. A second `resume ID` right after the first is
 therefore refused rather than starting a second pane.
 
-Resume while the old agent still runs: once its process is gone, the
-session store drops its record within seconds, and it is no longer listed.
+Once the old agent's process is gone, the session store drops its record
+within seconds; the session stays listed from the harness's history, as a
+past session, and resumes the same way.
 
 ## In the sidebar
 
@@ -53,16 +61,21 @@ session store drops its record within seconds, and it is no longer listed.
 | --- | --- |
 | `u` on a row | Resumes the selected agent's session in a new pane of the sidebar's session. |
 | `Ctrl+P`, `Resume in workspace` | The same as `u`. |
-| `Ctrl+P`, `Resume session…` | Lists the recent sessions of the store (harness, short id, status, age, folder); Enter resumes the chosen one, Escape closes the list. |
-| `:` then `resume [ID] [--profile NAME]` | The CLI verb in the [sidebar command line](app.md#sidebar-command-line): without ID it lists the sessions under the prompt. |
+| `Ctrl+P`, `Resume session…` | Lists the sessions it can resume, newest first: running ones (marked `●`) and past ones from history, each with its title, folder, profile and age. Typing filters the list (every word must appear in the title, folder, profile, harness or id); Up and Down move, Enter resumes the chosen one, Escape closes the list. |
+| `:` then `resume` | The same list. |
+| `:` then `resume ID [DIR] [--profile NAME]` | The CLI verb in the [sidebar command line](app.md#sidebar-command-line). A relative DIR is resolved from the folder the sidebar started in. |
 
 The sidebar only lists the panes of its own session, so `Resume session…`
-(or `:resume`) is the way to reach sessions that run in other terminals;
-`u` is for a row whose agent has ended in its pane. Before anything starts,
-the sidebar checks where the session still runs:
+(or `:resume`) is the way to reach sessions that run in other terminals or
+that ended; `u` is for a row whose agent has ended in its pane. A pane
+resumed from the sidebar is named after the session's title (cut to 64
+characters), unless an earlier launch of the session was
+[renamed](workspace.md#renaming-an-agent): that name wins. Before anything
+starts, the sidebar checks where the session still runs:
 
-- In this workspace: it is not resumed again. The sidebar says so and offers
-  to show that pane instead (Yes brings it up, No leaves everything as it is).
+- In this workspace: it is not resumed again. From the list, Enter shows
+  that pane. Otherwise the sidebar says so and offers to show that pane
+  (Yes brings it up, No leaves everything as it is).
 - Elsewhere (another terminal or session): a dialog names the process and
   asks whether to resume it here anyway; No starts nothing. After Yes, the
   warning is shown again next to the result.
@@ -83,9 +96,9 @@ notification.
 
 | | |
 | --- | --- |
-| Folder | The session's recorded folder. A folder that no longer exists is refused. |
+| Folder | DIR when given, else the session's recorded folder (from the store, else the transcript's working directory). A folder that no longer exists is refused, and so is a session with none; give DIR. Claude Code looks a session up in the project folder of its working directory, so resuming one elsewhere may not find it. |
 | Arguments | Claude Code `--resume ID`, Codex `resume ID`, Pi `--session ID`, appended to the profile's command for this launch only. |
-| Profile | `--profile NAME` when given (it must run the same harness). Otherwise the profile recorded when the workspace started the session. Otherwise the one profile of that harness whose config dir holds the session's transcript. |
+| Profile | `--profile NAME` when given (it must run the same harness). Otherwise the profile recorded when the workspace started the session. Otherwise the one profile of that harness whose config dir holds the session's transcript; when several do (profiles sharing a config dir), the one the newest resume launch of that session used. |
 
 The transcript is how `resume` tells your config dirs apart, because the
 session record does not store one. It looks for:
@@ -101,7 +114,8 @@ session record does not store one. It looks for:
   `PI_CODING_AGENT_DIR`, else `~/.pi/agent`.
 
 When no profile's config dir holds it, or several do (two profiles on the
-same config dir), `resume` refuses and names `--profile`:
+same config dir) and no resume launch of the session picks one, `resume`
+refuses and names `--profile`:
 
 ```console
 tongs-agents resume 3f2a --profile claude-alt
@@ -115,16 +129,40 @@ Pi's flag comes from Pi's own documentation (`docs/cli.md` of Pi 1.5.0:
 `--session <path|id>` "opens a session by file path or full/partial ID, and
 resumes it in its working directory"), and Pi prints the same command as its
 own resume hint when it exits. A Pi session stored in a custom `sessionDir`
-is not found in the config dir; pass `--profile`.
+(or `PI_CODING_AGENT_SESSION_DIR`) is not in the config dir, so it is listed
+only while its agent runs (from the store); pass `--profile` to resume it.
 
 ## Which sessions are listed
 
-`resume` only reads the [session store](sessions.md); it never changes it.
-The store holds the sessions whose agent process still runs: maintenance
-(run by the sidebar and the monitor every few seconds) removes a record once
-its process is gone. A session that no hook reported (shown as `discovered`)
-has no harness session id. Neither can be resumed from the list; for those,
-use the harness's own picker in a new pane:
+`resume` only reads; it never changes the [session store](sessions.md) or a
+harness's history. It lists:
+
+- the sessions of the store, whose agent process still runs (maintenance,
+  run by the sidebar and the monitor every few seconds, removes a record
+  once its process is gone);
+- the past sessions in the history of each profile's config dir (sandboxed
+  profiles excluded), newest first by the time their transcript last
+  changed.
+
+| Harness | History read | Title |
+| --- | --- | --- |
+| Claude Code | `projects/<project>/<id>.jsonl`; the folder is the first `cwd` of its records, since the project folder name is lossy | Its name (`custom-title`, or `agent-name` from `--name`), else its latest `ai-title`, else `summary`, else the last prompt, else the first prompt |
+| Codex | `sessions/YYYY/MM/DD/rollout-*-<id>.jsonl`, first line `session_meta` (id, `cwd`); subagent and review threads are not listed | The thread name in `session_index.jsonl`, else the first prompt that is not injected context |
+| Pi | `sessions/<folder>/<time>_<id>.jsonl`, header `session` (id, `cwd`) | Its `/name` (`session_info`), else the first prompt |
+
+Reading is bounded so a long history stays fast: at most 20000 directory
+entries per config dir, the newest 400 transcripts read and 200 sessions
+kept per config dir, and per transcript only its first and last 64 KiB
+(Codex: its first line, up to 256 KiB, then 64 KiB). Symlinks inside a
+history folder are skipped, unreadable or malformed files and lines are
+skipped, and no message text is shown except the title, cut to 64
+characters with control characters removed. A full session id beyond those
+bounds is still found by `resume ID`.
+
+A session that no hook reported (shown as `discovered`) has no harness
+session id, and a store record whose harness wrote no history yet is listed
+without a title. For a session that is not listed, use the harness's own
+picker in a new pane:
 
 ```console
 tongs-agents run claude-main ~/src/app -- --resume
@@ -136,6 +174,7 @@ tongs-agents run codex-review ~/src/api -- resume --last
 | Option | Meaning |
 | --- | --- |
 | `ID` | The session id, or a unique prefix of it. Without it, the sessions are listed (at most 50, newest first). |
+| `DIR` | The folder to resume it in, instead of the one it ran in. |
 | `--profile NAME` | The profile to resume with. |
 | `--session NAME` | The workspace session when run outside one, as for `run`. |
 | `--multiplexer {zellij,tmux}` | The multiplexer when run outside one, as for `run`. |

@@ -1,18 +1,22 @@
-"""``tongs-agents resume [ID]``: move an existing agent session into the workspace.
+"""``tongs-agents resume [ID [DIR]]``: resume an agent session in the workspace.
 
-Without ID it lists the recent sessions the session store holds (it only
-reads the store): harness, folder, session id, the profile or config dir
-that holds the session, the last status and its age. With an ID or a unique
-prefix of one it starts that session in the workspace through the ``run``
-path (``commands.run``), with:
+Without ID it lists the recent sessions (it only reads): those the session
+store holds (their agent still runs) and the past ones the harnesses' own
+history stores hold under each profile's config dir (``history``), newest
+first, with harness, session id, the profile or config dir that holds it,
+the last status, its age, folder and title. With an ID or a unique prefix of
+one it starts that session in the workspace through the ``run`` path
+(``commands.run``), with:
 
 - the profile: ``--profile NAME``; else the profile recorded by the launch
   that started the session; else the one profile of that harness whose
   config dir holds the session's transcript (Claude Code
   ``projects/*/ID.jsonl``, Codex ``sessions/YYYY/MM/DD/rollout-*-ID.jsonl``,
-  Pi ``sessions/*/*_ID.jsonl``). None or several is refused, naming
+  Pi ``sessions/*/*_ID.jsonl``); of several, the one the newest resume
+  launch of the session used. None or several is refused, naming
   ``--profile``. A sandboxed profile is only used when named or recorded;
-- the recorded folder;
+- DIR, else the recorded folder; one that no longer exists is refused;
+- the label of the latest launch that ran the session, else its title;
 - the harness's resume arguments (``RESUME_ARGS``): Claude Code
   ``--resume ID``, Codex ``resume ID``, Pi ``--session ID`` (Pi 1.5.0
   ``docs/cli.md``: "Opens a session by file path or full/partial ID, and
@@ -30,11 +34,12 @@ usual case: maintenance removes a record once its process is gone, so a
 session is resumed while it still runs, and the old one is quit afterwards.
 
 The sidebar's command line (``widgets.command_line``) and its palette
-entries use ``recent_sessions``, ``find_session`` and ``plan``.
+entries use ``all_sessions``, ``lookup`` and ``plan``.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import re
 import sys
@@ -43,7 +48,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from tongs_agents import discovery, launches, workspace_spawn
+from tongs_agents import discovery, history, launches, workspace_spawn
 from tongs_agents.app_config import MULTIPLEXERS, AppConfigError, load_app_config
 from tongs_agents.commands import run as run_command
 from tongs_agents.commands import workspace
@@ -69,15 +74,17 @@ RESUME_ARGS = {
     "codex": ("resume",),
     "pi": ("--session",),
 }
-SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
+SESSION_ID_RE = history.SESSION_ID_RE
 SHORT_ID = 8
 MAX_SCAN_ENTRIES = 20000
 DAY_SECONDS = 24 * 3600
 PENDING_LAUNCH_SECONDS = 30
 LIST_LIMIT = 50
+PICKER_LIMIT = 300
+NO_STATUS = "-"
 EPILOG = (
-    "Without ID it lists the sessions it can resume. ID may be a unique prefix, "
-    "for example: tongs-agents resume 3f2a"
+    "Without ID it lists the sessions it can resume, running and past. ID may be a "
+    "unique prefix, for example: tongs-agents resume 3f2a"
 )
 
 
@@ -86,6 +93,10 @@ def add_arguments(parser):
     parser.add_argument(
         "session_id", nargs="?", default=None, metavar="ID",
         help="The session id, or a unique prefix of it, to resume",
+    )
+    parser.add_argument(
+        "folder", nargs="?", default=None, metavar="DIR",
+        help="The folder to resume it in (default: the folder it ran in)",
     )
     parser.add_argument(
         "--profile", default=None, metavar="NAME",
@@ -110,7 +121,11 @@ class ResumeRefused(Exception):
 
 @dataclass(frozen=True)
 class Resumable:
-    """One harness session the store holds, from its most recent record."""
+    """One harness session: from its most recent store record, its history, or both.
+
+    ``homes`` are the config dirs whose history holds it (empty for a
+    session only the store knows), ``title`` its history title.
+    """
 
     harness: str
     session_id: str
@@ -120,10 +135,17 @@ class Resumable:
     age_seconds: int
     profile_id: str = ""
     records: tuple[dict, ...] = field(default=(), compare=False, repr=False)
+    title: str = ""
+    homes: tuple[Path, ...] = ()
 
     @property
     def short_id(self) -> str:
         return self.session_id[:SHORT_ID]
+
+    @property
+    def running(self) -> bool:
+        """True when the store still holds a record of it that has not ended."""
+        return any(record.get("status") != "ended" for record in self.records)
 
     @property
     def label(self) -> str:
@@ -203,6 +225,82 @@ def recent_sessions(
     return sessions
 
 
+def history_homes(profiles: Mapping[str, Profile]) -> list[tuple[str, Path]]:
+    """The (harness, config dir) pairs whose history is listed, in profile order.
+
+    The config dirs of the profiles that can resume a session unnamed (not
+    sandboxed), each once.
+    """
+    pairs: list[tuple[str, Path]] = []
+    for harness in RESUME_ARGS:
+        for profile in _candidates(profiles, harness):
+            home = profile_home(profile)
+            if home is not None and (harness, home) not in pairs:
+                pairs.append((harness, home))
+    return pairs
+
+
+def past_sessions(profiles: Mapping[str, Profile]) -> list[history.PastSession]:
+    """Every session the profiles' history stores hold, within ``history``'s caps."""
+    found = []
+    for harness, home in history_homes(profiles):
+        found.extend(history.scan(harness, home))
+    return found
+
+
+def merge(stored: Iterable[Resumable], past: Iterable[history.PastSession], *,
+          now: int | None = None) -> list[Resumable]:
+    """``stored`` sessions with their history added, then the past-only ones; newest first.
+
+    A stored session keeps its record's folder (else takes the history's)
+    and its age is that of the latest activity of either.
+    """
+    now = int(time.time()) if now is None else now
+    sessions = {(item.harness, item.session_id): item for item in stored}
+    for entry in past:
+        key = (entry.harness, entry.session_id)
+        known = sessions.get(key)
+        if known is None:
+            sessions[key] = Resumable(
+                harness=entry.harness, session_id=entry.session_id, folder=entry.folder,
+                status="", ts=entry.mtime, age_seconds=max(0, now - entry.mtime),
+                title=entry.title, homes=(entry.home,),
+            )
+            continue
+        if entry.home in known.homes:
+            continue
+        ts = max(known.ts, entry.mtime)
+        sessions[key] = dataclasses.replace(
+            known, folder=known.folder or entry.folder, title=known.title or entry.title,
+            homes=(*known.homes, entry.home), ts=ts,
+            age_seconds=known.age_seconds if ts == known.ts else max(0, now - ts),
+        )
+    return sorted(sessions.values(),
+                  key=lambda item: (-item.ts, item.harness, item.session_id))
+
+
+def all_sessions(profiles: Mapping[str, Profile], records: Iterable[dict] | None = None,
+                 *, now: int | None = None) -> list[Resumable]:
+    """The store's sessions and the profiles' past sessions, newest first; only reads."""
+    now = int(time.time()) if now is None else now
+    return merge(recent_sessions(records, now=now), past_sessions(profiles), now=now)
+
+
+def lookup(profiles: Mapping[str, Profile], text: str,
+           sessions: Iterable[Resumable] | None = None) -> Resumable:
+    """The session ``text`` names among ``all_sessions``; a full id past the
+    listing caps is looked up in each history store too."""
+    sessions = all_sessions(profiles) if sessions is None else list(sessions)
+    if text and not any(item.session_id.startswith(text) for item in sessions):
+        located = [
+            entry for harness, home in history_homes(profiles)
+            if (entry := history.locate(harness, home, text)) is not None
+        ]
+        if located:
+            sessions = merge(sessions, located)
+    return find_session(sessions, text)
+
+
 def find_session(sessions: Iterable[Resumable], text: str) -> Resumable:
     """The session ``text`` names exactly, else the one whose id starts with it."""
     sessions = list(sessions)
@@ -214,8 +312,8 @@ def find_session(sessions: Iterable[Resumable], text: str) -> Resumable:
         return found[0]
     if not found:
         raise ResumeRefused(
-            f"no session {text!r:.80} in the session store; 'tongs-agents resume' lists "
-            "the ones it holds (sessions whose agent still runs)"
+            f"no session {text!r:.80} in the session store or the history of a profile's "
+            "config dir; 'tongs-agents resume' lists the ones it can resume"
         )
     names = ", ".join(f"{item.harness} {item.session_id}" for item in found[:5])
     more = f" and {len(found) - 5} more" if len(found) > 5 else ""
@@ -325,7 +423,13 @@ def _claude_project(folder: str) -> str:
 
 def holds_session(harness: str, home: Path, session: Resumable) -> bool:
     """True when ``home`` holds the transcript of ``session``; reads at most
-    ``MAX_SCAN_ENTRIES`` directory entries and never raises."""
+    ``MAX_SCAN_ENTRIES`` directory entries and never raises.
+
+    A session read from history knows the config dirs that hold it, so
+    nothing is read for it.
+    """
+    if session.homes:
+        return home in session.homes
     session_id = session.session_id
     budget = [MAX_SCAN_ENTRIES]
     if harness == "claude":
@@ -383,11 +487,33 @@ def _candidates(profiles: Mapping[str, Profile], harness: str) -> list[Profile]:
             if profiles[name].harness == harness and profiles[name].sandbox is None]
 
 
+def resume_launch_index() -> Callable[[Resumable], list[launches.LaunchRecord]]:
+    """``resume_launches`` over one read of the launch records, for a listing."""
+    records = list(reversed(launches.list_records()))
+
+    def resumed_by(session: Resumable) -> list[launches.LaunchRecord]:
+        tail = resume_args(session.harness, session.session_id)
+        return [record for record in records if record.harness == session.harness
+                and tuple(record.args[-len(tail):]) == tail]
+
+    return resumed_by
+
+
+def resume_launches(session: Resumable) -> list[launches.LaunchRecord]:
+    """The launch records that resumed ``session``, newest first."""
+    return resume_launch_index()(session)
+
+
 def match_profile(
     session: Resumable, profiles: Mapping[str, Profile], name: str | None = None,
     *, holds: Callable[[str, Path, Resumable], bool] = holds_session,
+    resumed_by: Callable[[Resumable], list[launches.LaunchRecord]] = resume_launches,
 ) -> Profile:
-    """The profile to resume ``session`` with; ResumeRefused when none or several fit."""
+    """The profile to resume ``session`` with; ResumeRefused when none or several fit.
+
+    Of several profiles whose config dir holds it, the one the newest resume
+    launch of the session used (``resumed_by``) is taken.
+    """
     harness = session.harness
     if name is not None:
         profile = profiles.get(name)
@@ -421,18 +547,26 @@ def match_profile(
             f"no {session.label} profile's config dir holds session {session.short_id} "
             f"(profiles: {names}); {hint}"
         )
+    by_name = {profile.name: profile for profile in matched}
+    for record in resumed_by(session):
+        if record.profile in by_name:
+            return by_name[record.profile]
     raise ResumeRefused(
         f"several {session.label} profiles have a config dir that holds session "
         f"{session.short_id} ({names}); {hint}"
     )
 
 
-def origin(session: Resumable, profiles: Mapping[str, Profile]) -> str:
+def origin(session: Resumable, profiles: Mapping[str, Profile],
+           resumed_by: Callable[[Resumable], list[launches.LaunchRecord]] = resume_launches,
+           ) -> str:
     """The profile that would resume ``session``, else the config dir holding it."""
     try:
-        return match_profile(session, profiles).name
+        return match_profile(session, profiles, resumed_by=resumed_by).name
     except ResumeRefused:
         pass
+    if session.homes:
+        return short_path(str(session.homes[0]))
     homes = {profile_home(profile) for profile in profiles.values()
              if profile.harness == session.harness}
     homes.add(Path(os.path.abspath(default_home(session.harness))))
@@ -442,33 +576,63 @@ def origin(session: Resumable, profiles: Mapping[str, Profile]) -> str:
     return "?"
 
 
+def resolve_dir(value: str) -> str:
+    """DIR as an absolute path, ``~`` expanded, relative to the current directory."""
+    return os.path.abspath(os.path.expanduser(value))
+
+
 def plan(session: Resumable, profiles: Mapping[str, Profile],
-         name: str | None = None) -> Plan:
-    """The profile and checked launch options that resume ``session``."""
-    if not session.folder:
-        raise ResumeRefused(f"session {session.short_id} has no recorded folder")
+         name: str | None = None, folder: str | None = None) -> Plan:
+    """The profile and checked launch options that resume ``session``.
+
+    ``folder`` (DIR, absolute) replaces the recorded one.
+    """
+    hint = f"give the folder to resume it in: tongs-agents resume {session.short_id} DIR"
+    folder = folder or session.folder
+    if not folder:
+        raise ResumeRefused(f"session {session.short_id} has no recorded folder; {hint}")
+    if not os.path.isdir(folder):
+        raise ResumeRefused(
+            f"folder {folder} of session {session.short_id} does not exist (moved or "
+            f"deleted); {hint}"
+        )
     profile = match_profile(session, profiles, name)
     try:
         folder, extra = workspace_spawn.check_launch(
-            profile, session.folder, resume_args(session.harness, session.session_id),
+            profile, folder, resume_args(session.harness, session.session_id),
         )
     except LaunchError as error:
         raise ResumeRefused(str(error)) from None
     return Plan(session, profile, {"folder": folder, "args": extra},
-                label=previous_label(session))
+                label=previous_label(session) or title_label(session.title))
+
+
+def title_label(title: str) -> str | None:
+    """``title`` as a launch label (``launches.check_label``), or None when it cannot be one."""
+    text = history.clean_title(title).lstrip("-").strip()
+    if len(text) > launches.MAX_LABEL_LENGTH:
+        text = text[:launches.MAX_LABEL_LENGTH - 1].rstrip() + history.ELLIPSIS
+    try:
+        return launches.check_label(text)
+    except LaunchError:
+        return None
 
 
 def previous_label(session: Resumable) -> str | None:
     """The sidebar label of the latest launch that ran ``session``, if any.
 
     A resume from the sidebar gives it to the new launch, so a renamed agent
-    keeps its name. Records are read newest first; a launch record that was
+    keeps its name. The launches its store records name are read newest
+    first, then the launches that resumed it; a launch record that was
     pruned or never labelled gives nothing.
     """
     for record in session.records:
         launch = validated_launch(record.get("launch")) or {}
         launched = launches.get(launch.get("launch_id", ""))
         if launched is not None and launched.label:
+            return launched.label
+    for launched in resume_launches(session):
+        if launched.label:
             return launched.label
     return None
 
@@ -645,15 +809,30 @@ def short_path(path: str) -> str:
     return path
 
 
+def origins(sessions: Iterable[Resumable],
+            profiles: Mapping[str, Profile]) -> dict[tuple[str, str], str]:
+    """(harness, session id) to the ``PROFILE/CONFIG`` text of each session."""
+    resumed_by = resume_launch_index()
+    return {(session.harness, session.session_id): origin(session, profiles, resumed_by)
+            for session in sessions}
+
+
+def status_text(session: Resumable) -> str:
+    return session.status or NO_STATUS
+
+
 def table(sessions: Iterable[Resumable], profiles: Mapping[str, Profile]) -> str:
     """The listing ``tongs-agents resume`` prints."""
-    header = ("HARNESS", "SESSION", "PROFILE/CONFIG", "STATUS", "AGE", "FOLDER")
+    sessions = list(sessions)
+    named = origins(sessions, profiles)
+    header = ("HARNESS", "SESSION", "PROFILE/CONFIG", "STATUS", "AGE", "FOLDER", "TITLE")
     rows = [header]
     for session in sessions:
         rows.append((
-            session.harness, session.session_id, origin(session, profiles),
-            session.status or "?", format_age(session.age_seconds),
-            short_path(session.folder) or "?",
+            session.harness, session.session_id,
+            named[(session.harness, session.session_id)],
+            status_text(session), format_age(session.age_seconds),
+            short_path(session.folder) or "?", session.title,
         ))
     widths = [max(len(row[index]) for row in rows) for index in range(len(header) - 1)]
     lines = []
@@ -671,10 +850,10 @@ def _error(message: str, code: int = EXIT_ERROR) -> int:
 
 
 def _list(profiles: Mapping[str, Profile]) -> int:
-    sessions = recent_sessions()
+    sessions = all_sessions(profiles)
     if not sessions:
-        print("No sessions to resume: the session store only holds sessions whose "
-              "agent still runs.")
+        print("No sessions to resume: neither the session store nor the history in "
+              "a profile's config dir holds one.")
         return 0
     shown = sessions[:LIST_LIMIT]
     print(table(shown, profiles))
@@ -703,8 +882,13 @@ def run(args) -> int:
     except AppConfigError as error:
         return _error(str(error))
     try:
-        target = find_session(recent_sessions(), args.session_id)
-        resumed = plan(target, profiles, args.profile)
+        folder = resolve_dir(args.folder) if args.folder is not None else None
+    except OSError:
+        return _error(f"cannot resolve {args.folder!r:.80}: the current directory is "
+                      "unreadable; give an absolute path", EXIT_USAGE)
+    try:
+        target = lookup(profiles, args.session_id)
+        resumed = plan(target, profiles, args.profile, folder)
     except ResumeRefused as refused:
         return _error(str(refused), EXIT_USAGE)
     here, multiplexer = _workspace_here(args, settings)

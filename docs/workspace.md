@@ -333,8 +333,11 @@ a moment later.
 Resuming a renamed agent from the sidebar (`u` on its row, `Resume session…`
 in the palette or `:resume`) gives the new launch the same name, and names
 its pane with it, as long as the earlier launch record is still kept (records
-of ended agents are pruned after seven days). `tongs-agents resume` from a
-shell starts the session under its profile name; rename it in the sidebar.
+of ended agents are pruned after seven days). Without such a name, a resume
+from the sidebar names the agent after the session's title from the
+harness's history (cut to 64 characters); see
+[resuming sessions](resume.md). `tongs-agents resume` from a shell starts
+the session under its profile name; rename it in the sidebar.
 
 ## tmux
 

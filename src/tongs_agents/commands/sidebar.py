@@ -14,9 +14,10 @@ the same spawn path as ``tongs-agents run``.
 
 ``:`` (or the palette's Command line) opens the command line
 (``widgets.command_line``): ``run PROFILE [DIR] [-- ARGS]`` and
-``resume [ID] [--profile NAME]`` with the CLI's syntax and checks, in this
-session, with history and Tab completion; the result or the error shows
-under the prompt and Escape closes it.
+``resume [ID [DIR]] [--profile NAME]`` with the CLI's syntax and checks, in
+this session, with history and Tab completion; the result or the error shows
+under the prompt and Escape closes it. ``resume`` without ID opens the
+Resume session list.
 
 When its own pane changes size (the sidebar or the terminal was resized), it
 asks the multiplexer, debounced and in a worker thread, to move the panes it
@@ -26,12 +27,14 @@ the home pane). Other floating panes are never moved, and a failure is
 ignored.
 
 ``u`` (or the palette's Resume in workspace) resumes the selected row's
-harness session in this session; the palette's Resume session… lists the
-recent sessions of the store to pick one (``commands.resume``). A session
-whose process already runs in this session is not resumed again: the
-sidebar offers to show its pane instead. One whose process runs elsewhere
-is resumed only after a confirmation; that process is never stopped. While
-a session is being resumed, another request for it is ignored.
+harness session in this session; the palette's Resume session… (or
+``:resume``) lists the sessions of the store and the past sessions of the
+profiles' history (``commands.resume.all_sessions``) to pick one, filtered
+as you type. A session whose process already runs in this session is not
+resumed again: from the list its pane is shown, otherwise the sidebar
+offers to show it. One whose process runs elsewhere is resumed only after a
+confirmation; that process is never stopped. While a session is being
+resumed, another request for it is ignored.
 
 ``R`` renames the selected agent (``widgets.rename_prompt``): a display
 name kept in its launch record and given to its pane, best effort.
@@ -85,7 +88,7 @@ from tongs_agents.palette import (
     AppShell,
     PaletteCommand,
 )
-from tongs_agents.profiles import load_profiles
+from tongs_agents.profiles import ProfileError, load_profiles
 from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
@@ -217,7 +220,10 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         )
         self.notify_level = ui.notify_level
         self.spawn_failures: list[str] = []
-        self.command_context = CommandContext(multiplexer, session, load_profiles)
+        self.command_context = CommandContext(
+            multiplexer, session, load_profiles,
+            pick_resume=lambda: self.call_from_thread(self.action_resume_session),
+        )
         self.init_approvals(self.feed, approval_interval)
         self.align_delay = align_delay
         self._align_timer = None
@@ -378,47 +384,56 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
 
     @work(thread=True, exclusive=True, group="resume-list")
     def action_resume_session(self) -> None:
-        sessions = resume_command.recent_sessions()
-        self.call_from_thread(self._pick_resume, sessions)
+        try:
+            profiles = self.command_context.load_profiles()
+        except ProfileError as error:
+            self.call_from_thread(self.notify, str(error), title="Profiles",
+                                  severity="error", timeout=10)
+            profiles = {}
+        sessions = resume_command.all_sessions(profiles)[:resume_command.PICKER_LIMIT]
+        named = resume_command.origins(sessions, profiles)
+        self.call_from_thread(self._pick_resume, sessions, named)
 
-    def _pick_resume(self, sessions: list[resume_command.Resumable]) -> None:
+    def _pick_resume(self, sessions: list[resume_command.Resumable],
+                     named: dict[tuple[str, str], str]) -> None:
+        if self.command_line.has_class("visible"):
+            self.command_line.action_close()
         if not sessions:
-            self.notify("No sessions to resume in the session store", title="Resume",
-                        timeout=5)
+            self.notify("No sessions to resume in the session store or the profiles' "
+                        "history", title="Resume", timeout=5)
             return
-        self.push_screen(
-            ResumePickerScreen(sessions[:resume_command.LIST_LIMIT], self.session),
-            self._resume_chosen,
-        )
+        self.push_screen(ResumePickerScreen(sessions, self.session, named),
+                         self._resume_chosen)
 
     def _resume_chosen(self, session_id: str | None) -> None:
         if session_id is not None:
-            self.resume_in_workspace(session_id)
+            self.resume_in_workspace(session_id, show_running=True)
 
     @property
     def resuming(self) -> ResumeGuard:
         """Session ids being resumed, shared with the command line's ``:resume``."""
         return self.command_context.resuming
 
-    def resume_in_workspace(self, session_id: str) -> None:
+    def resume_in_workspace(self, session_id: str, *, show_running: bool = False) -> None:
         """Check, confirm when needed, then resume ``session_id`` in this session.
 
         The id is held in ``resuming`` from before the check until the pane
         is spawned or the attempt ends; a request for an id already held
         (from ``u``, the picker or ``:resume``) is ignored with a notice.
         Each session id has its own exclusive worker groups, one for the
-        check and one for the spawn.
+        check and one for the spawn. With ``show_running`` a session that
+        already runs here has its pane shown without asking.
         """
         if not self.resuming.acquire(session_id):
             self.notify(already_resuming(session_id)[0].upper()
                         + already_resuming(session_id)[1:], title="Resume", timeout=3)
             return
         self.run_worker(
-            lambda: self._check_resume(session_id), thread=True,
+            lambda: self._check_resume(session_id, show_running), thread=True,
             group=f"resume-check-{session_id}", exclusive=True,
         )
 
-    def _check_resume(self, session_id: str) -> None:
+    def _check_resume(self, session_id: str, show_running: bool = False) -> None:
         try:
             checked = check_resume(self.command_context, session_id)
         except CommandError as error:
@@ -428,12 +443,17 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
             self.call_from_thread(self._resume_failed, session_id,
                                   f"{type(error).__name__}: {error}")
             return
-        self.call_from_thread(self._resume_checked, session_id, checked)
+        self.call_from_thread(self._resume_checked, session_id, checked, show_running)
 
-    def _resume_checked(self, session_id: str, checked: ResumeCheck) -> None:
+    def _resume_checked(self, session_id: str, checked: ResumeCheck,
+                        show_running: bool = False) -> None:
         if checked.refusal is not None:
             self.resuming.release(session_id)
-            self._offer_focus(session_id, checked)
+            row = self._live_row(session_id, checked.live) if show_running else None
+            if row is not None:
+                self._do_focus(row)
+            else:
+                self._offer_focus(session_id, checked)
             return
         if checked.warning is not None:
             self.push_screen(
@@ -479,11 +499,15 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
                               checked.warning, notices)
 
     def _live_row(self, session_id: str, live) -> FleetSession | None:
-        """The row of the live process: its pid, else a row that has not ended."""
+        """The row of the live process: its pid, else a row that has not ended.
+
+        A resume launch that no hook reported yet has no row with the
+        session id; its launch row is found by the pid.
+        """
         rows = [session for session in self.agents_panel.sessions
                 if session.session_id == session_id]
         if live is not None and live.pid is not None:
-            for row in rows:
+            for row in rows or self.agents_panel.sessions:
                 if str(row.pid) == str(live.pid):
                     return row
         return next((row for row in rows if row.status != SessionStatus.ENDED), None)

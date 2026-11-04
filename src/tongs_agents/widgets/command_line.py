@@ -10,11 +10,13 @@ splits it. Anything else, such as ``ls`` or ``!make``, is refused.
 
 The registry holds ``run`` (``commands.run``: ``run PROFILE [DIR] [-- ARGS]``
 in the sidebar's own session) and ``resume`` (``commands.resume``: ``resume``
-lists the sessions it can resume, ``resume ID [--profile NAME]`` starts one in
-the sidebar's session). A verb is a ``Verb``: its name, its
-``add_arguments``, the completion kind of each positional and ``prepare``,
-which checks the parsed arguments on the UI thread and returns a ``Prepared``
-whose ``execute`` runs in a worker thread. ``register_verb`` adds one.
+opens the sidebar's list of sessions to pick one when the host gives
+``CommandContext.pick_resume``, else lists them under the prompt;
+``resume ID [DIR] [--profile NAME]`` starts one in the sidebar's session).
+A verb is a ``Verb``: its name, its ``add_arguments``, the completion kind
+of each positional and ``prepare``, which checks the parsed arguments on the
+UI thread and returns a ``Prepared`` whose ``execute`` runs in a worker
+thread. ``register_verb`` adds one.
 
 Up and Down walk the history of submitted lines, kept in memory for the life
 of the sidebar. Tab completes the verb, a profile name or a folder (relative
@@ -109,6 +111,7 @@ class CommandContext:
     session: str
     load_profiles: Callable[[], Mapping[str, Profile]]
     resuming: ResumeGuard = field(default_factory=ResumeGuard, compare=False)
+    pick_resume: Callable[[], None] | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -420,20 +423,24 @@ class ResumeCheck:
         return resume_command.here_refusal(self.plan.target, self.live)
 
 
-def check_resume(context: CommandContext, session_id: str,
-                 profile: str | None = None) -> ResumeCheck:
-    """The plan for ``session_id`` in the context's session and where it still runs.
-
-    Raises CommandError. It reads the store and the harness config dirs, so
-    call it off the UI thread. Nothing starts.
-    """
+def _profiles(context: CommandContext) -> Mapping[str, Profile]:
     try:
-        profiles = context.load_profiles()
+        return context.load_profiles()
     except ProfileError as error:
         raise CommandError(str(error)) from None
+
+
+def check_resume(context: CommandContext, session_id: str,
+                 profile: str | None = None, folder: str | None = None) -> ResumeCheck:
+    """The plan for ``session_id`` in the context's session and where it still runs.
+
+    Raises CommandError. It reads the store, the harness history and config
+    dirs, so call it off the UI thread. Nothing starts.
+    """
+    profiles = _profiles(context)
     try:
-        target = resume_command.find_session(resume_command.recent_sessions(), session_id)
-        plan = resume_command.plan(target, profiles, profile)
+        target = resume_command.lookup(profiles, session_id)
+        plan = resume_command.plan(target, profiles, profile, folder)
     except resume_command.ResumeRefused as refused:
         raise CommandError(str(refused)) from None
     live = resume_command.live_process(target, context.session, context.multiplexer.name)
@@ -457,11 +464,10 @@ def start_resume(context: CommandContext, plan: resume_command.Plan) -> list[str
     return notices
 
 
-def resolve_session_id(session_id: str) -> str:
-    """The full id of the stored session ``session_id`` names; CommandError otherwise."""
+def resolve_session_id(context: CommandContext, session_id: str) -> str:
+    """The full id of the session ``session_id`` names; CommandError otherwise."""
     try:
-        return resume_command.find_session(
-            resume_command.recent_sessions(), session_id).session_id
+        return resume_command.lookup(_profiles(context), session_id).session_id
     except resume_command.ResumeRefused as refused:
         raise CommandError(str(refused)) from None
 
@@ -472,7 +478,7 @@ def already_resuming(session_id: str) -> str:
 
 
 def resume_session(context: CommandContext, session_id: str,
-                   profile: str | None = None) -> str:
+                   profile: str | None = None, folder: str | None = None) -> str:
     """Start ``session_id`` in the context's session; the command line's result text.
 
     The full id is held in ``context.resuming`` from before the check until
@@ -480,11 +486,11 @@ def resume_session(context: CommandContext, session_id: str,
     being resumed, is refused (CommandError); one that runs elsewhere starts
     with a warning, as the CLI does.
     """
-    full_id = resolve_session_id(session_id)
+    full_id = resolve_session_id(context, session_id)
     if not context.resuming.acquire(full_id):
         raise CommandError(already_resuming(full_id))
     try:
-        checked = check_resume(context, full_id, profile)
+        checked = check_resume(context, full_id, profile, folder)
         if checked.refusal is not None:
             raise CommandError(checked.refusal)
         notices = start_resume(context, checked.plan)
@@ -502,10 +508,15 @@ def recent_listing(context: CommandContext) -> str:
         profiles = context.load_profiles()
     except ProfileError:
         profiles = {}
-    sessions = resume_command.recent_sessions()
+    sessions = resume_command.all_sessions(profiles)
     if not sessions:
-        return "no sessions to resume in the session store"
+        return "no sessions to resume in the session store or the profiles' history"
     return resume_command.table(sessions[:resume_command.LIST_LIMIT], profiles)
+
+
+def _open_picker(context: CommandContext) -> str:
+    context.pick_resume()
+    return "pick a session to resume"
 
 
 def _prepare_resume(context: CommandContext, args: argparse.Namespace) -> Prepared:
@@ -516,11 +527,19 @@ def _prepare_resume(context: CommandContext, args: argparse.Namespace) -> Prepar
     if args.session_id is None:
         if args.profile is not None:
             raise CommandError("resume: --profile needs an ID")
+        if context.pick_resume is not None:
+            return Prepared("listing sessions", lambda: _open_picker(context))
         return Prepared("listing sessions", lambda: recent_listing(context))
+    folder = None
+    if args.folder is not None:
+        folder = run_command.resolve_folder(args.folder, None)
+        if folder is None:
+            raise CommandError(f"cannot resolve {args.folder!r:.80}: the current directory "
+                               "is unreadable; give an absolute path")
     session_id, profile = args.session_id, args.profile
     return Prepared(
         f"resuming {session_id[:resume_command.SHORT_ID]}",
-        lambda: resume_session(context, session_id, profile),
+        lambda: resume_session(context, session_id, profile, folder),
     )
 
 
@@ -529,6 +548,7 @@ RESUME = register_verb(Verb(
     help=resume_command.HELP,
     add_arguments=resume_command.add_arguments,
     prepare=_prepare_resume,
+    completions=("", COMPLETE_FOLDER),
 ))
 
 
@@ -602,7 +622,7 @@ class CommandLine(Widget):
     def compose(self) -> ComposeResult:
         with Horizontal():
             yield Static(":", classes="command-prompt")
-            yield Input(placeholder="run PROFILE [DIR] [-- ARGS] | resume [ID]",
+            yield Input(placeholder="run PROFILE [DIR] [-- ARGS] | resume [ID [DIR]]",
                         id="command-input")
         yield Static("", classes="command-result")
 

@@ -2,6 +2,31 @@
 
 ## 0.10.3 (experimental)
 
+### Added
+
+- Resume any past session, not only those whose agent still runs:
+  `tongs-agents resume` and the sidebar also read the harnesses' own history
+  under each profile's config dir (Claude Code `projects/*/ID.jsonl`, Codex
+  `sessions/YYYY/MM/DD/rollout-*.jsonl`, Pi `sessions/*/*_ID.jsonl`), so a
+  session closed long ago, or started before tongs-agents was installed, can
+  be resumed. Reading is read-only and bounded (newest transcripts first,
+  only the first and last 64 KiB of each, symlinks skipped), and only a
+  short title is shown: the harness's own title or name, else a prompt cut
+  to 64 characters. Codex subagent and review threads are not listed.
+- `:resume` without an ID (and `Resume session…`) opens a list of running
+  (marked `●`) and past sessions across profiles, newest first, with title,
+  folder, profile and age, filtered as you type. Enter resumes the chosen
+  session in its original folder and names the agent after its title (a
+  name given with `R` to an earlier launch wins); on a session that already
+  runs in this workspace, Enter shows its pane instead.
+- `tongs-agents resume ID [DIR]` and `:resume ID [DIR]`: DIR resumes the
+  session in another folder. A folder that no longer exists is refused with
+  a hint to pass DIR. The `tongs-agents resume` listing gains a `TITLE`
+  column; past sessions show `-` as their status.
+- When several profiles share the config dir that holds a session, the one
+  the newest resume launch of that session used is taken; otherwise it is
+  still refused and names `--profile` (#133).
+
 ### Changed
 
 - `q` in the sidebar (also `ctrl+q` and the palette) no longer closes the
