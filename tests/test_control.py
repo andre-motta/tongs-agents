@@ -569,6 +569,91 @@ def test_wait_refuses_bad_arguments(world, until, timeout):
         control.wait(world.record.launch_id, until, timeout)
 
 
+def test_wait_check_runs_between_polls_and_can_end_the_wait(world, monkeypatch):
+    calls = []
+
+    def check():
+        calls.append(len(polls))
+        if len(calls) == 3:
+            raise control.Refused("caller gone")
+
+    polls = []
+    monkeypatch.setattr(control.time, "sleep", polls.append)
+    with pytest.raises(control.Refused, match="caller gone"):
+        control.wait(world.record.launch_id, "done", 60, check=check)
+    assert calls == [1, 2, 3]
+    entry = audit_lines()[-1]
+    assert (entry["action"], entry["outcome"], entry["exit_code"]) == ("wait", "refused", 5)
+
+
+def test_wait_check_does_not_run_when_the_first_poll_settles(world):
+    world.hooks[:] = [hook_record(world.record, "idle")]
+    called = []
+    result = control.wait(world.record.launch_id, "done", 5, check=lambda: called.append(1))
+    assert result.exit_code == control.EXIT_OK and called == []
+
+
+TMUX_SOCKET = "/tmp/tmux-1000/default"
+
+
+def _tmux_hook(record, env):
+    entry = hook_record(record)
+    entry["terminal"] = "tmux"
+    entry["terminal_env"] = env
+    return entry
+
+
+@pytest.mark.parametrize(
+    "env, refuses",
+    [
+        ({"TMUX": f"{TMUX_SOCKET},123,0"}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": "%3"}, False),
+        ({"TMUX_PANE": "%3"}, False),
+        ({}, False),
+        ({"TMUX": "not-a-tmux-value"}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": "7"}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": "%7x"}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": ""}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": 7}, False),
+        ({"TMUX_PANE": "%1234567890123"}, False),
+        ({"TMUX": f"{TMUX_SOCKET},123,0", "TMUX_PANE": "%7"}, True),
+        ({"TMUX_PANE": "%7"}, True),
+        ({"TMUX": "/tmp/tmux-1000/other,123,0", "TMUX_PANE": "%3"}, True),
+        ({"TMUX": "/tmp/tmux-1000/other,123,0"}, True),
+    ],
+)
+def test_a_tmux_hook_record_must_name_the_launch_pane_and_socket(world, env, refuses):
+    record = world.launch("%3", pid=4100, socket_dir=TMUX_SOCKET, multiplexer="tmux")
+    hooks = [_tmux_hook(record, env)]
+    if refuses:
+        with pytest.raises(control.Refused, match="names another pane"):
+            control._check_hook_pane(record, hooks)
+    else:
+        control._check_hook_pane(record, hooks)
+
+
+def test_tmux_variables_do_not_refuse_a_zellij_launch(world):
+    env = {
+        "ZELLIJ_SESSION_NAME": SESSION, "ZELLIJ_PANE_ID": "3",
+        "TMUX": "/tmp/tmux-1000/other,123,0", "TMUX_PANE": "%7",
+    }
+    control._check_hook_pane(world.record, [_tmux_hook(world.record, env)])
+
+
+def test_a_tmux_hook_record_naming_another_pane_refuses_verify(world, monkeypatch):
+    record = world.launch("%3", pid=4100, socket_dir=TMUX_SOCKET, multiplexer="tmux")
+    mux = FakeMux()
+    mux.panes["%3"] = PaneInfo(
+        ref=PaneRef("tmux", SESSION, "%3", TMUX_SOCKET),
+        title="r1", command="python", exited=False, focused=False,
+    )
+    monkeypatch.setattr(control, "get_multiplexer", lambda name, *, socket_dir=None: mux)
+    assert control.verify(record.launch_id).pane_id == "%3"
+    world.hooks.append(_tmux_hook(record, {"TMUX": f"{TMUX_SOCKET},1,0", "TMUX_PANE": "%9"}))
+    with pytest.raises(control.Refused, match="names another pane"):
+        control.verify(record.launch_id)
+
+
 def test_wait_on_a_refused_launch_exits_5(world):
     with pytest.raises(control.Refused):
         control.wait("0" * 32, "done", 5)

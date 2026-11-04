@@ -9,11 +9,14 @@ claimed process, so a leaked or copied variable names nobody. On top of
 
 - the caller's profile, the profile to spawn and the target launch's profile
   are named profiles with ``mcp_control = true``;
-- the target is not the caller's own launch or pane;
+- the target is not the caller's own launch or pane (multiplexer, session,
+  pane and socket of the caller's verified launch record, never the server's
+  environment);
 - the target was spawned by this caller (``spawned_by`` on its launch record),
   unless ``[control].mcp_any_target`` is true;
 - at most ``[control].mcp_rate_per_minute`` sends, and as many spawns, per
-  caller in any 60 s;
+  caller in any 60 s; a call reserves its slot when it starts and gives it
+  back when it is refused or fails, so only a call that succeeded counts;
 - spawns go only into the running session the caller's verified launch
   runs in, through that launch's multiplexer and socket; neither the
   server's environment nor ``[workspace]`` picks another one.
@@ -21,6 +24,10 @@ claimed process, so a leaked or copied variable names nobody. On top of
 No tool takes argv, env or cwd: a spawn names a profile and nothing else.
 Actions run through ``control.py`` with actor ``mcp:<caller launch id>``, and
 every call, including refusals made here, is audited by ``control.audit``.
+A wait ends early when the call is cancelled (the server is shutting down),
+checked every poll, or when the caller's launch fails two verifications in a
+row; the caller is re-verified about every 5 s, so one transient multiplexer
+error does not end the wait.
 """
 
 from __future__ import annotations
@@ -28,8 +35,11 @@ from __future__ import annotations
 import json
 import os
 import stat
+import sys
+import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 
 from tongs_agents import app_config, control, discovery, hook, launches, paths
 from tongs_agents import profiles as profiles_module
@@ -46,6 +56,8 @@ RATE_WINDOW = 60.0
 MAX_RATE_BYTES = 16 * 1024
 CLAIM_TIMEOUT = 5.0
 CLAIM_POLL = 0.1
+VERIFY_INTERVAL = 5.0
+VERIFY_FAILURES = 2
 SEND = "send"
 SPAWN = "spawn"
 
@@ -54,6 +66,12 @@ class RateLimited(control.Refused):
     """The caller used up its sends or spawns for the last minute."""
 
     outcome = "rate-limited"
+
+
+class WaitCancelled(control.ControlError):
+    """The wait was cancelled, normally because the MCP server is shutting down."""
+
+    outcome = "cancelled"
 
 
 def error_payload(error: control.ControlError) -> dict:
@@ -101,40 +119,66 @@ def _write_stamps(directory, path, stamps: list[float]) -> None:
     os.replace(temp, path)
 
 
-def take_rate(caller: str, action: str, limit: int, now: float | None = None) -> None:
-    """Count one ``action`` for ``caller``; raise RateLimited past ``limit`` a minute.
+def _recent(stamps: list[float], now: float) -> list[float]:
+    return [stamp for stamp in stamps if now - RATE_WINDOW < stamp <= now]
 
-    The window is kept in ``runtime_dir()/mcp-rate`` under a lock, so it holds
-    across server restarts and concurrent servers of one caller. A refused
-    call is not counted.
+
+def _release(directory, path, lock, reserved: float) -> None:
+    with control._locked(lock):
+        stamps = _read_stamps(path)
+        if reserved in stamps:
+            stamps.remove(reserved)
+            _write_stamps(directory, path, stamps)
+
+
+@contextmanager
+def rate_slot(caller: str, action: str, limit: int,
+              now: float | None = None) -> Iterator[None]:
+    """Run the body as one ``action`` of ``caller``; raise RateLimited past ``limit``.
+
+    The window is kept in ``runtime_dir()/mcp-rate`` so it holds across
+    server restarts and concurrent servers of one caller. Under a per-caller
+    lock the slot is checked and reserved with a stamp; the lock is released
+    while the body runs, so parallel calls of one caller do not queue behind
+    each other. A body that raises (a refused or failed call) gives its
+    reservation back, so it does not count.
     """
     try:
         directory, path = _rate_path(caller, action)
-        with control._locked(directory / f".{caller}.lock"):
-            now = time.time() if now is None else now
-            stamps = [
-                stamp for stamp in _read_stamps(path)
-                if now - RATE_WINDOW < stamp <= now
-            ]
+        lock = directory / f".{caller}.lock"
+        with control._locked(lock):
+            reserved = time.time() if now is None else now
+            stamps = _recent(_read_stamps(path), reserved)
             if len(stamps) >= limit:
                 raise RateLimited(
                     f"rate limit: at most {limit} {action}s per minute per caller "
                     "([control].mcp_rate_per_minute)"
                 )
-            stamps.append(now)
-            _write_stamps(directory, path, stamps)
+            _write_stamps(directory, path, [*stamps, reserved])
     except OSError as error:
-        raise control.ControlError(f"cannot use the MCP rate limit file: {error}") from None
+        raise control.ControlError(
+            f"cannot use the MCP rate limit file: {error}"
+        ) from None
+    try:
+        yield
+    except BaseException:
+        try:
+            _release(directory, path, lock, reserved)
+        except (OSError, control.ControlError) as error:
+            print(f"tongs-agents: MCP rate limit not released: {error}", file=sys.stderr)
+        raise
 
 
 class McpControl:
     """The policy for one MCP server process; ``env`` is that process's environment."""
 
     def __init__(self, env: Mapping[str, str] | None = None, *, pid: int | None = None,
-                 claim_timeout: float = CLAIM_TIMEOUT):
+                 claim_timeout: float = CLAIM_TIMEOUT,
+                 verify_interval: float = VERIFY_INTERVAL):
         self.env = dict(os.environ if env is None else env)
         self.pid = os.getpid() if pid is None else pid
         self.claim_timeout = claim_timeout
+        self.verify_interval = verify_interval
         self.caller = control.caller_launch_id(self.env)
         self.actor = f"{ACTOR}:{self.caller}" if self.caller else ACTOR
 
@@ -211,6 +255,7 @@ class McpControl:
             record.pane_id is not None
             and (record.multiplexer, record.session, record.pane_id)
             == (caller.multiplexer, caller.session, caller.pane_id)
+            and control._same_dir(record.socket_dir, caller.socket_dir)
         ):
             raise control.Refused(f"launch {launch_id} names the caller's own pane")
         self._opted(loaded, record.profile, "target")
@@ -221,30 +266,33 @@ class McpControl:
             )
         return record
 
-    def _checked(self, launch_id) -> tuple[AppConfig, LaunchRecord]:
+    def _checked(self, launch_id) -> tuple[AppConfig, dict[str, Profile], LaunchRecord]:
         config = self._config()
         loaded = self._profiles()
         caller = self._caller(loaded)
         self._target(config, loaded, caller, launch_id)
-        return config, caller
+        return config, loaded, caller
 
     # Tools
 
     def send(self, launch_id: str, text: str) -> dict:
         """Paste ``text`` into a target pane and press Enter, through control.send."""
         data = text.encode("utf-8", errors="replace") if isinstance(text, str) else None
+        sending = False
         try:
-            config, caller = self._checked(launch_id)
-            take_rate(caller.launch_id, SEND, config.control.mcp_rate_per_minute)
+            config, _, caller = self._checked(launch_id)
+            settings = control.Settings(
+                send_delay_ms=config.control.send_delay_ms,
+                mcp_enabled=config.control.mcp_enabled,
+            )
+            with rate_slot(caller.launch_id, SEND, config.control.mcp_rate_per_minute):
+                sending = True
+                control.send(launch_id, text, actor=self.actor, caller=self.caller,
+                             settings=settings)
         except control.ControlError as error:
-            self._audit(SEND, launch_id, error, data)
+            if not sending:
+                self._audit(SEND, launch_id, error, data)
             raise
-        settings = control.Settings(
-            send_delay_ms=config.control.send_delay_ms,
-            mcp_enabled=config.control.mcp_enabled,
-        )
-        control.send(launch_id, text, actor=self.actor, caller=self.caller,
-                     settings=settings)
         return {"ok": True, "launch_id": launch_id, "bytes": len(data or b"")}
 
     def status(self, launch_id: str) -> dict:
@@ -256,14 +304,41 @@ class McpControl:
         result = control.status(launch_id, actor=self.actor, caller=self.caller)
         return {"ok": True, "status": result.to_json()}
 
-    def wait(self, launch_id: str, until: str, timeout_s: float) -> dict:
+    def wait(self, launch_id: str, until: str, timeout_s: float,
+             stop: threading.Event | None = None) -> dict:
+        """control.wait, ended early once ``stop`` is set (checked every poll)
+        or the caller fails ``VERIFY_FAILURES`` verifications in a row
+        (re-verified about every ``verify_interval`` seconds).
+        """
         try:
-            self._checked(launch_id)
+            _, loaded, _ = self._checked(launch_id)
         except control.ControlError as error:
             self._audit("wait", launch_id, error)
             raise
+        verified = time.monotonic()
+        failures = 0
+
+        def still_waiting() -> None:
+            nonlocal verified, failures
+            if stop is not None and stop.is_set():
+                raise WaitCancelled(
+                    "wait cancelled: the call was cancelled or the MCP server is "
+                    "shutting down"
+                )
+            if time.monotonic() - verified < self.verify_interval:
+                return
+            verified = time.monotonic()
+            try:
+                self._caller(loaded)
+            except control.ControlError:
+                failures += 1
+                if failures >= VERIFY_FAILURES:
+                    raise
+                return
+            failures = 0
+
         result = control.wait(launch_id, until, timeout_s, actor=self.actor,
-                              caller=self.caller)
+                              caller=self.caller, check=still_waiting)
         return {
             "ok": True,
             "reached": result.reached,
@@ -322,17 +397,19 @@ class McpControl:
                 ) from None
             if state != SESSION_RUNNING:
                 raise control.Refused(f"workspace session {session!r} is not running")
-            take_rate(caller.launch_id, SPAWN, config.control.mcp_rate_per_minute)
-            try:
-                record = launches.create_pending(
-                    profile, session, mux.name, spawned_by=caller.launch_id
-                )
-                ref = workspace_spawn.spawn_launch(mux, record, notices=notices)
-            except (MultiplexerError, LaunchError, OSError) as error:
-                if record is not None:
-                    workspace_spawn.discard_launches([record])
-                detail = getattr(error, "detail", None) or str(error)
-                raise control.ControlError(f"spawn of {profile.name} failed: {detail}") from None
+            with rate_slot(caller.launch_id, SPAWN, config.control.mcp_rate_per_minute):
+                try:
+                    record = launches.create_pending(
+                        profile, session, mux.name, spawned_by=caller.launch_id
+                    )
+                    ref = workspace_spawn.spawn_launch(mux, record, notices=notices)
+                except (MultiplexerError, LaunchError, OSError) as error:
+                    if record is not None:
+                        workspace_spawn.discard_launches([record])
+                    detail = getattr(error, "detail", None) or str(error)
+                    raise control.ControlError(
+                        f"spawn of {profile.name} failed: {detail}"
+                    ) from None
         except control.ControlError as error:
             self._audit(SPAWN, None, error)
             raise

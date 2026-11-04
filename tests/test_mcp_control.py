@@ -8,6 +8,7 @@ import inspect
 import json
 import os
 import stat
+import threading
 
 import pytest
 
@@ -323,18 +324,241 @@ def test_sends_are_rate_limited_per_caller(world):
     assert world.tools().status(world.worker.launch_id)["ok"] is True
 
 
+def take_rate(caller, action, limit, now):
+    with mcp_control.rate_slot(caller, action, limit, now):
+        pass
+
+
 def test_the_rate_window_slides_and_persists(monkeypatch):
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     caller = "a" * 32
-    mcp_control.take_rate(caller, "send", 1, now=1000.0)
+    take_rate(caller, "send", 1, now=1000.0)
     with pytest.raises(mcp_control.RateLimited):
-        mcp_control.take_rate(caller, "send", 1, now=1059.0)
-    mcp_control.take_rate(caller, "send", 1, now=1061.0)
-    mcp_control.take_rate("b" * 32, "send", 1, now=1061.0)
-    mcp_control.take_rate(caller, "spawn", 1, now=1061.0)
+        take_rate(caller, "send", 1, now=1059.0)
+    take_rate(caller, "send", 1, now=1061.0)
+    take_rate("b" * 32, "send", 1, now=1061.0)
+    take_rate(caller, "spawn", 1, now=1061.0)
     directory = paths.runtime_dir() / mcp_control.RATE_DIR
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE((directory / f"{caller}.send.json").stat().st_mode) == 0o600
+
+
+def test_a_call_that_fails_in_the_rate_slot_is_not_counted(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    caller = "c" * 32
+    with pytest.raises(control.Refused):
+        with mcp_control.rate_slot(caller, "send", 1, now=1000.0):
+            raise control.Refused("refused inside")
+    take_rate(caller, "send", 1, now=1000.0)
+    with pytest.raises(mcp_control.RateLimited):
+        take_rate(caller, "send", 1, now=1001.0)
+
+
+def test_a_rate_slot_does_not_hold_the_lock_while_the_call_runs(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(control, "LOCK_TIMEOUT", 0.2)
+    caller = "d" * 32
+    with mcp_control.rate_slot(caller, "send", 2, now=1000.0):
+        with pytest.raises(mcp_control.RateLimited):
+            with mcp_control.rate_slot(caller, "send", 1, now=1000.0):
+                pass
+        take_rate(caller, "send", 2, now=1000.0)
+        with pytest.raises(mcp_control.RateLimited):
+            take_rate(caller, "send", 2, now=1000.0)
+
+
+def test_parallel_calls_of_one_caller_run_together(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    monkeypatch.setattr(control, "LOCK_TIMEOUT", 2.0)
+    caller = "e" * 32
+    both_inside = threading.Barrier(2, timeout=2)
+    errors = []
+
+    def call():
+        try:
+            with mcp_control.rate_slot(caller, "send", 2):
+                both_inside.wait()
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    with pytest.raises(mcp_control.RateLimited):
+        take_rate(caller, "send", 2, now=None)
+
+
+def test_a_failed_call_gives_back_only_its_own_reservation(monkeypatch):
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    caller = "f" * 32
+    with mcp_control.rate_slot(caller, "send", 3, now=1000.0):
+        with pytest.raises(control.Refused):
+            with mcp_control.rate_slot(caller, "send", 3, now=1001.0):
+                raise control.Refused("refused inside")
+    _, path = mcp_control._rate_path(caller, "send")
+    assert mcp_control._read_stamps(path) == [1000.0]
+
+
+def test_a_send_refused_by_control_does_not_use_the_rate_limit(world):
+    write_config(rate=1)
+    pane = world.mux.panes.pop("2")
+    assert "is not in session" in refused(
+        lambda: world.tools().send(world.worker.launch_id, "lost")
+    )
+    assert [entry["outcome"] for entry in audit_lines()] == ["refused"]
+
+    world.mux.panes["2"] = pane
+    assert world.tools().send(world.worker.launch_id, "kept")["ok"] is True
+    refused(lambda: world.tools().send(world.worker.launch_id, "more"),
+            outcome="rate-limited")
+    assert [event[2] for event in world.mux.events if event[0] == "paste"] == ["kept"]
+
+
+def test_a_failed_spawn_does_not_use_the_rate_limit(world, monkeypatch):
+    write_config(rate=1)
+    spawn = world.mux.spawn
+
+    def broken(*args, **kwargs):
+        raise MultiplexerError("pane did not start")
+
+    monkeypatch.setattr(world.mux, "spawn", broken)
+    refused(lambda: world.tools().spawn("worker"), outcome="error", exit_code=1)
+    monkeypatch.setattr(world.mux, "spawn", spawn)
+    assert world.tools().spawn("worker")["ok"] is True
+    refused(lambda: world.tools().spawn("worker"), outcome="rate-limited")
+
+
+def test_a_cancelled_wait_ends_and_is_audited(world, monkeypatch):
+    stop = threading.Event()
+    stop.set()
+    monkeypatch.setattr(control.time, "sleep", lambda seconds: None)
+    refused(lambda: world.tools().wait(world.worker.launch_id, "done", 600, stop=stop),
+            outcome="cancelled", exit_code=control.EXIT_ERROR)
+    entry = last_audit()
+    assert (entry["action"], entry["outcome"]) == ("wait", "cancelled")
+
+
+def fake_clock(monkeypatch, on_sleep=None):
+    clock = [1000.0]
+    polls = []
+
+    def sleep(seconds):
+        clock[0] += seconds
+        polls.append(seconds)
+        if on_sleep is not None:
+            on_sleep(len(polls))
+
+    monkeypatch.setattr(mcp_control.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(control.time, "sleep", sleep)
+    return polls
+
+
+def count_caller_checks(monkeypatch):
+    checks = []
+    real = mcp_control.McpControl._caller
+
+    def counted(self, loaded):
+        checks.append(1)
+        return real(self, loaded)
+
+    monkeypatch.setattr(mcp_control.McpControl, "_caller", counted)
+    return checks
+
+
+def test_a_wait_ends_after_two_failed_caller_verifications(world, monkeypatch):
+    def replace_caller(polls):
+        if polls == 2:
+            world.processes[CALLER_PID] = FakeProcess(CALLER_PID, "replaced")
+
+    polls = fake_clock(monkeypatch, replace_caller)
+    detail = refused(lambda: world.tools().wait(world.worker.launch_id, "done", 600))
+    assert "caller:" in detail
+    per_check = int(mcp_control.VERIFY_INTERVAL / control.WAIT_POLL)
+    assert len(polls) == mcp_control.VERIFY_FAILURES * per_check
+    assert (last_audit()["action"], last_audit()["outcome"]) == ("wait", "refused")
+
+
+def test_a_wait_reverifies_the_caller_only_every_interval(world, monkeypatch):
+    polls = fake_clock(monkeypatch)
+    checks = count_caller_checks(monkeypatch)
+    waited = world.tools().wait(world.worker.launch_id, "done", 20)
+    assert waited["timed_out"] is True
+    assert len(polls) == 40
+    assert len(checks) == 1 + 4
+
+
+def test_one_transient_verification_error_does_not_end_a_wait(world, monkeypatch):
+    verify = control.verify
+    calls = []
+
+    def flaky(launch_id):
+        if launch_id == world.caller.launch_id:
+            calls.append(launch_id)
+            if len(calls) == 2:
+                raise control.Refused("cannot list session 'agents': server busy")
+        return verify(launch_id)
+
+    monkeypatch.setattr(control, "verify", flaky)
+
+    def end_worker(polls):
+        if polls == 25:
+            world.mux.panes["2"] = PaneInfo(
+                ref=world.mux.panes["2"].ref, title="agent", command="python",
+                exited=True, focused=False,
+            )
+
+    fake_clock(monkeypatch, end_worker)
+    waited = world.tools().wait(world.worker.launch_id, "ended", 600)
+    assert waited["reached"] is True
+    assert len(calls) == 3
+
+
+def test_a_cancelled_wait_ends_at_the_next_poll_without_reverifying(world, monkeypatch):
+    stop = threading.Event()
+    polls = fake_clock(monkeypatch, lambda polls: polls == 3 and stop.set())
+    checks = count_caller_checks(monkeypatch)
+    refused(lambda: world.tools().wait(world.worker.launch_id, "done", 600, stop=stop),
+            outcome="cancelled", exit_code=control.EXIT_ERROR)
+    assert len(polls) == 3
+    assert len(checks) == 1
+
+
+def test_the_same_pane_id_on_another_socket_is_not_the_callers_pane(world, monkeypatch):
+    other_socket = "/run/user/1000/zellij-other"
+    other = FakeMux()
+    other.panes["1"] = PaneInfo(
+        ref=PaneRef("zellij", SESSION, "1", other_socket),
+        title="agent", command="python", exited=False, focused=False,
+    )
+    monkeypatch.setattr(
+        control, "get_multiplexer",
+        lambda name="zellij", *, socket_dir=None: (
+            other if socket_dir == other_socket else world.mux
+        ),
+    )
+    pending = launches.create_pending(
+        Profile("worker", "other", ("fake",)), SESSION, "zellij",
+        spawned_by=world.caller.launch_id,
+    )
+    twin = launches.claim(
+        pending.launch_id, 5200, START, PaneRef("zellij", SESSION, "1", other_socket),
+    )
+    world.processes[5200] = FakeProcess(5200, START)
+    assert world.tools().status(twin.launch_id)["ok"] is True
+
+
+def test_the_own_pane_check_uses_the_callers_record_not_the_server_env(world):
+    twin = world.launch("1", pid=5100, spawned_by=world.caller.launch_id)
+    env = {
+        **world.env,
+        "ZELLIJ_SESSION_NAME": "elsewhere",
+        "ZELLIJ_SOCKET_DIR": "/run/user/1000/zellij-other",
+        "ZELLIJ_PANE_ID": "9",
+    }
+    assert "caller's own pane" in refused(lambda: world.tools(env).status(twin.launch_id))
 
 
 def test_spawn_starts_the_launcher_in_the_running_session(world):

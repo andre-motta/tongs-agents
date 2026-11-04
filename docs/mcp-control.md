@@ -65,7 +65,9 @@ reply) unless:
    copied into another process names nobody.
 2. The caller's profile, the profile to spawn and the target launch's profile
    are named profiles with `mcp_control = true`.
-3. The target is not the caller itself (its launch or its pane).
+3. The target is not the caller itself: not its launch, and not its pane
+   (the same multiplexer, session, pane id and socket as the caller's
+   verified launch record; the server's own environment plays no part).
 4. The target was spawned by this caller through `agents_spawn` (its launch
    record names the caller in `spawned_by`). With `mcp_any_target = true` any
    opted-in pane qualifies. Panes started by `tongs-agents workspace` or the
@@ -73,8 +75,12 @@ reply) unless:
 5. The caller has not used up `mcp_rate_per_minute` sends (or spawns) in the
    last 60 seconds. The window is kept in
    `$XDG_RUNTIME_DIR/tongs-agents/mcp-rate/` (or the state dir's
-   `run/mcp-rate/`), so restarting the server does not reset it. A refused
-   call does not count.
+   `run/mcp-rate/`), so restarting the server does not reset it. A call
+   reserves its slot under a short per-caller lock and runs without holding
+   it, so parallel calls of one caller do not wait for each other. Only a
+   call that succeeded counts: one refused by these checks or by the
+   target's verification, or one that failed in the multiplexer, gives its
+   slot back.
 6. For `agents_spawn`, the session is running: the multiplexer, session and
    socket of the caller's own launch, whatever `[workspace]` says. A spawn
    never creates a session.
@@ -83,7 +89,18 @@ The target pane then goes through the full verification of
 [driving agent panes](control.md#what-is-verified). `agents_spawn` waits up to
 5 seconds for the new pane to claim its launch and reports `state` as
 `running` or still `pending`; status and wait refuse a pending launch until
-its pane claims it. When the Zellij
+its pane claims it.
+
+`agents_wait` also ends early, with an error reply, when the call is
+cancelled, which is what happens when the caller exits and its MCP server
+shuts down (outcome `cancelled`), or when the caller stops passing check 1
+(outcome `refused`). Cancellation is checked every poll, about every half
+second, so a pending wait never keeps the server running after its agent is
+gone. The caller is re-verified about every 5 seconds and the wait ends only
+after two failed verifications in a row, so one transient multiplexer error
+does not end it.
+
+When the Zellij
 [home pane](workspace.md#one-agent-at-a-time) is gone and the new pane covers
 part of the sidebar, the reply also has `notices`, a list of messages saying
 so.
@@ -92,7 +109,7 @@ so.
 
 Every tool returns JSON. A successful call has `"ok": true`; a refused or
 failed one has `"ok": false` with `outcome` (`refused`, `rate-limited`,
-`error`, `exited`, `unsupported`), the `exit_code` of the matching CLI verb
+`error`, `exited`, `unsupported`, `cancelled`), the `exit_code` of the matching CLI verb
 and an `error` message.
 
 ## Audit

@@ -32,10 +32,12 @@ import hashlib
 import json
 import math
 import os
+import re
 import stat
 import sys
 import time
 import tomllib
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +54,7 @@ from tongs_agents.multiplexers.base import (
     PaneRef,
     Unsupported,
 )
+from tongs_agents.multiplexers.tmux import env_socket
 from tongs_agents.profiles import ProfileError, _read_config_bytes, profiles_path
 
 try:
@@ -80,6 +83,7 @@ AUDIT_DIR = "audit"
 AUDIT_FILE = "control.jsonl"
 LOCKS_DIR = "locks"
 SENT_DIR = "sent"
+_TMUX_PANE_RE = re.compile(r"%[0-9]{1,12}\Z")
 MAX_MARK_BYTES = 64 * 1024
 MAX_ACTOR_LENGTH = 64
 CALLER_ENV = "TONGS_AGENTS_LAUNCH_ID"
@@ -269,23 +273,36 @@ def _hook_records(record: LaunchRecord) -> list[dict]:
     return found
 
 
+def _names_another_pane(record: LaunchRecord, env: dict) -> bool:
+    session = env.get("ZELLIJ_SESSION_NAME")
+    pane = env.get("ZELLIJ_PANE_ID")
+    socket_dir = env.get("ZELLIJ_SOCKET_DIR")
+    if (
+        (pane is not None and pane != record.pane_id)
+        or (session is not None and session != record.session)
+        or not _same_dir(socket_dir, record.socket_dir)
+    ):
+        return True
+    if record.multiplexer != "tmux":
+        return False
+    tmux_pane = env.get("TMUX_PANE")
+    return (
+        (isinstance(tmux_pane, str) and _TMUX_PANE_RE.match(tmux_pane) is not None
+         and tmux_pane != record.pane_id)
+        or not _same_dir(env_socket(env), record.socket_dir)
+    )
+
+
 def _check_hook_pane(record: LaunchRecord, hooks: list[dict]) -> None:
     """Refuse when a hook record for this launch names a different pane.
 
-    A record that names no pane does not contradict the launch.
+    Zellij variables are compared for every launch; ``TMUX_PANE`` and the
+    server socket in ``TMUX`` for tmux launches. A record that names no pane,
+    or a malformed ``TMUX_PANE``, does not contradict the launch.
     """
     for data in hooks:
         env = data.get("terminal_env")
-        if not isinstance(env, dict):
-            continue
-        session = env.get("ZELLIJ_SESSION_NAME")
-        pane = env.get("ZELLIJ_PANE_ID")
-        socket_dir = env.get("ZELLIJ_SOCKET_DIR")
-        if (
-            (pane is not None and pane != record.pane_id)
-            or (session is not None and session != record.session)
-            or not _same_dir(socket_dir, record.socket_dir)
-        ):
+        if isinstance(env, dict) and _names_another_pane(record, env):
             raise Refused(
                 f"launch {record.launch_id}: a session record for it names "
                 "another pane"
@@ -717,12 +734,14 @@ def wait(
     actor: str = "cli",
     caller: str | None = None,
     poll: float = WAIT_POLL,
+    check: Callable[[], None] | None = None,
 ) -> WaitResult:
     """Poll the launch's status until ``until`` holds, it settles otherwise,
     or ``timeout_s`` (at most 600) passes.
 
     After a send, hook updates that predate it do not count, so the previous
-    turn's ``done`` never ends the wait for the next one.
+    turn's ``done`` never ends the wait for the next one. ``check`` runs
+    after every poll interval; a ControlError it raises ends the wait.
     """
     try:
         if until not in UNTIL:
@@ -745,6 +764,8 @@ def wait(
                 result = WaitResult(current, EXIT_TIMEOUT)
                 break
             time.sleep(min(poll, remaining))
+            if check is not None:
+                check()
     except ControlError as error:
         audit("wait", actor=actor, launch_id=launch_id, outcome=error.outcome,
               exit_code=error.exit_code, caller=caller)

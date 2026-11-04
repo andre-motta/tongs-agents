@@ -19,6 +19,7 @@ maintainer gave its launch in the sidebar, empty when none.
 import asyncio
 import json
 import sys
+import threading
 
 from mcp.server.fastmcp import FastMCP
 
@@ -164,9 +165,16 @@ async def agents_wait(launch_id: str, until: str = "done",
                       timeout_s: float = control.MAX_WAIT_SECONDS) -> str:
     """Wait until an agent pane this agent spawned reaches ``until`` (done,
     needs-you, ended or any), for at most timeout_s seconds (600 at most)."""
-    return await asyncio.to_thread(
-        _control_call, lambda c: c.wait(launch_id, until, timeout_s)
-    )
+    # A worker thread cannot be cancelled, so a cancelled call (the client
+    # cancelled it, or the transport closed and the server is shutting down)
+    # tells the wait to stop instead of keeping the process alive.
+    stop = threading.Event()
+    try:
+        return await asyncio.to_thread(
+            _control_call, lambda c: c.wait(launch_id, until, timeout_s, stop=stop)
+        )
+    finally:
+        stop.set()
 
 
 FLEET_TOOLS = (
