@@ -2,7 +2,10 @@
 
 import json
 import os
+import stat
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -18,10 +21,13 @@ from tests.test_sandbox_support import (  # noqa: F401
     spool_dir,
     stamp,
 )
+from tests.test_sandbox_validation import load_validator
 from tongs_agents import discovery, paths, session_store
 from tongs_agents.discovery import MAX_EVENT_BYTES
+from tongs_agents.profiles import parse_profile
 from tongs_agents.sandbox import bridge, state
-from tongs_agents.sandbox.openshell import OpenShell
+from tongs_agents.sandbox.__main__ import main as module_main
+from tongs_agents.sandbox.openshell import OpenShell, OpenShellError
 from tongs_agents.sessions_feed import SessionFeed
 
 pytestmark = posix_only
@@ -173,6 +179,150 @@ def test_a_flood_of_distinct_sessions_is_capped_per_launch(fake, launch):
     assert first_session["tool"] == "Bash"
 
 
+def put_at(spool: Path, seconds_ago: int, index: int, event: str, data: str) -> Path:
+    stamp_ns = (int(time.time()) - seconds_ago) * 1_000_000_000 + index
+    path = spool / f"{stamp_ns:019d}-7-{event}.json"
+    path.write_text(data)
+    return path
+
+
+def bridged_ids():
+    return sorted(item["session_id"] for item in sessions()
+                  if not item["session_id"].startswith("sandbox-"))
+
+
+def test_a_new_session_replaces_the_oldest_ended_one_at_the_cap(fake, launch):
+    spool = spool_dir(fake, launch)
+    cap = bridge.MAX_SESSIONS_PER_LAUNCH
+    for index in range(cap):
+        put(spool, index, "session-start", payload(f"s{index}"))
+    assert sync().imported == cap
+    put_at(spool, 100, 10, "session-end", payload("s2"))
+    put_at(spool, 50, 11, "session-end", payload("s1"))
+    first = sync()
+    assert (first.imported, first.capped, first.replaced) == (2, 0, 0), first.errors
+    put(spool, 20, "session-start", payload("n1"))
+    assert (sync().replaced, bridged_ids()) == (1, ["n1", "s0", "s1", "s3"])
+    put(spool, 21, "session-start", payload("n2"))
+    put(spool, 22, "session-start", payload("n3"))
+    second = sync()
+    assert (second.imported, second.replaced, second.capped) == (1, 1, 1)
+    assert bridged_ids() == ["n1", "n2", "s0", "s3"]
+    order = [error for error in second.errors if "beyond" in error]
+    assert order == [f"tongs-sandboxed: dropped 1 event(s) for sessions beyond {cap} per launch"]
+
+
+def test_a_replacement_counts_only_once_its_import_succeeds(fake, launch, monkeypatch):
+    spool = spool_dir(fake, launch)
+    cap = bridge.MAX_SESSIONS_PER_LAUNCH
+    for index in range(cap):
+        put(spool, index, "session-start", payload(f"s{index}"))
+    put(spool, cap, "session-end", payload("s0"))
+    assert sync().imported == cap + 1
+    real = session_store.import_session_record
+    monkeypatch.setattr(session_store, "import_session_record",
+                        lambda record: record["session_id"] != "n1" and real(record))
+    put(spool, 20, "session-start", payload("n1"))
+    result = sync()
+    assert (result.imported, result.replaced, result.rejected) == (0, 0, 1)
+    monkeypatch.setattr(session_store, "import_session_record", real)
+    put(spool, 21, "session-start", payload("n2"))
+    result = sync()
+    assert (result.imported, result.replaced) == (1, 0)
+    assert bridged_ids() == ["n2", "s1", "s2", "s3"]
+
+
+def test_ended_sessions_do_not_let_a_flood_bypass_the_cap(fake, launch):
+    spool = spool_dir(fake, launch)
+    cap = bridge.MAX_SESSIONS_PER_LAUNCH
+    for index in range(30):
+        put(spool, 2 * index, "session-start", payload(f"churn{index:02d}"))
+        put(spool, 2 * index + 1, "session-end", payload(f"churn{index:02d}"))
+    replaced = 0
+    while list(spool.iterdir()):
+        replaced += sync().replaced
+        assert len(bridged_ids()) <= cap
+    assert replaced == 30 - cap
+    for index in range(cap):
+        put(spool, 100 + index, "session-start", payload(f"live{index}"))
+    sync()
+    assert bridged_ids() == [f"live{index}" for index in range(cap)]
+    for index in range(20):
+        put(spool, 200 + 2 * index, "session-start", payload(f"late{index:02d}"))
+        put(spool, 201 + 2 * index, "session-end", payload(f"late{index:02d}"))
+    while list(spool.iterdir()):
+        result = sync()
+        assert result.replaced == 0
+    assert bridged_ids() == [f"live{index}" for index in range(cap)]
+
+
+def test_a_launch_locked_by_another_process_is_skipped(fake, launch):
+    spool = spool_dir(fake, launch)
+    entry = put(spool, 1, "session-start", payload())
+    holder = subprocess.Popen(
+        [sys.executable, "-c",
+         "import sys\n"
+         "from tongs_agents.sandbox import bridge\n"
+         f"with bridge.launch_lock({LAUNCH_ID!r}):\n"
+         "    print('held', flush=True)\n"
+         "    sys.stdin.readline()\n"],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+    )
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        result = sync()
+        assert (result.busy, result.launches, result.imported) == (1, 0, 0)
+        assert entry.exists()
+    finally:
+        holder.communicate("\n", timeout=30)
+    assert holder.returncode == 0
+    assert sync().imported == 1
+    assert bridged_ids() == ["s1"]
+
+
+def test_the_cap_check_reads_the_store_under_the_launch_lock(fake, launch, monkeypatch):
+    put(spool_dir(fake, launch), 1, "session-start", payload())
+    held = []
+    real = discovery.read_stored_sessions
+
+    def read(*args, **kwargs):
+        try:
+            with bridge.launch_lock(LAUNCH_ID):
+                held.append(False)
+        except TimeoutError:
+            held.append(True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(discovery, "read_stored_sessions", read)
+    assert sync().imported == 1
+    assert held == [True]
+
+
+def test_the_launch_lock_is_private_and_removed_with_the_launch(fake, launch, pane_process):
+    process, _info = pane_process
+    sync()
+    lock = state.state_root() / bridge.LOCKS_DIRECTORY / f"{LAUNCH_ID}.lock"
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+    assert stat.S_IMODE(lock.parent.stat().st_mode) == 0o700
+    process.kill()
+    process.wait()
+    sync()
+    assert not lock.exists()
+
+
+def test_a_symlinked_launch_lock_is_refused(fake, launch, tmp_path):
+    put(spool_dir(fake, launch), 1, "session-start", payload())
+    target = tmp_path / "elsewhere"
+    target.write_text("keep")
+    locks = paths.ensure_private_dir(state.state_root() / bridge.LOCKS_DIRECTORY)
+    (locks / f"{LAUNCH_ID}.lock").symlink_to(target)
+    result = sync()
+    assert (result.launches, result.imported) == (0, 0)
+    assert any("sync lock" in error for error in result.errors)
+    assert target.read_text() == "keep"
+    assert bridged_ids() == []
+
+
 def test_sync_all_reads_the_store_once(fake, launch, monkeypatch):
     put(spool_dir(fake, launch), 1, "session-start", payload())
     reads = []
@@ -305,8 +455,12 @@ def test_bridge_writes_only_in_the_sessions_directory(fake, launch, tmp_path):
     changed = {path for path in after if before.get(path) != after[path]}
     assert changed
     sessions_dir = paths.sessions_dir()
-    assert all(path == sessions_dir or sessions_dir in path.parents for path in changed), \
-        changed
+    locks = state.state_root() / bridge.LOCKS_DIRECTORY
+    allowed = {state.state_root(), locks, locks / f"{LAUNCH_ID}.lock"}
+    assert all(
+        path in allowed or path == sessions_dir or sessions_dir in path.parents
+        for path in changed
+    ), changed
 
 
 def test_unreachable_cli_is_reported_not_raised(fake, launch, monkeypatch):
@@ -334,9 +488,45 @@ def test_session_feed_runs_the_bridge_before_maintenance(fake, launch, monkeypat
 
 def test_module_sync_entry_point(fake, launch):
     put(spool_dir(fake, launch), 1, "session-start", payload())
-    from tongs_agents.sandbox.__main__ import main
-    assert main(["sync"]) == 0
+    assert module_main(["sync"]) == 0
     assert [item["session_id"] for item in sessions()] == ["s1"]
+
+
+def test_summary_lines_report_replaced_and_busy_only_when_present():
+    assert bridge.summary_lines(bridge.SyncResult()) == [
+        "0 sandboxed launch(es): 0 event(s) imported, 0 rejected, 0 phase update(s)",
+    ]
+    lines = bridge.summary_lines(bridge.SyncResult(launches=2, replaced=1, busy=2))
+    assert lines[1:] == [
+        f"1 ended session replaced to stay within {bridge.MAX_SESSIONS_PER_LAUNCH} per launch",
+        "2 launches busy in another process; try again",
+    ]
+    assert bridge.summary_lines(bridge.SyncResult(replaced=3, busy=1))[1:] == [
+        f"3 ended sessions replaced to stay within {bridge.MAX_SESSIONS_PER_LAUNCH} per launch",
+        "1 launch busy in another process; try again",
+    ]
+
+
+def test_module_sync_prints_busy_and_replaced(monkeypatch, capsys):
+    monkeypatch.setattr(bridge, "sync_all", lambda: bridge.SyncResult(replaced=1, busy=1))
+    assert module_main(["sync"]) == 0
+    out = capsys.readouterr().out
+    assert "1 launch busy in another process; try again" in out
+    assert "1 ended session replaced" in out
+
+
+def test_validator_clear_config_reports_a_cli_failure_as_not_cleared(tmp_path):
+    validator = load_validator()
+
+    class Failing:
+        def exec_capture(self, *args, **kwargs):
+            raise OpenShellError("openshell sandbox exec: gateway unreachable")
+
+    profile = parse_profile("validator", {
+        "command": ["claude"], "harness": "claude", "cwd": str(tmp_path),
+        "sandbox": {"name": "tongs-validate-unit", "image": "example/fake-agent:1"},
+    })
+    assert validator.clear_config(Failing(), "tongs-validate-unit", profile, LAUNCH_ID) is False
 
 
 def test_chat_relay_is_a_stub_seam(fake, launch):

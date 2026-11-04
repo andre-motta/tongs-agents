@@ -25,7 +25,7 @@ from tests.test_sandbox_support import (  # noqa: F401
 )
 from tongs_agents import cli, paths
 from tongs_agents.commands import sandbox as sandbox_command
-from tongs_agents.sandbox import openshell, state
+from tongs_agents.sandbox import bridge, openshell, state
 from tongs_agents.sessions_feed import SessionFeed
 from tongs_agents.tui import FleetMonitorApp
 from tongs_agents.widgets import agents_panel
@@ -467,6 +467,14 @@ def test_missing_cli_is_a_clear_error(monkeypatch, tmp_path, capsys):
 def test_sync_runs_one_bridge_pass(capsys):
     assert run("sync") == 0
     assert "0 sandboxed launch(es)" in capsys.readouterr().out
+
+
+def test_sync_prints_busy_and_replaced_launches(monkeypatch, capsys):
+    monkeypatch.setattr(bridge, "sync_all", lambda: bridge.SyncResult(replaced=2, busy=1))
+    assert run("sync") == 0
+    out = capsys.readouterr().out
+    assert "1 launch busy in another process; try again" in out
+    assert "2 ended sessions replaced" in out
 
 
 # doctor

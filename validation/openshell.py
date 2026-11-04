@@ -17,7 +17,9 @@ pseudo-terminal with a scripted fake agent that fires the emitted spool hook,
 and checks:
 
 - the hook status reaches the session store through the bridge within 4 s;
-- the uploaded harness config and spool sit in the sandbox working directory;
+- the uploaded harness config and spool sit in the sandbox working directory,
+  after the first create and again after the relaunch upload into the reused
+  sandbox (the first upload's settings are removed before the relaunch);
 - positive controls first: a write in the working directory and, with
   ``--policy``, a fetch of ``--allow-host`` succeed;
 - with ``--policy``, a denied host and a denied path are refused inside the
@@ -311,6 +313,29 @@ def wait_for(predicate, timeout: float, interval: float = 0.25):
         time.sleep(interval)
 
 
+def config_check(evidence: dict, label: str, client: OpenShell, name: str, profile,
+                 launch_id: str) -> None:
+    """List where the launch's harness config and the workspace landed in the sandbox."""
+    base, config_dir, _spool = launcher.layout(profile.sandbox, "claude", launch_id)
+    listing = client.exec_capture(name, ["sh", "-c", 'test -f "$1/settings.json" && '
+                                         'test -f README.md', "sh", config_dir],
+                                  workdir=profile.sandbox.workdir)
+    check(evidence, label, listing.ok,
+          detail=listing.error_text() if not listing.ok else base)
+
+
+def clear_config(client: OpenShell, name: str, profile, launch_id: str) -> bool:
+    """Remove the uploaded settings so only the relaunch upload can put them back."""
+    _base, config_dir, _spool = launcher.layout(profile.sandbox, "claude", launch_id)
+    try:
+        removed = client.exec_capture(name, ["sh", "-c", 'rm -f -- "$1/settings.json" && '
+                                             '! test -e "$1/settings.json"', "sh", config_dir],
+                                      workdir=profile.sandbox.workdir)
+    except OpenShellError:
+        return False
+    return removed.ok
+
+
 def validator_record(status: str | None = None) -> dict | None:
     bridge.sync_all()
     for record in discovery.read_stored_sessions():
@@ -391,19 +416,21 @@ def run(args: argparse.Namespace) -> dict:
                   first.get("pid") == str(pane.pid)
                   and (first.get("launch") or {}).get("launch_id") == record.launch_id
                   and first.get("source") == "sandbox")
-        base, config_dir, _spool = launcher.layout(profile.sandbox, "claude",
-                                                   record.launch_id)
-        listing = client.exec_capture(name, ["sh", "-c", 'test -f "$1/settings.json" && '
-                                             'test -f README.md', "sh", config_dir],
-                                      workdir=profile.sandbox.workdir)
-        check(evidence, "workspace and harness config uploaded", listing.ok,
-              detail=listing.error_text() if not listing.ok else base)
+        config_check(evidence, "workspace and harness config uploaded", client, name,
+                     profile, record.launch_id)
         policy_checks(evidence, client, name, profile.sandbox.workdir, args)
         approval_checks(evidence, client, name, record.launch_id, args)
+        cleared = clear_config(client, name, profile, record.launch_id)
         relaunch = launches.create_pending(profile, "validator", "none")
         again = launcher.prepare(profile, relaunch, os.environ, fake_agent_command(),
                                  out=sys.stderr, client=client)
         check(evidence, "relaunch reuses the labelled sandbox", again.reused)
+        if cleared:
+            config_check(evidence, "harness config uploaded again on relaunch", client,
+                         name, profile, relaunch.launch_id)
+        else:
+            check(evidence, "harness config uploaded again on relaunch", None,
+                  detail="the first upload could not be removed before the relaunch")
     except (launcher.SandboxLaunchError, OpenShellError, OSError) as error:
         check(evidence, "sandboxed launch", False, detail=str(error))
     finally:

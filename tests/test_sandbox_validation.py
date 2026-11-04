@@ -1,6 +1,8 @@
 """The OpenShell validator, run instrumented against the fake CLI (never a real gateway)."""
 
 import http.server
+import importlib.util
+import io
 import json
 import os
 import shutil
@@ -11,10 +13,22 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_sandbox_support import FAKE_DIR, posix_only
+from tests.test_sandbox_support import FAKE_DIR, fake, posix_only  # noqa: F401
+from tongs_agents import launches
+from tongs_agents.profiles import parse_profile
+from tongs_agents.sandbox import launcher
+from tongs_agents.sandbox.openshell import OpenShell
 
 ROOT = Path(__file__).resolve().parents[1]
 FETCHER = shutil.which("curl") or shutil.which("wget")
+
+
+def load_validator():
+    spec = importlib.util.spec_from_file_location(
+        "openshell_validation", ROOT / "validation" / "openshell.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def run_validator(tmp_path, *extra, env=None):
@@ -60,9 +74,44 @@ def test_validator_passes_instrumented_against_the_fake_cli(tmp_path):
     assert names["denied host 127.0.0.1:9 refused"] is None
     assert names["denied path /proc/tongs-agents-denied refused"] is None
     assert names["relaunch reuses the labelled sandbox"] is True
+    assert names["harness config uploaded again on relaunch"] is True
+    order = [item["name"] for item in evidence["checks"]]
+    assert order.index("relaunch reuses the labelled sandbox") < order.index(
+        "harness config uploaded again on relaunch")
     assert evidence["cleanup"] == {"sandbox_deleted": True}
     assert not (tmp_path / "unused-state").exists()
     assert remaining_sandboxes(tmp_path) == {}
+
+
+@posix_only
+def test_the_relaunch_listing_sees_only_the_relaunch_upload(fake, tmp_path):
+    validator = load_validator()
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "README.md").write_text("x\n")
+    profile = parse_profile("validator", {
+        "command": ["claude"], "harness": "claude", "cwd": str(project),
+        "sandbox": {"name": "tongs-validate-unit", "image": "example/fake-agent:1"},
+    })
+    client = OpenShell()
+
+    def prepare():
+        record = launches.create_pending(profile, "validator", "none")
+        launcher.prepare(profile, record, os.environ, ["sh", "-c", "true"],
+                         out=io.StringIO(), client=client)
+        return record
+
+    first = prepare()
+    evidence = {"checks": []}
+    assert validator.clear_config(client, profile.sandbox.name, profile, first.launch_id)
+    validator.config_check(evidence, "stale", client, profile.sandbox.name, profile,
+                           first.launch_id)
+    second = prepare()
+    validator.config_check(evidence, "relaunch", client, profile.sandbox.name, profile,
+                           second.launch_id)
+    assert [(item["name"], item["passed"]) for item in evidence["checks"]] == [
+        ("stale", False), ("relaunch", True),
+    ]
 
 
 @posix_only
