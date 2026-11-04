@@ -27,7 +27,7 @@ from tongs_agents.widgets.command_line import (
     parse_command,
     register_verb,
 )
-from tongs_agents.widgets.quit_screen import KillScreen, QuitScreen
+from tongs_agents.widgets.quit_screen import KillScreen, QuitScreen, attach_command
 
 SESSION = "agents"
 SIZE = (60, 30)
@@ -470,6 +470,7 @@ async def test_q_never_quits_only_the_sidebar_and_detach_keeps_everything(projec
         await pilot.pause()
         assert app.is_running
         assert mux.left == [("detach", SESSION)]
+        await _quit_dialog(app, pilot)
 
 
 @pytest.mark.asyncio
@@ -593,7 +594,13 @@ async def test_the_dialog_names_the_command_that_attaches_again(projects):
     async with app.run_test(size=(100, 30)) as pilot:
         await _quit_dialog(app, pilot)
         text = " ".join(str(w.render()) for w in app.screen.query("Static"))
-        assert f"tongs-agents workspace --session {SESSION}" in " ".join(text.split())
+        assert (f"tongs-agents workspace --session {SESSION} --multiplexer zellij"
+                in " ".join(text.split()))
+
+
+def test_the_attach_command_is_shell_quoted():
+    assert attach_command("my agents", "tmux") == (
+        "tongs-agents workspace --session 'my agents' --multiplexer tmux")
 
 
 @pytest.mark.asyncio

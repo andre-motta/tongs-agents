@@ -287,7 +287,7 @@ palette) asks how to leave the whole workspace:
 
 | Key | Action |
 | --- | --- |
-| `d` | Detach: leave the workspace and return to your shell. The session and every agent keep running; the dialog shows the command that attaches again (`tongs-agents workspace --session NAME`, plus `--multiplexer tmux` on tmux). |
+| `d` | Detach: leave the workspace and return to your shell. The session and every agent keep running; the dialog shows the command that attaches again (`tongs-agents workspace --session NAME --multiplexer zellij` or `tmux`). |
 | `k` | Kill: end the session and every agent in it, after a second confirmation (`y` or the "Yes, kill" button). Work in progress in those agents is interrupted. |
 | `n`, Escape, `q`, Enter | Cancel. |
 

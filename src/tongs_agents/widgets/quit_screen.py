@@ -11,6 +11,7 @@ button, so Enter cancels, and a double-click on Kill cannot land on
 
 from __future__ import annotations
 
+import shlex
 import time
 
 from rich.text import Text
@@ -50,9 +51,14 @@ _CSS = """
 
 
 def attach_command(session: str, multiplexer: str) -> str:
-    """The command that attaches to ``session`` again after a detach."""
-    command = f"tongs-agents workspace --session {session}"
-    return command if multiplexer == "zellij" else f"{command} --multiplexer {multiplexer}"
+    """The shell-quoted command that attaches to ``session`` again after a detach.
+
+    The multiplexer is always named: ``[workspace] multiplexer`` may default
+    to the other one.
+    """
+    return shlex.join(
+        ["tongs-agents", "workspace", "--session", session, "--multiplexer", multiplexer]
+    )
 
 
 class QuitScreen(ModalScreen[str | None]):
