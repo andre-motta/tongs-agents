@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.10.4 (experimental)
+
+Follow-ups from the reviews of the M3 to M7 work.
 
 ### Fixed
 
