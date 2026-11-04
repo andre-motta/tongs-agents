@@ -213,6 +213,29 @@ def test_capture_terminal_info_tmux(monkeypatch):
     assert "/tmp/tmux-1000/default" in info["terminal_env"]["TMUX"]
 
 
+@pytest.mark.parametrize("pane, recorded", [
+    ("%3", True),
+    ("%123456789012", True),
+    ("%1234567890123", False),
+    ("3", False),
+    ("%", False),
+    ("%3x", False),
+    ("%\u0663", False),
+    ("%" + "9" * 2000, False),
+    (None, False),
+])
+def test_tmux_capture_records_only_a_well_formed_tmux_pane(monkeypatch, pane, recorded):
+    markers = {"TMUX": "/tmp/tmux-1000/default,12345,0"}
+    if pane is not None:
+        markers["TMUX_PANE"] = pane
+    _set_markers(monkeypatch, markers)
+    expected = {"TMUX": markers["TMUX"]}
+    if recorded:
+        expected["TMUX_PANE"] = pane
+    assert TmuxAPI.capture_env() == expected
+    assert capture_terminal_info()["terminal_env"] == expected
+
+
 def test_get_terminal_api():
     assert get_terminal_api("konsole").name == "konsole"
     assert get_terminal_api("tmux").name == "tmux"

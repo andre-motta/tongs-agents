@@ -1,5 +1,6 @@
 import asyncio
 import json
+import threading
 import time
 
 import anyio
@@ -8,6 +9,7 @@ import pytest
 import tongs_agents.discovery as discovery
 import tongs_agents.mcp_server as mcp_server
 from mcp.client.session import ClientSession
+from mcp.shared.exceptions import McpError
 from tests.conftest import write_session
 
 
@@ -177,3 +179,79 @@ async def test_a_control_call_outside_a_launched_pane_is_refused(
     assert (payload["outcome"], payload["exit_code"]) == ("refused", 5)
     audit = (tmp_path / "state" / "audit" / "control.jsonl").read_text().splitlines()
     assert json.loads(audit[-1])["actor"] == "mcp"
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_agents_wait_stops_its_worker_thread(monkeypatch):
+    started = threading.Event()
+    stopped = threading.Event()
+
+    class FakeControl:
+        def wait(self, launch_id, until, timeout_s, stop=None):
+            started.set()
+            if stop.wait(5):
+                stopped.set()
+            return {"ok": True}
+
+    monkeypatch.setattr(mcp_server, "McpControl", FakeControl)
+    task = asyncio.create_task(mcp_server.agents_wait("a" * 32))
+    assert await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await asyncio.to_thread(stopped.wait, 5)
+
+
+@pytest.mark.asyncio
+async def test_a_finished_agents_wait_returns_its_reply(monkeypatch):
+    seen = []
+
+    class FakeControl:
+        def wait(self, launch_id, until, timeout_s, stop=None):
+            seen.append((launch_id, until, timeout_s, stop.is_set()))
+            return {"ok": True, "reached": True}
+
+    monkeypatch.setattr(mcp_server, "McpControl", FakeControl)
+    reply = json.loads(await mcp_server.agents_wait("a" * 32, "any", 5))
+    assert reply == {"ok": True, "reached": True}
+    assert seen == [("a" * 32, "any", 5, False)]
+
+
+@pytest.mark.asyncio
+async def test_closing_the_transport_stops_a_pending_agents_wait(tmp_path, monkeypatch):
+    """The caller agent exits mid-wait: its server's worker thread ends too."""
+    _write_control(tmp_path, True)
+    started = threading.Event()
+    stopped = threading.Event()
+
+    class FakeControl:
+        def wait(self, launch_id, until, timeout_s, stop=None):
+            started.set()
+            if stop.wait(5):
+                stopped.set()
+            return {"ok": True}
+
+    monkeypatch.setattr(mcp_server, "McpControl", FakeControl)
+    server = mcp_server.create_server(True)
+    client_send, server_receive = anyio.create_memory_object_stream(0)
+    server_send, client_receive = anyio.create_memory_object_stream(0)
+
+    async def call(session):
+        with pytest.raises(McpError, match="Connection closed"):
+            await session.call_tool("agents_wait", {"launch_id": "a" * 32})
+
+    async def scenario():
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(
+                server._mcp_server.run, server_receive, server_send,
+                server._mcp_server.create_initialization_options(),
+            )
+            async with ClientSession(client_receive, client_send) as session:
+                await session.initialize()
+                task_group.start_soon(call, session)
+                assert await anyio.to_thread.run_sync(started.wait, 5)
+                await client_send.aclose()
+                assert await anyio.to_thread.run_sync(stopped.wait, 5)
+                task_group.cancel_scope.cancel()
+
+    await asyncio.wait_for(scenario(), timeout=10)

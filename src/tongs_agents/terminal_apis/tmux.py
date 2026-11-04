@@ -5,6 +5,7 @@ import re
 import subprocess
 
 from tongs_agents import discovery
+from tongs_agents.terminal_apis._env import bounded_env_value, is_decimal_id
 from tongs_agents.terminal_apis.base import TerminalAPI
 from tongs_agents.terminal_apis.parent import activate_parent
 
@@ -160,7 +161,11 @@ class TmuxAPI(TerminalAPI):
 
     @staticmethod
     def capture_env() -> dict:
-        return {"TMUX": os.environ.get("TMUX", "")}
+        env = {"TMUX": os.environ.get("TMUX", "")}
+        pane = bounded_env_value("TMUX_PANE")
+        if pane is not None and pane.startswith("%") and is_decimal_id(pane[1:]):
+            env["TMUX_PANE"] = pane
+        return env
 
     def find_tab(self, pid: int, terminal_env: dict) -> str | None:
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 1:
