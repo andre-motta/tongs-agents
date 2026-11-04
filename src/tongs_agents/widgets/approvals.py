@@ -17,7 +17,8 @@ can imitate them (``sandbox.approvals``); when that block holds Security,
 Prover or Application lines, a note at the top says so. Rejecting needs a
 reason. Output the parser does not recognise is shown raw and cannot be
 approved here. Polling only reads, one poll at a time; nothing approves
-without those actions (row 14), and there is no approve-all.
+without those actions (row 14), and there is no approve-all. A poll that
+fails unexpectedly is reported once as a notification and polling goes on.
 """
 
 from __future__ import annotations
@@ -406,6 +407,7 @@ class ApprovalActions:
         self.approval_feed = ApprovalFeed(feed, lambda: self.approval_listings)
         self.approval_run: ApprovalPoll | None = None
         self.approval_poll_again = False
+        self.approval_poll_error: str | None = None
         return self.approval_feed
 
     def mount_approvals(self) -> None:
@@ -446,22 +448,30 @@ class ApprovalActions:
             return
         worker = get_current_worker()
         listings = None
+        error = None
         try:
             listings = approvals.poll(targets, self.approval_client_for)
+        except Exception as failure:
+            # Textual's exit_on_error would otherwise end the whole sidebar.
+            error = f"{type(failure).__name__}: {failure}"
         finally:
             try:
                 if not worker.is_cancelled:
-                    self.call_from_thread(self._approvals_polled, run, listings)
+                    self.call_from_thread(self._approvals_polled, run, listings, error)
             except RuntimeError:
                 pass  # the app stopped meanwhile; nothing is left to update
             finally:
                 run.done.set()
 
-    def _approvals_polled(self, run: ApprovalPoll,
-                          listings: dict[Key, RuleListing] | None) -> None:
+    def _approvals_polled(self, run: ApprovalPoll, listings: dict[Key, RuleListing] | None,
+                          error: str | None = None) -> None:
         run.done.set()
         if run is not self.approval_run:
             return
+        if error is not None and error != self.approval_poll_error:
+            self.notify(_short(f"Polling failed and will be retried: {error}", 300),
+                        title="Access requests", severity="error", timeout=10, markup=False)
+        self.approval_poll_error = error
         if listings is not None:
             self._apply_approvals(listings)
         if self.approval_poll_again:
