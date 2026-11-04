@@ -81,6 +81,9 @@ PARENT_RULE = (
     "before and after parent activation")
 
 
+PANES_RETRY = 3.0
+
+
 class Check(Exception):
     """A validation expectation that did not hold."""
 
@@ -152,10 +155,26 @@ class Session:
                 if len(parts) >= 2}
 
     def panes(self):
-        code, out, _ = self.action("list-panes", "-a", "-j")
-        if code != 0 or not out:
-            return []
-        return [item for item in json.loads(out) if not item.get("is_plugin")]
+        """The terminal panes; asks again for ``PANES_RETRY`` seconds on an empty or partial answer.
+
+        zellij now and then answers list-panes with nothing or with output
+        that is not JSON yet (seen on 0.44.2 and 0.45.1).
+        """
+        found = {}
+
+        def once():
+            code, out, _ = self.action("list-panes", "-a", "-j")
+            if code != 0 or not out:
+                return False
+            try:
+                items = json.loads(out)
+            except ValueError:
+                return False
+            found["panes"] = [item for item in items if not item.get("is_plugin")]
+            return True
+
+        wait_until(once, PANES_RETRY)
+        return found.get("panes", [])
 
 
 def captured_env(io_dir, pane):
