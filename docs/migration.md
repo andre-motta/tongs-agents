@@ -92,3 +92,17 @@ yet. It only reads; it changes nothing.
 
 The tongs plugin entry point is now `agents`. Move any `[plugins.fleet-monitor]`
 settings in your tongs config to `[plugins.agents]`.
+
+## End of support
+
+claude-fleet-monitor 0.9.2 (2026-11-03) is its last release, and its
+[repository](https://github.com/andre-motta/claude-fleet-monitor) was archived
+on 2026-11-04. It gets no further fixes; its open issues were closed with a
+pointer here, so report problems in tongs-agents.
+
+tongs-agents never read claude-fleet-monitor's state, so there is no
+compatibility code with a removal date. What remains is the cleanup of an old
+install (hook commands, the `fleet` MCP entry, the Pi config and the tongs
+entry point, listed above) and the doctor warning about `~/.claude/fleet`. It
+stays in every release: it only acts when it finds those markers, and an old
+install can turn up long after the switch.
