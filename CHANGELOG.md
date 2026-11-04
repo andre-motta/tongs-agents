@@ -30,7 +30,13 @@
   column; past sessions show `-` as their status.
 - When several profiles share the config dir that holds a session, the one
   the newest resume launch of that session used is taken; otherwise it is
-  still refused and names `--profile` (#133).
+  still refused and names `--profile`. A session found in two config dirs
+  is refused the same way.
+- A past session no hook reported, whose transcript changed in the last two
+  minutes, is resumed only after the same warning (and, in the sidebar,
+  confirmation) as one that still runs elsewhere. Folders read from history
+  must be absolute printable paths, and Pi session ids ending in `.jsonl`
+  are never resumed (Pi would read them as a file path) (#133).
 
 ### Changed
 

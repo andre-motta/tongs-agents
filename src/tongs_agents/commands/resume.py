@@ -80,6 +80,7 @@ SHORT_ID = 8
 MAX_SCAN_ENTRIES = 20000
 DAY_SECONDS = 24 * 3600
 PENDING_LAUNCH_SECONDS = 30
+RECENT_WRITE_SECONDS = 120
 LIST_LIMIT = 50
 PI_SESSION_DIR_ENV = "PI_CODING_AGENT_SESSION_DIR"
 PI_SETTINGS_NAME = "settings.json"
@@ -182,11 +183,7 @@ def _resumable_record(record: dict) -> bool:
         return False
     harness = record.get("harness_id", record.get("agent"))
     session_id = record.get("session_id")
-    return (
-        harness in RESUME_ARGS
-        and isinstance(session_id, str)
-        and SESSION_ID_RE.match(session_id) is not None
-    )
+    return harness in RESUME_ARGS and history.resumable_id(harness, session_id)
 
 
 def _int(value) -> int:
@@ -214,11 +211,10 @@ def recent_sessions(
     for (harness, session_id), group in grouped.items():
         group.sort(key=lambda item: _int(item.get("ts")), reverse=True)
         latest = discovery.annotate_session(group[0], now)
-        cwd = latest.get("cwd")
         sessions.append(Resumable(
             harness=harness,
             session_id=session_id,
-            folder=cwd if isinstance(cwd, str) else "",
+            folder=history.safe_folder(latest.get("cwd")),
             status=str(latest.get("status", "")),
             ts=_int(latest.get("ts")),
             age_seconds=_int(latest.get("age_seconds")),
@@ -229,10 +225,10 @@ def recent_sessions(
     return sessions
 
 
-def _pi_setting_dir(home: Path) -> Path | None:
-    """An absolute ``sessionDir`` in ``home/settings.json``, else None."""
+def _pi_setting(home: Path) -> str | None:
+    """``sessionDir`` from ``home/settings.json``; None when unset or unreadable."""
     try:
-        with open(home / PI_SETTINGS_NAME, "rb") as handle:
+        with history.open_file(home / PI_SETTINGS_NAME) as handle:
             raw = handle.read(PI_SETTINGS_BYTES + 1)
         if len(raw) > PI_SETTINGS_BYTES:
             return None
@@ -240,33 +236,41 @@ def _pi_setting_dir(home: Path) -> Path | None:
     except (OSError, ValueError, RecursionError):
         return None
     value = data.get("sessionDir") if isinstance(data, dict) else None
-    if isinstance(value, str) and os.path.isabs(value):
-        return Path(os.path.normpath(value))
-    return None
+    return value if isinstance(value, str) and value else None
+
+
+def _absolute(value: str) -> Path | None:
+    expanded = os.path.expanduser(value)
+    return Path(os.path.normpath(expanded)) if os.path.isabs(expanded) else None
 
 
 def pi_sessions_dir(profile: Profile, home: Path,
                     environ: Mapping[str, str] | None = None) -> Path | None:
-    """The session dir ``profile`` runs Pi with when it is not ``home/sessions``.
+    """The session dir ``profile`` runs Pi with; None when it cannot be known.
 
     ``PI_CODING_AGENT_SESSION_DIR`` from the profile's env, else from
-    ``environ``, else ``sessionDir`` in the agent dir's ``settings.json``;
-    only an absolute path counts (Pi resolves a relative one from the folder
-    it starts in). Project settings (``.pi/settings.json``) are not read.
+    ``environ``, else ``sessionDir`` in the agent dir's ``settings.json``,
+    else ``home/sessions``. ``~`` is expanded as Pi does; a relative path
+    is resolved by Pi from the folder it starts in, so it cannot be known
+    here. Project settings (``.pi/settings.json``) are not read.
     """
     environ = os.environ if environ is None else environ
     for source in (profile.env, environ):
         value = source.get(PI_SESSION_DIR_ENV)
         if value:
-            return Path(os.path.normpath(value)) if os.path.isabs(value) else None
-    return _pi_setting_dir(home)
+            return _absolute(value)
+    value = _pi_setting(home)
+    if value is not None:
+        return _absolute(value)
+    return home / "sessions"
 
 
 def history_homes(profiles: Mapping[str, Profile]) -> list[tuple[str, Path, Path | None]]:
     """The (harness, config dir, Pi session dir) whose history is listed, in profile order.
 
     The config dirs of the profiles that can resume a session unnamed (not
-    sandboxed), each once; the session dir is None for the default one.
+    sandboxed), each once; the session dir is None except for Pi. A Pi
+    profile whose session dir cannot be known lists nothing.
     """
     stores: list[tuple[str, Path, Path | None]] = []
     for harness in RESUME_ARGS:
@@ -274,7 +278,11 @@ def history_homes(profiles: Mapping[str, Profile]) -> list[tuple[str, Path, Path
             home = profile_home(profile)
             if home is None:
                 continue
-            sessions = pi_sessions_dir(profile, home) if harness == "pi" else None
+            sessions = None
+            if harness == "pi":
+                sessions = pi_sessions_dir(profile, home)
+                if sessions is None:
+                    continue
             if (harness, home, sessions) not in stores:
                 stores.append((harness, home, sessions))
     return stores
@@ -326,16 +334,31 @@ def all_sessions(profiles: Mapping[str, Profile], records: Iterable[dict] | None
     return merge(recent_sessions(records, now=now), past_sessions(profiles), now=now)
 
 
+def _located(profiles: Mapping[str, Profile], session_id: str) -> list[history.PastSession]:
+    return [
+        entry for harness, home, store in history_homes(profiles)
+        if (entry := history.locate(harness, home, session_id, sessions=store)) is not None
+    ]
+
+
 def lookup(profiles: Mapping[str, Profile], text: str,
            sessions: Iterable[Resumable] | None = None) -> Resumable:
     """The session ``text`` names among ``all_sessions``; a full id past the
-    listing caps is looked up in each history store too."""
-    sessions = all_sessions(profiles) if sessions is None else list(sessions)
+    listing caps is looked up in each history store too.
+
+    A full id the store holds is completed from history by id only, without
+    listing every history store.
+    """
+    if sessions is None:
+        stored = recent_sessions()
+        exact = [item for item in stored if item.session_id == text]
+        if exact:
+            return find_session(merge(exact, _located(profiles, text)), text)
+        sessions = merge(stored, past_sessions(profiles))
+    else:
+        sessions = list(sessions)
     if text and not any(item.session_id.startswith(text) for item in sessions):
-        located = [
-            entry for harness, home, store in history_homes(profiles)
-            if (entry := history.locate(harness, home, text, sessions=store)) is not None
-        ]
+        located = _located(profiles, text)
         if located:
             sessions = merge(sessions, located)
     return find_session(sessions, text)
@@ -465,11 +488,13 @@ def holds_session(harness: str, home: Path, session: Resumable) -> bool:
     """True when ``home`` holds the transcript of ``session``; reads at most
     ``MAX_SCAN_ENTRIES`` directory entries and never raises.
 
-    A session read from history knows the config dirs that hold it, so
-    nothing is read for it.
+    A session read from history knows config dirs that hold it; another
+    config dir is still searched for its id (``history.locate``), since a
+    capped listing may have left it out there.
     """
     if session.homes:
-        return home in session.homes
+        return home in session.homes or (
+            history.locate(harness, home, session.session_id) is not None)
     session_id = session.session_id
     budget = [MAX_SCAN_ENTRIES]
     if harness == "claude":
@@ -597,12 +622,20 @@ def match_profile(
     )
 
 
+def listed_holds(harness: str, home: Path, session: Resumable) -> bool:
+    """``holds_session`` for a listing: a session read from history is held
+    only by the config dirs it was read from, so nothing more is searched."""
+    if session.homes:
+        return home in session.homes
+    return holds_session(harness, home, session)
+
+
 def origin(session: Resumable, profiles: Mapping[str, Profile],
            resumed_by: Callable[[Resumable], list[launches.LaunchRecord]] = resume_launches,
-           ) -> str:
+           holds: Callable[[str, Path, Resumable], bool] = holds_session) -> str:
     """The profile that would resume ``session``, else the config dir holding it."""
     try:
-        return match_profile(session, profiles, resumed_by=resumed_by).name
+        return match_profile(session, profiles, holds=holds, resumed_by=resumed_by).name
     except ResumeRefused:
         pass
     if session.homes:
@@ -631,6 +664,13 @@ def plan(session: Resumable, profiles: Mapping[str, Profile],
     folder = folder or session.folder
     if not folder:
         raise ResumeRefused(f"session {session.short_id} has no recorded folder; {hint}")
+    if not history.resumable_id(session.harness, session.session_id):
+        raise ResumeRefused(
+            f"session id {session.session_id!r:.80} cannot be resumed by id with "
+            f"{session.label}"
+        )
+    if os.path.exists(folder) and not os.path.isdir(folder):
+        raise ResumeRefused(f"{folder} of session {session.short_id} is not a folder; {hint}")
     if not os.path.isdir(folder):
         raise ResumeRefused(
             f"folder {folder} of session {session.short_id} does not exist (moved or "
@@ -684,11 +724,15 @@ class LiveProcess:
     """A live process of a session: its pid, where it runs and whether that is here.
 
     ``pid`` is None for a resume launch whose pane has not started yet.
+    ``written`` is set instead (seconds since its transcript changed) for a
+    session no store record knows whose history was written moments ago: a
+    process may still write it.
     """
 
     pid: int | None
     where: str
     here: bool
+    written: int | None = None
 
 
 def _location(record: dict) -> tuple[str | None, str | None]:
@@ -791,6 +835,10 @@ def live_process(session: Resumable, workspace_session: str | None = None,
         if here:
             return live
         found = found or live
+    if found is None and not session.records and session.ts > 0:
+        written = int(time.time()) - session.ts
+        if written < RECENT_WRITE_SECONDS:
+            found = LiveProcess(None, "elsewhere", False, written=max(0, written))
     return found
 
 
@@ -808,6 +856,12 @@ def _as_pid(live: LiveProcess) -> str:
 
 
 def warning_text(session: Resumable, live: LiveProcess) -> str:
+    if live.written is not None:
+        return (
+            f"session {session.short_id} was written {format_age(live.written)} ago "
+            "and may still run in another terminal; two processes on one session "
+            "conflict, so quit that one before you type in the new pane"
+        )
     return (
         f"session {session.short_id} still runs {_as_pid(live)} {live.where}; "
         "two processes on one session conflict, so quit that one before you type in "
@@ -853,7 +907,8 @@ def origins(sessions: Iterable[Resumable],
             profiles: Mapping[str, Profile]) -> dict[tuple[str, str], str]:
     """(harness, session id) to the ``PROFILE/CONFIG`` text of each session."""
     resumed_by = resume_launch_index()
-    return {(session.harness, session.session_id): origin(session, profiles, resumed_by)
+    return {(session.harness, session.session_id):
+            origin(session, profiles, resumed_by, listed_holds)
             for session in sessions}
 
 

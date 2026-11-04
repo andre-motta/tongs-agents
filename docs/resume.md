@@ -40,7 +40,10 @@ Then, for each session:
 2. `resume` warns that the session still runs as a pid in another terminal.
    Two processes on one session conflict, so quit the agent in its old
    terminal (`/exit`, or Ctrl+D) before you type in the new pane.
-   tongs-agents never stops it for you.
+   tongs-agents never stops it for you. A past session that no hook
+   reported, whose transcript changed in the last two minutes, gets the
+   same warning ("may still run in another terminal"): the harness may
+   still be writing it without hooks.
 
 A session whose process already runs in the workspace session it would join
 is refused (exit 2) instead: it already has a pane there. Select its row in
@@ -74,9 +77,10 @@ anything starts, the sidebar checks where the session still runs:
 - In this workspace: it is not resumed again. From the list, Enter shows
   that pane. Otherwise the sidebar says so and offers to show that pane
   (Yes brings it up, No leaves everything as it is).
-- Elsewhere (another terminal or session): a dialog names the process and
-  asks whether to resume it here anyway; No starts nothing. After Yes, the
-  warning is shown again next to the result.
+- Elsewhere (another terminal or session), or possibly elsewhere (a past
+  session whose transcript changed in the last two minutes): a dialog says
+  so and asks whether to resume it here anyway; No starts nothing. After
+  Yes, the warning is shown again next to the result.
 - Nowhere: it is resumed right away.
 
 While a session is being resumed (or its dialog is open), asking to resume
@@ -94,7 +98,7 @@ notification.
 
 | | |
 | --- | --- |
-| Folder | DIR when given, else the session's recorded folder (from the store, else the transcript's working directory). A folder that no longer exists is refused, and so is a session with none; give DIR. Claude Code looks a session up in the project folder of its working directory, so resuming one elsewhere may not find it. |
+| Folder | DIR when given, else the session's recorded folder (from the store, else the transcript's working directory). A folder that no longer exists or is not a folder is refused, and so is a session with none; give DIR. A recorded folder that is not an absolute, printable path (a control character, for example) counts as none. Claude Code looks a session up in the project folder of its working directory, so resuming one elsewhere may not find it. |
 | Arguments | Claude Code `--resume ID`, Codex `resume ID`, Pi `--session ID`, appended to the profile's command for this launch only. |
 | Name | The name of an earlier launch of the session that was [renamed](workspace.md#renaming-an-agent), else the session's title (cut to 64 characters), else the profile name; from the sidebar and from the CLI alike. |
 | Profile | `--profile NAME` when given (it must run the same harness). Otherwise the profile recorded when the workspace started the session. Otherwise the one profile of that harness whose config dir holds the session's transcript; when several do (profiles sharing a config dir), the one the newest resume launch of that session used. |
@@ -130,11 +134,15 @@ resumes it in its working directory"), and Pi prints the same command as its
 own resume hint when it exits. Pi's sessions are read from its session dir:
 `PI_CODING_AGENT_SESSION_DIR` from the profile's `env`, else from the
 environment `tongs-agents` runs in, else `sessionDir` in the agent dir's
-`settings.json`, else `sessions` in the agent dir. Only an absolute path is
-followed (Pi resolves a relative one from the folder it starts in), and a
-project's `.pi/settings.json` and `--session-dir` in the profile's command
-are not read; a session stored there is listed only while its agent runs
-(from the store).
+`settings.json` (a regular file, never read through a symlink), else
+`sessions` in the agent dir. A leading `~` is expanded as Pi does. A
+relative path is resolved by Pi from the folder it starts in, so it cannot
+be known: that profile lists no past Pi sessions. A project's
+`.pi/settings.json` and `--session-dir` in the profile's command are not
+read; a session stored there is listed only while its agent runs (from the
+store). A Pi session id ending in `.jsonl` (possible with Pi's
+`--session-id`) is never resumed: Pi reads `--session notes.jsonl` as a
+file in the folder it starts in.
 
 ## Which sessions are listed
 
@@ -162,8 +170,10 @@ only its first and last 64 KiB (Codex: its first line, up to 256 KiB, then
 64 KiB for a kept session without a thread name). Symlinks inside a
 history folder are skipped, unreadable or malformed files and lines are
 skipped, and no message text is shown except the title, cut to 64
-characters with control characters removed. A full session id beyond those
-bounds is still found by `resume ID`.
+characters with control characters removed. Older Claude Code subagent
+transcripts (`agent-*.jsonl`) are not listed. A full session id beyond those
+bounds is still found by `resume ID` (a Codex rollout whose file name does
+not end with its id, by the id in its first line).
 
 A session that no hook reported (shown as `discovered`) has no harness
 session id, and a store record whose harness wrote no history yet is listed

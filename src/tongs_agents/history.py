@@ -16,7 +16,7 @@ title, else the first (or last) user prompt, cut to ``TITLE_LENGTH``
 characters with control characters removed.
 
 - Claude Code, ``<config dir>/projects/<encoded cwd>/<id>.jsonl``: the
-  encoded directory name is lossy, so the folder is the first ``cwd`` of the
+  encoded directory name is lossy, so the folder is the first safe ``cwd`` of the
   records. Title: the last ``custom-title`` (``customTitle``), else
   ``agent-name`` (``agentName``, ``--name``), else ``ai-title``
   (``aiTitle``, rewritten as the session goes on), else ``summary``, else
@@ -44,6 +44,9 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from tongs_agents import launches
+from tongs_agents.launches import LaunchError
+
 HARNESSES = ("claude", "codex", "pi")
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 MAX_ENTRIES = 20000
@@ -63,6 +66,7 @@ CLAUDE_TITLES = (
     ("summary", "summary"),
     ("last-prompt", "lastPrompt"),
 )
+CLAUDE_SIDECHAIN = "agent-"
 CODEX_INJECTED = ("<", "# AGENTS.md instructions")
 
 
@@ -94,7 +98,9 @@ def clean_title(text) -> str:
 
 # -- Bounded reads --
 
-def _open(path: Path):
+def open_file(path: Path):
+    """``path`` opened for reading, never through a symlink, never blocking on a FIFO;
+    OSError unless it is a regular file."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     descriptor = os.open(path, flags)
     try:
@@ -117,7 +123,7 @@ def _lines(chunk: bytes, *, cut_first: bool, cut_last: bool) -> list[bytes]:
 
 def _head_tail(path: Path) -> tuple[list[bytes], list[bytes]]:
     """The complete lines of the first ``HEAD_BYTES`` and of the last ``TAIL_BYTES``."""
-    with _open(path) as handle:
+    with open_file(path) as handle:
         size = os.fstat(handle.fileno()).st_size
         head = handle.read(HEAD_BYTES)
         head_lines = _lines(head, cut_first=False, cut_last=len(head) < size)
@@ -169,6 +175,23 @@ def _valid_id(value) -> bool:
     return isinstance(value, str) and SESSION_ID_RE.match(value) is not None
 
 
+def resumable_id(harness: str, value) -> bool:
+    """True when ``value`` is a session id the harness's resume flag reads as an id.
+
+    Pi reads a ``--session`` argument ending in ``.jsonl`` as a file path
+    relative to the folder it starts in, so such an id is never resumed.
+    """
+    return _valid_id(value) and not (harness == "pi" and value.endswith(".jsonl"))
+
+
+def safe_folder(value) -> str:
+    """``value`` as a session folder: an absolute, printable path, else ""."""
+    try:
+        return launches.check_folder(value)
+    except LaunchError:
+        return ""
+
+
 # -- Claude Code --
 
 def _claude_prompt(lines: list[bytes]) -> str:
@@ -199,9 +222,9 @@ def _claude_title(head: list[bytes], tail: list[bytes]) -> str:
 def _claude_folder(head: list[bytes], tail: list[bytes]) -> str:
     for lines in (head, list(reversed(tail))):
         for record in _records(lines, b'"cwd"'):
-            cwd = record.get("cwd")
-            if isinstance(cwd, str) and os.path.isabs(cwd):
-                return cwd
+            folder = safe_folder(record.get("cwd"))
+            if folder:
+                return folder
     return ""
 
 
@@ -238,7 +261,7 @@ def codex_thread_names(home: Path) -> dict[str, str]:
     """Thread id to its latest name, from the end of ``session_index.jsonl``."""
     names: dict[str, str] = {}
     try:
-        with _open(home / "session_index.jsonl") as handle:
+        with open_file(home / "session_index.jsonl") as handle:
             size = os.fstat(handle.fileno()).st_size
             start = max(0, size - INDEX_BYTES)
             handle.seek(start)
@@ -254,7 +277,7 @@ def codex_thread_names(home: Path) -> dict[str, str]:
 
 def _read_codex(path: Path, home: Path, mtime: int,
                 names: dict[str, str]) -> PastSession | None:
-    with _open(path) as handle:
+    with open_file(path) as handle:
         first = _first_line(handle)
         if first is None:
             return None
@@ -266,8 +289,7 @@ def _read_codex(path: Path, home: Path, mtime: int,
         if isinstance(payload.get("source"), dict) or not _valid_id(session_id):
             return None
         rest = b"" if session_id in names else handle.read(HEAD_BYTES)
-    cwd = payload.get("cwd")
-    folder = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else ""
+    folder = safe_folder(payload.get("cwd"))
     title = names.get(session_id) or clean_title(
         _codex_prompt(_lines(rest, cut_first=False, cut_last=True)))
     return PastSession("codex", session_id, folder, title, mtime, home)
@@ -294,10 +316,9 @@ def _read_pi(path: Path, home: Path, mtime: int) -> PastSession | None:
     if header is None or header.get("type") != "session":
         return None
     session_id = header.get("id")
-    if not _valid_id(session_id) or not path.name.endswith(f"_{session_id}.jsonl"):
+    if not resumable_id("pi", session_id) or not path.name.endswith(f"_{session_id}.jsonl"):
         return None
-    cwd = header.get("cwd")
-    folder = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else ""
+    folder = safe_folder(header.get("cwd"))
     title = ""
     for lines in (tail, head):
         for record in _records(reversed(lines), _type_needle("session_info")):
@@ -373,6 +394,7 @@ def transcripts(harness: str, home: Path, *, enough: int | None = None,
     if harness == "claude":
         for project in _subdirs(home / "projects", budget):
             _files(project, budget, "", ".jsonl", found)
+        found = [item for item in found if not item[1].name.startswith(CLAUDE_SIDECHAIN)]
     elif harness == "codex":
         for day in _codex_days(home / "sessions", budget):
             _files(day, budget, "rollout-", ".jsonl", found)
@@ -433,12 +455,25 @@ def _named(harness: str, name: str, session_id: str) -> bool:
 
 def locate(harness: str, home: Path, session_id: str, *,
            sessions: Path | None = None) -> PastSession | None:
-    """The session ``session_id`` in ``home``, also past the listing caps."""
-    if not _valid_id(session_id):
+    """The session ``session_id`` in ``home``, also past the listing caps.
+
+    A Codex rollout whose file name does not end with its id is found by the
+    id in its first line, among the newest ``MAX_CODEX_FILES``.
+    """
+    if not resumable_id(harness, session_id):
         return None
-    for mtime, path in transcripts(harness, home, sessions=sessions):
+    found = transcripts(harness, home, sessions=sessions)
+    for mtime, path in found:
         if _named(harness, path.name, session_id):
             session = read_transcript(harness, home, path, mtime)
+            if session is not None and session.session_id == session_id:
+                return session
+    if harness == "codex":
+        names = codex_thread_names(home)
+        for mtime, path in found[:MAX_CODEX_FILES]:
+            if _named(harness, path.name, session_id):
+                continue
+            session = read_transcript(harness, home, path, mtime, names)
             if session is not None and session.session_id == session_id:
                 return session
     return None

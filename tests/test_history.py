@@ -18,6 +18,7 @@ from tests.test_run import _inside_zellij, _main
 from tests.test_workspace_spawn import FakeMux, runtime_dir  # noqa: F401
 from tongs_agents import history, launches, workspace_spawn
 from tongs_agents.commands import resume, run
+from tongs_agents.widgets.chat_panel import ConfirmScreen
 from tongs_agents.widgets.resume_picker import RUNNING_MARK, ResumePickerScreen
 
 CLAUDE_ID = "7c1d0e2f-0000-4000-8000-00000000000a"
@@ -186,7 +187,7 @@ def test_a_huge_transcript_is_read_only_at_its_ends(tmp_path, project, monkeypat
                           *([filler] * 3000), {"type": "ai-title", "aiTitle": "at the end"})
     assert path.stat().st_size > 5_000_000
     read = []
-    opened = history._open
+    opened = history.open_file
 
     class Counting:
         def __init__(self, target):
@@ -206,7 +207,7 @@ def test_a_huge_transcript_is_read_only_at_its_ends(tmp_path, project, monkeypat
         def __getattr__(self, name):
             return getattr(self.handle, name)
 
-    monkeypatch.setattr(history, "_open", Counting)
+    monkeypatch.setattr(history, "open_file", Counting)
     [found] = history.scan("claude", home)
     assert found.title == "at the end"
     assert sum(read) <= history.HEAD_BYTES + history.TAIL_BYTES
@@ -280,12 +281,26 @@ def test_pi_session_dir_from_env_or_settings(tmp_path, project, _isolated, monke
     (custom / "sessions").rename(custom / "store")
     (other / "store").mkdir(parents=True)
     profiles = _profiles(tmp_path, '[profiles.pi]\ncommand = ["pi"]\n')
-    assert resume.history_homes(profiles) == [("pi", agent, None)]
-    (agent / "settings.json").write_text(json.dumps({"sessionDir": "relative/dir"}))
-    assert resume.history_homes(profiles) == [("pi", agent, None)]
-    (agent / "settings.json").write_text(json.dumps({"sessionDir": str(custom / "store")}))
+    assert resume.history_homes(profiles) == [("pi", agent, agent / "sessions")]
+    settings = agent / "settings.json"
+    settings.write_text(json.dumps({"sessionDir": "relative/dir"}))
+    assert resume.history_homes(profiles) == []
+    settings.write_text(json.dumps({"sessionDir": "~/../pi-sessions/store"}))
+    assert resume.history_homes(profiles) == [("pi", agent, custom / "store")]
+    settings.write_text(json.dumps({"sessionDir": str(custom / "store")}))
     [found] = resume.all_sessions(profiles)
     assert (found.session_id, found.homes) == (PI_ID, (agent,))
+    settings.unlink()
+    settings.symlink_to(tmp_path / "linked.json")
+    (tmp_path / "linked.json").write_text(json.dumps({"sessionDir": str(other / "store")}))
+    assert resume.history_homes(profiles) == [("pi", agent, agent / "sessions")]
+    settings.unlink()
+    os.mkfifo(settings)
+    assert resume.history_homes(profiles) == [("pi", agent, agent / "sessions")]
+    settings.unlink()
+    settings.write_text(json.dumps({"sessionDir": str(custom / "store")}))
+    monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", "relative")
+    assert resume.history_homes(profiles) == []
     monkeypatch.setenv("PI_CODING_AGENT_SESSION_DIR", str(other / "store"))
     assert resume.all_sessions(profiles) == []
     profiles = _profiles(tmp_path, (
@@ -575,3 +590,113 @@ def test_a_new_workspace_session_keeps_the_resume_label(tmp_path, project, _isol
         "zellij", SESSION, [profiles["pi"]], folder=str(project),
         args=("--session", PI_ID), label="tidy the docs")
     assert launches.get(record.launch_id).label == "tidy the docs"
+
+
+# -- Review hardening --
+
+def test_unsafe_folders_and_pi_path_like_ids_are_dropped(tmp_path, project):
+    evil = "/tmp/\x1b]0;pwn\x07dir"
+    claude = tmp_path / "claude"
+    claude_session(claude, CLAUDE_ID, evil)
+    assert history.scan("claude", claude)[0].folder == ""
+    codex = tmp_path / "codex"
+    codex_session(codex, CODEX_ID, evil)
+    assert history.scan("codex", codex)[0].folder == ""
+    pi = tmp_path / "pi"
+    pi_session(pi, PI_ID, evil)
+    pi_session(pi, "notes.jsonl", project)
+    assert [(s.session_id, s.folder) for s in history.scan("pi", pi)] == [(PI_ID, "")]
+    assert history.locate("pi", pi, "notes.jsonl") is None
+    stored = resume.recent_sessions([_record("claude", CLAUDE_ID, evil),
+                                     _record("pi", "notes.jsonl", project)])
+    assert [(s.session_id, s.folder) for s in stored] == [(CLAUDE_ID, "")]
+
+
+def test_claude_sidechain_transcripts_are_not_listed(tmp_path, project):
+    home = tmp_path / "claude"
+    path = claude_session(home, CLAUDE_ID, project)
+    (path.parent / "agent-1a2b3c4d.jsonl").write_text(path.read_text())
+    assert [s.session_id for s in history.scan("claude", home)] == [CLAUDE_ID]
+
+
+def test_codex_locate_falls_back_to_the_first_line_id(tmp_path, project):
+    home = tmp_path / "codex"
+    path = codex_session(home, CODEX_ID, project)
+    path.rename(path.with_name("rollout-2026-11-02T10-00-00-renamed.jsonl"))
+    assert history.locate("codex", home, CODEX_ID).session_id == CODEX_ID
+
+
+def test_a_session_written_moments_ago_needs_a_warning(tmp_path, project, _isolated):
+    profiles = _three(tmp_path, project, _isolated)
+    os.utime(next((_isolated / ".codex" / "sessions").rglob("*.jsonl")), None)
+    codex = resume.lookup(profiles, CODEX_ID)
+    live = resume.live_process(codex, SESSION, "zellij")
+    assert (live.pid, live.here) == (None, False) and live.written < 60
+    assert "may still run in another terminal" in resume.warning_text(codex, live)
+    [pi] = [s for s in resume.all_sessions(profiles) if s.harness == "pi"]
+    assert resume.live_process(pi, SESSION, "zellij") is None
+
+
+def test_the_cli_warns_about_a_recently_written_session(tmp_path, project, _isolated,
+                                                        monkeypatch, capsys):
+    _three(tmp_path, project, _isolated)
+    os.utime(next((_isolated / ".codex" / "sessions").rglob("*.jsonl")), None)
+    mux = FakeMux()
+    monkeypatch.setattr(run, "get_multiplexer", lambda name="zellij", **kwargs: mux)
+    _inside_zellij(monkeypatch, mux, SESSION)
+    assert _main("resume", "01a1") == 0
+    assert "warning: session 01a1b2c3 was written" in capsys.readouterr().err
+
+
+@pytest.mark.asyncio
+async def test_the_sidebar_confirms_a_recently_written_session(tmp_path, project,
+                                                               _isolated):
+    _three(tmp_path, project, _isolated)
+    os.utime(next((_isolated / ".codex" / "sessions").rglob("*.jsonl")), None)
+    mux = FakeMux()
+    app = _sidebar(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.resume_in_workspace(CODEX_ID)
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ConfirmScreen)
+        assert "may still run in another terminal" in app.screen.message
+        await pilot.press("n")
+        await _settle(app, pilot)
+    assert not mux.spawned
+
+
+def test_a_session_in_two_config_dirs_is_ambiguous(tmp_path, project, _isolated,
+                                                   monkeypatch):
+    alt = tmp_path / "alt"
+    claude_session(_isolated / ".claude", CLAUDE_ID, project, mtime=NOW)
+    claude_session(alt, OTHER_ID, project, mtime=NOW)
+    claude_session(alt, CLAUDE_ID, project, mtime=NOW - 9999)
+    profiles = _profiles(tmp_path, (
+        '[profiles.main]\ncommand = ["claude"]\n'
+        f'[profiles.alt]\ncommand = ["claude"]\nconfig_dir = {json.dumps(str(alt))}\n'
+    ))
+    monkeypatch.setattr(history, "MAX_SESSIONS", 1)
+    sessions = {s.session_id: s for s in resume.all_sessions(profiles)}
+    assert sessions[CLAUDE_ID].homes == (_isolated / ".claude",)
+    with pytest.raises(resume.ResumeRefused, match=r"several .*\(alt, main\)"):
+        resume.match_profile(sessions[CLAUDE_ID], profiles)
+    assert resume.origins([sessions[CLAUDE_ID]], profiles) == {("claude", CLAUDE_ID): "main"}
+
+
+def test_a_folder_that_is_a_file_is_refused(tmp_path, project, _isolated):
+    profiles = _three(tmp_path, project, _isolated)
+    [pi] = [s for s in resume.all_sessions(profiles) if s.harness == "pi"]
+    (tmp_path / "file").write_text("")
+    with pytest.raises(resume.ResumeRefused, match="file of session 01a0c4d5 is not a folder"):
+        resume.plan(pi, profiles, folder=str(tmp_path / "file"))
+
+
+def test_a_stored_full_id_is_completed_without_listing_history(tmp_path, project,
+                                                               _isolated, monkeypatch):
+    profiles = _three(tmp_path, project, _isolated)
+    _store(monkeypatch, [_record("codex", CODEX_ID, project)])
+    monkeypatch.setattr(resume, "past_sessions", lambda profiles: pytest.fail("listed"))
+    found = resume.lookup(profiles, CODEX_ID)
+    assert (found.status, found.title, found.homes) == ("idle", "codex work",
+                                                        (_isolated / ".codex",))
