@@ -15,6 +15,7 @@ from tongs_agents.commands.sidebar import SidebarApp
 from tongs_agents.palette import COMMAND_LINE, RELOAD_PROFILES
 from tongs_agents.sessions_feed import WorkspaceFeed
 from tongs_agents.widgets import agents_panel, command_line
+from tongs_agents.multiplexers import MultiplexerError
 from tongs_agents.widgets.command_line import (
     VERBS,
     CommandError,
@@ -26,6 +27,7 @@ from tongs_agents.widgets.command_line import (
     parse_command,
     register_verb,
 )
+from tongs_agents.widgets.quit_screen import KillScreen, QuitScreen, attach_command
 
 SESSION = "agents"
 SIZE = (60, 30)
@@ -430,3 +432,218 @@ async def test_typed_keys_reach_the_prompt_not_the_sidebar_bindings(projects):
         assert field.styles.border_top[0] in ("", "none")
         assert field.content_region.height == 1
     assert fired == []
+
+
+
+class QuitMux(FakeMux):
+    def __init__(self, fail=None):
+        super().__init__()
+        self.left = []
+        self.fail = fail
+
+    def detach(self, session):
+        if self.fail:
+            raise MultiplexerError(self.fail)
+        self.left.append(("detach", session))
+
+    def kill_session(self, session):
+        if self.fail:
+            raise MultiplexerError(self.fail)
+        self.left.append(("kill", session))
+
+
+async def _quit_dialog(app, pilot, key="q"):
+    await _settle(app, pilot)
+    await pilot.press(key)
+    await pilot.pause()
+    assert isinstance(app.screen, QuitScreen)
+
+
+@pytest.mark.asyncio
+async def test_q_never_quits_only_the_sidebar_and_detach_keeps_everything(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+        assert mux.left == [("detach", SESSION)]
+        await _quit_dialog(app, pilot)
+
+
+@pytest.mark.asyncio
+async def test_kill_needs_a_second_yes_and_ends_the_session(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        assert isinstance(app.screen, KillScreen)
+        await pilot.press("n")
+        await pilot.pause()
+        assert mux.left == [] and app.is_running
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        await pilot.press("y")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    assert mux.left == [("kill", SESSION)]
+    assert app.return_code == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keys", [("enter",), ("space",), ("enter", "enter")])
+async def test_enter_or_space_never_confirms_a_kill(projects, keys):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        assert app.focused.id == "no"
+        await pilot.press(*keys)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+async def test_enter_on_the_quit_dialog_cancels(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        assert app.focused.id == "cancel"
+        await pilot.press("enter")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size", [(38, 30), (44, 30), (60, 30), (100, 30)])
+async def test_a_double_click_on_kill_never_kills(projects, size):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=size) as pilot:
+        await _quit_dialog(app, pilot)
+        kill = app.screen.query_one("#kill").region
+        spot = (kill.x + kill.width // 2, kill.y + kill.height // 2)
+        await pilot.click(offset=spot)
+        await pilot.pause()
+        assert isinstance(app.screen, KillScreen)
+        yes = app.screen.query_one("#yes").region
+        assert not yes.contains(*spot)
+        await pilot.click(offset=spot)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+async def test_yes_kill_clicked_at_once_is_ignored(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        await pilot.click("#yes")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert isinstance(app.screen, KillScreen)
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+async def test_yes_kill_clicked_after_the_grace_period_kills(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        app.screen.grace = 0.0
+        await pilot.click("#yes")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    assert mux.left == [("kill", SESSION)]
+
+
+@pytest.mark.asyncio
+async def test_the_palette_quit_opens_the_dialog(projects):
+    app = _app(QuitMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        [quit_command] = [c for c in app.get_system_commands(app.screen)
+                          if c.callback == app.action_quit]
+        assert "detach or kill" in quit_command.help
+        await quit_command.callback()
+        await pilot.pause()
+        assert isinstance(app.screen, QuitScreen)
+
+
+@pytest.mark.asyncio
+async def test_the_dialog_names_the_command_that_attaches_again(projects):
+    app = _app(QuitMux())
+    async with app.run_test(size=(100, 30)) as pilot:
+        await _quit_dialog(app, pilot)
+        text = " ".join(str(w.render()) for w in app.screen.query("Static"))
+        assert (f"tongs-agents workspace --session {SESSION} --multiplexer zellij"
+                in " ".join(text.split()))
+
+
+def test_the_attach_command_is_shell_quoted():
+    assert attach_command("my agents", "tmux") == (
+        "tongs-agents workspace --session 'my agents' --multiplexer tmux")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key", ["n", "escape", "q"])
+async def test_cancel_leaves_everything_as_it_was(projects, key):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press(key)
+        await pilot.pause()
+        assert not isinstance(app.screen, QuitScreen)
+        assert len(app.screen_stack) == 1 and app.is_running
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+async def test_ctrl_q_opens_the_same_dialog(projects):
+    app = _app(QuitMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot, "ctrl+q")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_detach_is_shown_and_the_sidebar_stays(projects):
+    mux = QuitMux(fail="zellij action detach failed")
+    app = _app(mux)
+    async with app.run_test(size=SIZE, notifications=True) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+        assert any("detach failed" in n.message for n in app._notifications)
+
+
+@pytest.mark.asyncio
+async def test_q_typed_in_the_command_line_does_not_open_the_dialog(projects):
+    app = _app(QuitMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("colon", "q")
+        await pilot.pause()
+        assert app.command_line.input.value == "q"
+        assert not isinstance(app.screen, QuitScreen)

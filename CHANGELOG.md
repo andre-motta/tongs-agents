@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.3 (experimental)
+
+### Changed
+
+- `q` in the sidebar (also `ctrl+q` and the palette) no longer closes the
+  sidebar alone. It asks how to leave the workspace: `d` detaches (back to
+  your shell, every agent keeps running; the dialog shows the command that
+  attaches again), `k` kills the session and every agent after a second
+  confirmation, `n`, Escape or Enter cancels (#134).
+
 ## 0.10.2 (experimental)
 
 Fixes from using the one-agent view of 0.10.1 with many agents.

@@ -85,6 +85,14 @@ class Multiplexer(Protocol):
         """Delete an EXITED session; refuse a running or absent one."""
         ...
 
+    def detach(self, session: str) -> None:
+        """Detach the attached clients from ``session``; every pane keeps running."""
+        ...
+
+    def kill_session(self, session: str) -> None:
+        """End the running ``session`` and every pane in it."""
+        ...
+
     def spawn(
         self,
         session: str,

@@ -424,6 +424,14 @@ class TmuxMultiplexer:
     def session_exists(self, session: str) -> bool:
         return self.session_state(session) == SESSION_RUNNING
 
+    def detach(self, session: str) -> None:
+        """Detach every client attached to the session; its panes keep running."""
+        self._tmux(None, "detach-client", "-s", f"={_session(session)}")
+
+    def kill_session(self, session: str) -> None:
+        """End the session and every pane in it."""
+        self._tmux(None, "kill-session", "-t", f"={_session(session)}")
+
     def delete_session(self, session: str) -> None:
         _session(session)
         raise MultiplexerError(
