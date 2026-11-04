@@ -125,7 +125,8 @@ class ResumePickerScreen(ModalScreen[str | None]):
         self.shown = [session for session in self.sessions
                       if matches(session, self._profile(session), words)]
         options = self.option_list
-        options.set_options(self._options())
+        options.clear_options()
+        options.add_options(self._options())
         if self.shown:
             options.highlighted = 0
 

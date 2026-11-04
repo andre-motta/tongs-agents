@@ -767,15 +767,27 @@ def top_title(client, candidates, wait=1.0):
 
 
 def viewport_columns(target, tab_id):
-    code, out, _ = target.action("list-tabs", "--json")
-    if code != 0 or not out:
-        return None
-    try:
-        tabs = json.loads(out)
-    except ValueError:
-        return None
-    return next((tab.get("viewport_columns") for tab in tabs
-                 if isinstance(tab, dict) and tab.get("tab_id") == tab_id), None)
+    """The tab's viewport width; asks again for ``PANES_RETRY`` seconds on an empty answer.
+
+    zellij 0.44.2 now and then answers list-tabs with nothing, like list-panes.
+    """
+    found = {}
+
+    def once():
+        code, out, _ = target.action("list-tabs", "--json")
+        if code != 0 or not out:
+            return False
+        try:
+            tabs = json.loads(out)
+        except ValueError:
+            return False
+        found["columns"] = next((tab.get("viewport_columns") for tab in tabs
+                                 if isinstance(tab, dict) and tab.get("tab_id") == tab_id),
+                                None)
+        return found["columns"] is not None
+
+    wait_until(once, PANES_RETRY)
+    return found.get("columns")
 
 
 def sidebar_of(panes):
