@@ -10,7 +10,8 @@
   record (`label`), shown in the sidebar row, `agent-status` and the MCP
   tools that list agents, and given to the Zellij or tmux pane, best effort.
   It never changes the profile, harness, session id or command. Rows not
-  started in this workspace are refused (#130).
+  started in this workspace, and agents still starting, are refused. A
+  resume from the sidebar keeps the name (#130).
 
 ## 0.10.1 (experimental)
 

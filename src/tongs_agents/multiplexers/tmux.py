@@ -502,7 +502,7 @@ class TmuxMultiplexer:
         if result is None and pane_name != SIDEBAR_PANE_NAME and (
             self._layout(socket, session) == LAYOUT_SINGLE
         ):
-            named = [] if pane_name is None else ["-n", pane_name]
+            named = [] if pane_name is None else ["-n", _literal(pane_name)]
             result = _run_tmux(self._command(
                 socket, "new-window", "-d", "-t", f"={session}:", *named, *options, "--",
                 *command))

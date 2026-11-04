@@ -9,7 +9,9 @@ effort; when that fails the label is kept and a warning says why.
 
 Only an agent started in this workspace has a launch record to keep the
 name in. Any other row (a discovered or hook-only session) is refused with
-a short message in the prompt's place.
+a short message in the prompt's place, and so is an agent that is still
+starting (its launcher has not claimed the record yet). Notifications show
+the name as plain text, never as Textual markup.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Static
 
 from tongs_agents import launches
-from tongs_agents.launches import LaunchError
+from tongs_agents.launches import STILL_STARTING, LaunchError
 from tongs_agents.widgets.session_table import session_name
 
 REFUSAL_SECONDS = 4.0
@@ -183,6 +185,9 @@ class RenameActions:
         if record is None:
             self.rename_prompt.refuse(f"{session_name(session)}: {NOT_HERE}")
             return
+        if record.state != "running":
+            self.rename_prompt.refuse(f"{session_name(session)}: {STILL_STARTING}")
+            return
         self.rename_prompt.open(record.launch_id, record.label or record.profile,
                                 record.profile)
 
@@ -203,23 +208,23 @@ class RenameActions:
             record = launches.set_label(launch_id, label)
         except (LaunchError, OSError) as error:
             self.call_from_thread(self.notify, str(error), title="Rename failed",
-                                  severity="error", timeout=8)
+                                  severity="error", timeout=8, markup=False)
             return
         shown = record.label or record.profile
         warning = None
-        ref = self.feed.launch_pane(launch_id)
-        if ref is None:
-            warning = "its pane is not recorded yet, so the pane keeps its old name"
-        else:
-            try:
-                self.multiplexer.rename_pane(ref, shown)
-            except Exception as error:  # noqa: BLE001 - best effort, never crash the sidebar
-                detail = getattr(error, "detail", None) or f"{type(error).__name__}: {error}"
-                warning = f"the pane keeps its old name: {detail}"
+        try:
+            ref = self.feed.launch_pane(launch_id)
+            if ref is None:
+                raise LookupError("its pane is no longer recorded")
+            self.multiplexer.rename_pane(ref, shown)
+        except Exception as error:  # noqa: BLE001 - best effort, never crash the sidebar
+            detail = getattr(error, "detail", None) or str(error) or type(error).__name__
+            warning = f"the pane keeps its old name: {detail}"
         self.call_from_thread(self._renamed, shown, warning)
 
     def _renamed(self, shown: str, warning: str | None) -> None:
-        self.notify(f"Renamed to {shown}", title="Rename", timeout=3)
+        self.notify(f"Renamed to {shown}", title="Rename", timeout=3, markup=False)
         if warning is not None:
-            self.notify(warning, title="Pane not renamed", severity="warning", timeout=8)
+            self.notify(warning, title="Pane not renamed", severity="warning", timeout=8,
+                        markup=False)
         self.agents_panel.poll()

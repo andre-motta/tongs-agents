@@ -208,7 +208,7 @@ def spawn_launch(mux: Multiplexer, record: LaunchRecord, *, show: bool = False,
     ref = mux.spawn(
         record.session,
         launcher_argv(record.profile, record.launch_id),
-        name=record.profile,
+        name=record.label or record.profile,
         focus=False,
     )
     report_notices(mux, notices)
@@ -228,7 +228,7 @@ def show_pane(mux: Multiplexer, ref: PaneRef) -> bool:
 def spawn_profiles(
     mux: Multiplexer, session: str, profiles: Iterable[Profile], *,
     folder: str | None = None, args: Iterable[str] = (),
-    notices: list[str] | None = None,
+    notices: list[str] | None = None, label: str | None = None,
 ) -> list[LaunchRecord]:
     """Create a pending record and spawn one launcher pane per profile, in order.
 
@@ -237,7 +237,8 @@ def spawn_profiles(
     once it is up, so the last one ends in view. Raises the first
     MultiplexerError or LaunchError; panes spawned before it stay up, and the
     record of the pane that failed to start is discarded. ``notices`` is
-    passed to ``spawn_launch``.
+    passed to ``spawn_launch``. ``label`` names every record and its pane (a
+    resume carries the label of the launch it resumes).
     """
     records = []
     profiles = list(profiles)
@@ -245,7 +246,7 @@ def spawn_profiles(
         folder, args = check_launch(profile, folder, args)
     for profile in profiles:
         record = launches.create_pending(
-            profile, session, mux.name, folder=folder, args=args,
+            profile, session, mux.name, folder=folder, args=args, label=label,
         )
         try:
             spawn_launch(mux, record, show=True, notices=notices)

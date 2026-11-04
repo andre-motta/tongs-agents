@@ -258,14 +258,15 @@ def _check_text(name: str, value: str | None, *, optional: bool = False) -> None
 
 def create_pending(profile: Profile, session: str, multiplexer: str, *,
                    spawned_by: str | None = None, folder: str | None = None,
-                   args=()) -> LaunchRecord:
+                   args=(), label: str | None = None) -> LaunchRecord:
     """Write a pending record for a pane about to run ``profile``.
 
     ``spawned_by`` is the launch id of the MCP caller that asked for it.
     ``folder`` and ``args`` are the maintainer's choice for this launch only:
     the folder the agent starts in and arguments appended to its command.
     Only the format is checked here; ``workspace_spawn.check_launch`` and the
-    launcher check the folder itself.
+    launcher check the folder itself. ``label`` is a display name carried
+    over from an earlier launch (a resume), checked with ``check_label``.
     """
     _check_text("session", session)
     _check_text("multiplexer", multiplexer)
@@ -274,6 +275,7 @@ def create_pending(profile: Profile, session: str, multiplexer: str, *,
     if folder is not None:
         check_folder(folder)
     args = check_args(args)
+    label = check_label(label)
     record = LaunchRecord(
         launch_id=secrets.token_hex(16),
         profile=profile.name,
@@ -284,6 +286,7 @@ def create_pending(profile: Profile, session: str, multiplexer: str, *,
         spawned_by=spawned_by,
         folder=folder,
         args=args,
+        label=label,
     )
     return _write(record)
 
@@ -309,17 +312,25 @@ def get(launch_id: str) -> LaunchRecord | None:
     return _read(paths.launches_dir() / f"{launch_id}.json")
 
 
+STILL_STARTING = "the agent is still starting; rename it in a moment"
+
+
 def set_label(launch_id: str, label: str | None) -> LaunchRecord:
     """Store ``label`` (checked with ``check_label``) as the launch's display name.
 
     None or empty text removes it, so the profile name shows again. The
     record is rewritten atomically like every other update; nothing else in
-    it changes.
+    it changes. Only a claimed (running) record is relabelled: the launcher
+    rewrites a pending one when it claims it, and a rewrite racing that claim
+    could put the record back to pending. A claimed record is never written
+    by a claim again (a second claim writes a fresh record).
     """
     label = check_label(label)
     record = _read(_record_path(launch_id))
     if record is None:
         raise LaunchError(f"no launch record for id {launch_id}")
+    if record.state != "running":
+        raise LaunchError(STILL_STARTING)
     return _write(replace(record, label=label))
 
 

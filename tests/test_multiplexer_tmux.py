@@ -765,3 +765,12 @@ def test_a_swap_names_the_parked_window_literally(fake, mux):
                                      ("%3", "@4", "alpha", "1", "80")))
     mux.show(ref())
     assert ["rename-window", "-t", "@4", "fix ##130"] in fake.tails()
+
+
+def test_a_parked_window_named_at_spawn_is_named_literally(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("new-window", "%7\n")
+    mux.spawn("agents", ["python", "-m", "x"], name="fix #130")
+    assert fake.tails()[2][:6] == ["new-window", "-d", "-t", "=agents:", "-n", "fix ##130"]
+    assert fake.tails()[3] == ["set-option", "-p", "-t", "%7", tmux_mux.NAME_OPTION,
+                               "fix #130"]

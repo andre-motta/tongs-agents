@@ -7,10 +7,10 @@ import pytest
 
 from tests.test_sidebar import feed, hook_record, pane, record
 from tests.test_workspace_spawn import FakeMux, profile, runtime_dir  # noqa: F401
-from tongs_agents import control, launches, mcp_server
+from tongs_agents import control, launches, mcp_server, paths
 from tongs_agents.commands import supervisor
 from tongs_agents.commands.sidebar import SidebarApp
-from tongs_agents.launches import LaunchRecord
+from tongs_agents.launches import STILL_STARTING, LaunchRecord
 from tongs_agents.models import FleetSession, SessionStatus
 from tongs_agents.multiplexers import PaneInfo, PaneRef
 from tongs_agents.sessions_feed import WorkspaceFeed, visible_sessions
@@ -73,6 +73,7 @@ def test_agent_status_and_its_json_show_the_label():
 
 def test_the_fleet_tools_return_each_session_with_its_label(monkeypatch):
     pending = launches.create_pending(profile("alpha"), SESSION, "zellij")
+    launches.claim(pending.launch_id, 4242, "1", PaneRef("zellij", SESSION, "1", None))
     launches.set_label(pending.launch_id, "reviewer")
     sessions = [
         {"session_id": "one", "status": "running", "needs_attention": False,
@@ -155,20 +156,20 @@ async def test_r_renames_the_selected_agent_and_its_pane():
         assert field.content_region.height == 1
         await pilot.press(*["backspace"] * len("claude-personal"))
         await pilot.press(*"Review qa+", "colon", "slash", "u", "n", "m", "s", "d", "R",
-                          "space", "number_sign", "1", "3", "0")
+                          "r", "space", "number_sign", "1", "3", "0")
         await pilot.pause()
-        assert field.value == "Review qa+:/unmsdR #130"
+        assert field.value == "Review qa+:/unmsdRr #130"
         assert fired == []
         await pilot.press("enter")
         await _settle(app, pilot)
         assert not prompt.has_class("visible")
         assert app.focused is app.agents_panel.table
-        assert _names(app) == ["Review qa+:/unmsdR #130"]
+        assert _names(app) == ["Review qa+:/unmsdRr #130"]
     stored = launches.get(running.launch_id)
-    assert stored.label == "Review qa+:/unmsdR #130"
+    assert stored.label == "Review qa+:/unmsdRr #130"
     assert (stored.profile, stored.harness, stored.pane_id, stored.pid) == (
         running.profile, running.harness, running.pane_id, running.pid)
-    assert mux.renamed == [(PaneRef("zellij", SESSION, "1", None), "Review qa+:/unmsdR #130")]
+    assert mux.renamed == [(PaneRef("zellij", SESSION, "1", None), "Review qa+:/unmsdRr #130")]
 
 
 @pytest.mark.asyncio
@@ -250,6 +251,45 @@ async def test_a_failed_pane_rename_keeps_the_label_and_warns():
         messages = [str(note.message) for note in app._notifications]
         assert any("the pane keeps its old name: no such pane" in m for m in messages)
     assert launches.get(running.launch_id).label == "reviewer"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["a [/] b", "[@click=app.quit]x[/]", "[bold]x"])
+async def test_a_name_with_markup_is_saved_and_notified_as_plain_text(name):
+    running = _running()
+    mux = _mux("1", fail_rename=True)
+    app = _app(mux)
+    async with app.run_test(size=SIZE, notifications=True) as pilot:
+        prompt = await _open(app, pilot)
+        prompt.input.value = name
+        await pilot.press("enter")
+        await _settle(app, pilot)
+        await pilot.pause()
+        assert _names(app) == [name]
+        notes = list(app._notifications)
+        assert [note.message for note in notes if note.title == "Rename"] == [
+            f"Renamed to {name}"]
+        assert all(note.markup is False for note in notes
+                   if note.title in ("Rename", "Pane not renamed"))
+        assert app.is_running
+    assert launches.get(running.launch_id).label == name
+
+
+@pytest.mark.asyncio
+async def test_an_agent_still_starting_is_refused_inline():
+    pending = launches.create_pending(profile("claude-personal"), SESSION, "zellij")
+    before = (paths.launches_dir() / f"{pending.launch_id}.json").read_bytes()
+    mux = _mux("1")
+    app = _app(mux)
+    app.feed.note_spawned(pending.launch_id, PaneRef("zellij", SESSION, "1", None))
+    async with app.run_test(size=SIZE) as pilot:
+        prompt = await _open(app, pilot)
+        assert [row.detail for row in app.agents_panel.sessions] == ["starting"]
+        assert prompt.has_class("refused")
+        assert prompt.message_text == f"claude-personal: {STILL_STARTING}"
+        assert app.focused is app.agents_panel.table
+    assert (paths.launches_dir() / f"{pending.launch_id}.json").read_bytes() == before
+    assert mux.renamed == []
 
 
 def test_the_footer_shows_the_rename_key():

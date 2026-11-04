@@ -300,7 +300,15 @@ title later.
 
 Only an agent started in this workspace has a launch record to keep the name
 in. Any other row, such as a discovered or hook-only session, is refused
-with a short message in the prompt's place.
+with a short message in the prompt's place, and so is an agent that is still
+starting (`STARTING`, its launcher has not claimed the record yet): rename it
+a moment later.
+
+Resuming a renamed agent from the sidebar (`u` on its row, `Resume session…`
+in the palette or `:resume`) gives the new launch the same name, and names
+its pane with it, as long as the earlier launch record is still kept (records
+of ended agents are pruned after seven days). `tongs-agents resume` from a
+shell starts the session under its profile name; rename it in the sidebar.
 
 ## tmux
 

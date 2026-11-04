@@ -6,6 +6,7 @@ a harness. Config dirs and transcripts live under a temporary HOME.
 
 import dataclasses
 import json
+import os
 import time
 from types import SimpleNamespace
 
@@ -21,7 +22,7 @@ from tongs_agents.commands.sidebar import SidebarApp
 from tongs_agents.models import UNRESOLVED_INSTANCE_ID, canonical_session_id
 from tongs_agents.multiplexers import PaneRef
 from tongs_agents.palette import COMMAND_LINE, RESUME_SELECTED, RESUME_SESSION
-from tongs_agents.profiles import load_profiles
+from tongs_agents.profiles import Profile, load_profiles
 from tongs_agents.sessions_feed import WorkspaceFeed
 from tongs_agents.widgets import agents_panel, command_line
 from tongs_agents.widgets.chat_panel import ConfirmScreen
@@ -480,6 +481,46 @@ async def test_the_resume_verb_lists_and_starts_sessions(tmp_path, project, monk
         )
     [record] = launches.list_records()
     assert (record.profile, record.session, record.args) == ("cx", SESSION, ("resume", CODEX_ID))
+
+
+def _labelled_launch(name="reviewer"):
+    old = launches.create_pending(Profile(name="cx", harness="codex", argv=("codex",)),
+                                  SESSION, "zellij")
+    launches.claim(old.launch_id, os.getpid(), "not-this-process",
+                   PaneRef("zellij", SESSION, "9", None))
+    return launches.set_label(old.launch_id, name)
+
+
+def test_previous_label_reads_the_latest_launch_of_the_session(tmp_path, project):
+    old = _labelled_launch()
+    newer = _record("codex", CODEX_ID, project, ts=200)
+    newer["launch"] = {"launch_id": "f" * 32, "profile_id": "cx"}
+    older = _record("codex", CODEX_ID, project, ts=100)
+    older["launch"] = {"launch_id": old.launch_id, "profile_id": "cx"}
+    [session] = resume.recent_sessions([older, newer])
+    assert resume.previous_label(session) == "reviewer"
+    [plain] = resume.recent_sessions([_record("codex", CODEX_ID, project)])
+    assert resume.previous_label(plain) is None
+
+
+@pytest.mark.asyncio
+async def test_resuming_a_renamed_agent_keeps_its_name(tmp_path, project, monkeypatch):
+    _profiles(tmp_path, '[profiles.cx]\ncommand = ["codex"]\n')
+    _codex_transcript(tmp_path / "home" / ".codex")
+    old = _labelled_launch("fix #130")
+    stored = _record("codex", CODEX_ID, project)
+    stored["launch"] = {"launch_id": old.launch_id, "profile_id": "cx"}
+    _store(monkeypatch, [stored])
+    mux = FakeMux()
+    app = _sidebar(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        app.action_command_line()
+        await pilot.pause()
+        await _submit(app, pilot, "resume 019a")
+    [new] = [r for r in launches.list_records() if r.launch_id != old.launch_id]
+    assert (new.profile, new.args, new.label) == ("cx", ("resume", CODEX_ID), "fix #130")
+    assert [call["name"] for call in mux.spawned] == ["fix #130"]
 
 
 def _notes(app, monkeypatch):

@@ -415,10 +415,29 @@ def test_a_replacing_claim_keeps_the_label():
 ])
 def test_invalid_labels_are_refused_and_nothing_is_written(label, message):
     pending = launches.create_pending(PROFILE, "agents", "zellij")
+    launches.claim(pending.launch_id, 4242, "1", PANE)
     before = record_file(pending.launch_id).read_bytes()
     with pytest.raises(LaunchError, match=message):
         launches.set_label(pending.launch_id, label)
     assert record_file(pending.launch_id).read_bytes() == before
+
+
+def test_a_pending_record_is_not_relabelled_so_a_claim_cannot_be_undone():
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    before = record_file(pending.launch_id).read_bytes()
+    with pytest.raises(LaunchError, match="still starting"):
+        launches.set_label(pending.launch_id, "reviewer")
+    assert record_file(pending.launch_id).read_bytes() == before
+    claimed = launches.claim(pending.launch_id, 4242, "1", PANE)
+    assert claimed.launch_id == pending.launch_id and claimed.state == "running"
+
+
+def test_create_pending_takes_a_checked_label():
+    record = launches.create_pending(PROFILE, "agents", "zellij", label=" reviewer ")
+    assert launches.get(record.launch_id).label == "reviewer"
+    assert launches.create_pending(PROFILE, "agents", "zellij", label="").label is None
+    with pytest.raises(LaunchError, match="reserved"):
+        launches.create_pending(PROFILE, "agents", "zellij", label="tongs-agents-home")
 
 
 def test_set_label_needs_an_existing_record():
