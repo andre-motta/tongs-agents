@@ -132,6 +132,10 @@ def _alive(record: LaunchRecord) -> bool:
     return record.process_start is None or info.start_token == record.process_start
 
 
+def _normalized_dir(value: str | None) -> str | None:
+    return os.path.normpath(value) if value else None
+
+
 def _same_dir(left: str, right: str | None) -> bool:
     return right is not None and os.path.normpath(left) == os.path.normpath(right)
 
@@ -260,6 +264,30 @@ class WorkspaceFeed(SessionFeed):
                 record.socket_dir or self.socket_dir,
             )
         return None
+
+    def launched_panes(self) -> list[str]:
+        """Pane ids of this session's claimed launches whose launcher still runs.
+
+        A record must name the feed's socket dir exactly (None only matches
+        None) and must not be replaced by a later claim, so a pane id that
+        now runs something else is never named.
+        """
+        records = self._launch_records()
+        replaced = {record.replaces for record in records if record.replaces}
+        wanted = _normalized_dir(self.socket_dir)
+        panes = []
+        for record in records:
+            if (
+                record.state != "running"
+                or not record.pane_id
+                or record.launch_id in replaced
+                or _normalized_dir(record.socket_dir) != wanted
+                or not self._alive(record)
+            ):
+                continue
+            if record.pane_id not in panes:
+                panes.append(record.pane_id)
+        return panes
 
     def _pane_id(self, record: LaunchRecord, spawned: dict[str, PaneRef]) -> str | None:
         if record.state == "running":

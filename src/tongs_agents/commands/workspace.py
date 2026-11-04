@@ -21,9 +21,9 @@ Zellij, so agent panes never inherit a Zellij pane identity.
 ``[workspace]`` in the config file supplies the session name, the
 multiplexer, whether to add the tongs tab, the profiles a new session
 starts with when no ``--profile`` is given, and the layout of a new session
-(#124): ``single`` (default) shows one agent at a time beside the sidebar, a
-Zellij stack headed by a ``tongs-agents-home`` pane or a tmux session whose
-other agents are parked in their own windows; ``split`` lays agents out side
+(#124): ``single`` (default) shows one agent at a time beside the sidebar,
+pinned floating Zellij panes over a ``tongs-agents-home`` pane or a tmux
+session whose other agents are parked in their own windows; ``split`` lays agents out side
 by side. The flags override it. A bare
 ``tongs-agents`` runs this verb with ``empty`` set: no profiles, not even the
 default ones, so the workspace opens with only the sidebar (and the tongs

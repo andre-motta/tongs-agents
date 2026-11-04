@@ -451,15 +451,17 @@ def test_template_names_the_sidebar_and_its_module():
     }
 
 
-def test_single_layout_stacks_a_home_pane_beside_the_sidebar():
+def test_single_layout_tiles_a_home_pane_beside_a_resizable_sidebar():
     text = workspace.render_layout("/usr/bin/python3", "agents", TOKEN, None)
     assert "BEGIN@" not in text and "END@" not in text
     assert text.count(f'pane name="{SIDEBAR_PANE_NAME}"') == 1
     assert 'pane split_direction="vertical"' in text
-    assert "pane stacked=true {" in text
-    stack = text[text.index("pane stacked=true"):]
-    assert f'pane name="{HOME_PANE_NAME}" command="/usr/bin/python3"' in stack
-    assert f'"-m" "{workspace_spawn.HOME_MODULE}" "{workspace_spawn.HOME_COMMAND}"' in stack
+    assert "stacked" not in text
+    assert f'pane name="{SIDEBAR_PANE_NAME}" size="25%" focus=true' in text
+    assert not re.search(r"size=\d", text[text.index("split_direction"):])
+    home = text[text.index(f'pane name="{HOME_PANE_NAME}"'):]
+    assert home.startswith(f'pane name="{HOME_PANE_NAME}" command="/usr/bin/python3" {{')
+    assert f'"-m" "{workspace_spawn.HOME_MODULE}" "{workspace_spawn.HOME_COMMAND}"' in home
     assert text.index(SIDEBAR_PANE_NAME) < text.index(HOME_PANE_NAME)
     assert f'"--compact" "--layout" "single" "--spawn-request" "{TOKEN}"' in text
     assert text.count("{") == text.count("}")
@@ -619,7 +621,7 @@ def test_new_session_defaults_to_the_single_layout(env, runtime_dir):  # noqa: F
     assert _run("--profile", "alpha") == "exec"
     (layout,) = (runtime_dir / "layouts").iterdir()
     text = layout.read_text()
-    assert f'pane name="{HOME_PANE_NAME}"' in text and "stacked=true" in text
+    assert f'pane name="{HOME_PANE_NAME}"' in text and "stacked" not in text
 
 
 def test_layout_split_in_the_config_renders_the_split_layout(

@@ -18,6 +18,13 @@ the same spawn path as ``tongs-agents run``.
 session, with history and Tab completion; the result or the error shows
 under the prompt and Escape closes it.
 
+When its own pane changes size (the sidebar or the terminal was resized), it
+asks the multiplexer, debounced and in a worker thread, to move the panes it
+launched into this session onto the agent area again
+(``Multiplexer.align_agents``: Zellij's pinned floating agent panes follow
+the home pane). Other floating panes are never moved, and a failure is
+ignored.
+
 ``u`` (or the palette's Resume in workspace) resumes the selected row's
 harness session in this session; the palette's Resume session… lists the
 recent sessions of the store to pick one (``commands.resume``). A session
@@ -54,7 +61,7 @@ import os
 import sys
 import threading
 
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 
@@ -100,6 +107,7 @@ from tongs_agents.widgets.shell import AppFooter, AppHeader
 NAME = "sidebar"
 HELP = "Run the workspace sidebar inside a Zellij session"
 EXIT_USAGE = 2
+ALIGN_DELAY = 0.4
 
 
 def add_arguments(parser):
@@ -111,7 +119,7 @@ def add_arguments(parser):
     parser.add_argument(
         LAYOUT_OPTION, choices=LAYOUTS, default=None,
         help="The session's layout; the workspace layout sets it so that panes can find "
-             "the agent stack again after its home pane was closed",
+             "the agent area again after its home pane was closed",
     )
 
 
@@ -187,6 +195,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         config: AppConfig | None = None,
         config_error: str | None = None,
         approval_interval: float = APPROVAL_POLL_SECONDS,
+        align_delay: float = ALIGN_DELAY,
     ) -> None:
         super().__init__()
         self.init_shell(config, multiplexer, session)
@@ -207,6 +216,9 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         self.spawn_failures: list[str] = []
         self.command_context = CommandContext(multiplexer, session, load_profiles)
         self.init_approvals(self.feed, approval_interval)
+        self.align_delay = align_delay
+        self._align_timer = None
+        self._align_lock = threading.Lock()
 
     def compose(self) -> ComposeResult:
         yield AppHeader()
@@ -234,6 +246,26 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
             self.consume_spawn_request()
         self.chat_housekeeping()
         self.mount_approvals()
+
+    def on_resize(self, event: events.Resize) -> None:
+        if self._align_timer is not None:
+            self._align_timer.stop()
+        self._align_timer = self.set_timer(self.align_delay, self.align_agents)
+
+    @work(thread=True, exclusive=True, group="align-agents")
+    def align_agents(self) -> None:
+        """Move this session's launched panes onto the agent area; best effort.
+
+        An exclusive worker does not stop a thread that already runs, so runs
+        are serialized: each reads the geometry after the previous one moved.
+        """
+        with self._align_lock:
+            try:
+                panes = self.feed.launched_panes()
+                if panes:
+                    self.multiplexer.align_agents(self.session, panes)
+            except Exception:  # noqa: BLE001, S110 - never disturb the sidebar for a layout nicety
+                pass
 
     def palette_commands(self) -> list[PaletteCommand]:
         commands = super().palette_commands()

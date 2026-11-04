@@ -977,28 +977,31 @@ def test_package_exports_the_interface():
     assert zellij_binary.ZELLIJ_CEILING == (0, 45, 1)
 
 
-# One agent at a time (#124): the home pane heads a stacked column beside the sidebar.
+# One agent at a time (#124): agents open as pinned floating panes over the home pane.
 
-SIDEBAR = _pane(0, title="tongs-agents-sidebar", pane_x=0, pane_columns=40)
-HOME = _pane(1, title=multiplexers.HOME_PANE_NAME, pane_x=40, pane_columns=120,
-             is_suppressed=True)
+SIDEBAR = _pane(0, title="tongs-agents-sidebar", pane_x=0, pane_y=1, pane_columns=40,
+                pane_rows=38)
+HOME = _pane(1, title=multiplexers.HOME_PANE_NAME, pane_x=40, pane_y=1, pane_columns=120,
+             pane_rows=38)
+OVER_HOME = ["-x", "40", "-y", "1", "--width", "120", "--height", "38"]
 
 
-def _stack(*ids, **extra):
-    return [_pane(pane_id, title=f"agent-{pane_id}", pane_x=40, pane_columns=120, **extra)
-            for pane_id in ids]
+def _agents(*ids, **extra):
+    geometry = dict(is_floating=True, pane_x=40, pane_y=1, pane_columns=120, pane_rows=38)
+    geometry.update(extra)
+    return [_pane(pane_id, title=f"agent-{pane_id}", **geometry) for pane_id in ids]
 
 
 def _listing(*entries):
     return (0, json.dumps([PLUGIN_PANE, *entries]), "")
 
 
-def _tabs(rows, tab_id=0):
+def _tabs(rows=38, tab_id=0, columns=160):
     return (0, json.dumps([
         {"tab_id": tab_id, "position": 0, "name": "agents", "viewport_rows": rows,
-         "viewport_columns": 160, "display_area_rows": rows + 3, "active": True},
+         "viewport_columns": columns, "display_area_rows": rows + 3, "active": True},
         {"tab_id": tab_id + 1, "position": 1, "name": "tongs", "viewport_rows": rows,
-         "viewport_columns": 160, "display_area_rows": rows + 3, "active": False},
+         "viewport_columns": columns, "display_area_rows": rows + 3, "active": False},
     ]), "")
 
 
@@ -1006,39 +1009,35 @@ def _actions(fake):
     return [argv[argv.index("action") + 1:] for argv, _ in fake.calls]
 
 
-def test_spawn_with_a_home_pane_stacks_into_its_tab_and_reads_back(fake):
+def test_spawn_with_a_home_pane_opens_a_pinned_floating_pane_over_it(fake):
     fake.responses["list-panes"] = _sequence(
-        _listing(SIDEBAR, HOME, *_stack(2)),
-        _listing(SIDEBAR, HOME, *_stack(2, 5)),
+        _listing(SIDEBAR, HOME, *_agents(2)),
+        _listing(SIDEBAR, HOME, *_agents(2, 5)),
     )
-    fake.responses["list-tabs"] = _tabs(42)
     fake.responses["new-pane"] = (0, "terminal_5\n", "")
     ref = _mux().spawn("agents", ["claude"], name="claude", cwd="/work/example")
     assert ref == PaneRef("zellij", "agents", "5", SOCKET_DIR)
     assert _actions(fake) == [
         ["list-panes", "--json"],
-        ["list-tabs", "--json"],
-        ["new-pane", "--tab-id", "0", "--floating", "--name", "claude",
-         "--cwd", "/work/example", "--", "claude"],
-        ["stack-panes", "--", "terminal_1", "terminal_5"],
+        ["new-pane", "--tab-id", "0", "--floating", "--pinned", "true", *OVER_HOME,
+         "--name", "claude", "--cwd", "/work/example", "--", "claude"],
         ["list-panes", "--json"],
     ]
-    assert not any("--stacked" in argv for argv, _ in fake.calls)
+    assert not any("--stacked" in argv or "stack-panes" in argv for argv, _ in fake.calls)
 
 
-def test_the_stack_uses_the_home_panes_tab_not_the_focused_one(fake):
+def test_the_overlay_uses_the_home_panes_tab_not_the_focused_one(fake):
     home = dict(HOME, tab_id=3)
     fake.responses["list-panes"] = _sequence(
         _listing(dict(SIDEBAR, tab_id=3), home),
-        _listing(dict(SIDEBAR, tab_id=3), home, *_stack(6, tab_id=3)),
+        _listing(dict(SIDEBAR, tab_id=3), home, *_agents(6, tab_id=3)),
     )
-    fake.responses["list-tabs"] = _tabs(42, tab_id=3)
     fake.responses["new-pane"] = (0, "terminal_6\n", "")
     assert _mux().spawn("agents", ["claude"]).pane_id == "6"
-    assert _actions(fake)[2][:4] == ["new-pane", "--tab-id", "3", "--floating"]
+    assert _actions(fake)[1][:4] == ["new-pane", "--tab-id", "3", "--floating"]
 
 
-def test_the_sidebar_is_never_stacked(fake):
+def test_the_sidebar_is_never_floated(fake):
     fake.responses["new-pane"] = (0, "terminal_8\n", "")
     _mux().spawn("agents", ["python3"], name="tongs-agents-sidebar")
     assert _actions(fake) == [
@@ -1053,68 +1052,63 @@ def test_a_floating_home_pane_is_not_an_anchor(fake):
     assert [action[0] for action in _actions(fake)] == ["list-panes", "new-pane"]
 
 
-def test_a_full_stack_is_refused_before_any_pane_starts(fake):
-    # A 8-row viewport fits 3 stack members; home plus two agents fill it.
-    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2, 3))
-    fake.responses["list-tabs"] = _tabs(8)
-    with pytest.raises(MultiplexerError, match="agent stack is full: 3 panes fill a 8-row"):
-        _mux().spawn("agents", ["claude"])
-    assert [action[0] for action in _actions(fake)] == ["list-panes", "list-tabs"]
+def test_many_agents_have_no_capacity_limit(fake):
+    many = _agents(*range(2, 62))
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, HOME, *many), _listing(SIDEBAR, HOME, *many, *_agents(70)))
+    fake.responses["new-pane"] = (0, "terminal_70\n", "")
+    assert _mux().spawn("agents", ["claude"]).pane_id == "70"
+    assert "list-tabs" not in [action[0] for action in _actions(fake)]
+    assert not hasattr(mux_zellij, "stack_capacity")
 
 
-def test_exited_stack_members_count_toward_the_capacity(fake):
-    fake.responses["list-panes"] = _listing(
-        SIDEBAR, HOME, *_stack(2), *_stack(3, exited=True, is_held=True))
-    fake.responses["list-tabs"] = _tabs(8)
-    with pytest.raises(MultiplexerError, match="stack is full"):
-        _mux().spawn("agents", ["claude"])
-
-
-def test_stack_capacity_leaves_a_margin_of_title_lines():
-    assert mux_zellij.stack_capacity(21) == 16
-    assert mux_zellij.stack_capacity(42) == 37
-    assert mux_zellij.stack_capacity(3) == 1
-
-
-@pytest.mark.parametrize("landed", [
-    dict(pane_x=0, pane_columns=40),
-    dict(tab_id=1),
-    dict(is_floating=True),
-])
-def test_a_pane_that_does_not_join_the_stack_is_closed(fake, landed):
-    stray = dict(_stack(5)[0], **landed)
+@pytest.mark.parametrize("landed", [dict(is_floating=False), dict(tab_id=1)])
+def test_a_pane_that_does_not_float_in_the_home_tab_is_closed(fake, landed):
+    stray = dict(_agents(5)[0], **landed)
     fake.responses["list-panes"] = _sequence(
         _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, stray))
-    fake.responses["list-tabs"] = _tabs(42)
     fake.responses["new-pane"] = (0, "terminal_5\n", "")
-    with pytest.raises(MultiplexerError, match="closed new pane 5: it did not join"):
+    with pytest.raises(MultiplexerError, match="closed new pane 5: it did not open as a floating"):
         _mux().spawn("agents", ["claude"])
     actions = _actions(fake)
     assert actions[-1] == ["close-pane", "--pane-id", "terminal_5"]
     assert actions.count(["list-panes", "--json"]) == 1 + mux_zellij.READBACK_ATTEMPTS
 
 
-def test_a_failed_stack_panes_closes_the_new_pane(fake):
-    fake.responses["list-panes"] = _listing(SIDEBAR, HOME)
-    fake.responses["list-tabs"] = _tabs(42)
+def test_a_late_listing_is_read_back_again(fake):
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, *_agents(5)))
     fake.responses["new-pane"] = (0, "terminal_5\n", "")
-    fake.responses["stack-panes"] = (1, "", "error: unrecognized subcommand")
-    with pytest.raises(MultiplexerError, match="closed new pane 5: zellij action stack-panes"):
-        _mux().spawn("agents", ["claude"])
-    assert _actions(fake)[-1] == ["close-pane", "--pane-id", "terminal_5"]
+    assert _mux().spawn("agents", ["claude"]).pane_id == "5"
+    assert "close-pane" not in [action[0] for action in _actions(fake)]
 
 
-def test_a_list_tabs_without_the_home_tab_is_refused(fake):
-    fake.responses["list-panes"] = _listing(SIDEBAR, HOME)
-    fake.responses["list-tabs"] = _tabs(42, tab_id=7)
-    with pytest.raises(MultiplexerError, match="does not list tab 0"):
-        _mux().spawn("agents", ["claude"])
-    assert "new-pane" not in [action[0] for action in _actions(fake)]
+def test_a_stacked_home_pane_from_0_10_1_covers_its_whole_column(fake):
+    # 0.10.1 stacked agents under the home pane; the collapsed home is one row.
+    home = dict(HOME, pane_rows=1)
+    stacked = [_pane(2, title="agent-2", pane_x=40, pane_y=2, pane_columns=120, pane_rows=1),
+               _pane(3, title="agent-3", pane_x=40, pane_y=3, pane_columns=120, pane_rows=36,
+                     is_suppressed=True)]
+    fake.responses["list-panes"] = _sequence(
+        _listing(SIDEBAR, home, *stacked), _listing(SIDEBAR, home, *stacked, *_agents(9)))
+    fake.responses["new-pane"] = (0, "terminal_9\n", "")
+    assert _mux().spawn("agents", ["claude"]).pane_id == "9"
+    assert _actions(fake)[1][6:14] == OVER_HOME
 
 
-def test_list_panes_keeps_collapsed_and_suppressed_stack_members(fake):
+def test_a_0_45_1_stack_reports_every_member_at_the_column_geometry(fake):
+    # Recorded on 0.45.1: collapsed members are is_suppressed with the full box.
+    stacked = [dict(HOME, pane_columns=80, pane_rows=37, is_suppressed=True),
+               _pane(2, title="s1", pane_x=40, pane_y=1, pane_columns=80, pane_rows=37,
+                     is_suppressed=True),
+               _pane(3, title="s2", pane_x=40, pane_y=1, pane_columns=80, pane_rows=37)]
+    region = _mux()._agent_region("agents", [PLUGIN_PANE, SIDEBAR, *stacked])
+    assert region == (0, (40, 1, 80, 37), False)
+
+
+def test_list_panes_keeps_floating_and_suppressed_panes(fake):
     fake.responses["list-panes"] = _listing(
-        SIDEBAR, HOME, *_stack(2, is_suppressed=True), *_stack(3, pane_rows=1))
+        SIDEBAR, HOME, *_agents(2), _pane(3, is_suppressed=True))
     panes = _mux().list_panes("agents")
     assert [pane.ref.pane_id for pane in panes] == ["0", "1", "2", "3"]
     assert not any(pane.exited for pane in panes)
@@ -1147,10 +1141,9 @@ def test_focus_still_fails_when_the_refused_pane_is_shown_nowhere(fake):
     assert result.state == "failed" and "focus-pane-id failed" in result.selection.detail
 
 
-def test_a_focused_stacked_spawn_selects_the_new_pane(fake):
+def test_a_focused_overlay_spawn_selects_the_new_pane(fake):
     fake.responses["list-panes"] = _sequence(
-        _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, *_stack(5)))
-    fake.responses["list-tabs"] = _tabs(42)
+        _listing(SIDEBAR, HOME), _listing(SIDEBAR, HOME, *_agents(5)))
     fake.responses["new-pane"] = (0, "terminal_5\n", "")
     fake.responses["list-clients"] = _sequence(
         _clients("1 terminal_0 sidebar\n"), _clients("1 terminal_5 chat\n"))
@@ -1187,91 +1180,76 @@ def test_focus_reads_the_already_focused_refusal_from_stderr(fake):
     assert result.selection.detail == "pane already focused"
 
 
-# The home pane was closed (#124 follow-up): the marked sidebar finds the stack again.
+# The home pane was closed (#124 follow-up): the marked sidebar locates the agent area.
 
 MARKED = dict(SIDEBAR, terminal_command=(
     "/usr/bin/python3 -m tongs_agents.commands.sidebar --compact --layout single "
     "--spawn-request 0123"))
 
 
-def test_a_closed_home_pane_is_reopened_in_the_agent_column(fake):
-    home = _pane(9, title=multiplexers.HOME_PANE_NAME, pane_x=40, pane_columns=120)
+def test_without_its_home_pane_the_area_is_right_of_the_sidebar(fake):
+    tiled = _pane(3, title="other", pane_x=40, pane_y=1, pane_columns=120, pane_rows=38)
     fake.responses["list-panes"] = _sequence(
-        _listing(MARKED, *_stack(3, 2)),
-        _listing(MARKED, *_stack(3, 2), home),
-        _listing(MARKED, *_stack(3, 2), home),
-        _listing(MARKED, *_stack(3, 2), home, *_stack(10)),
-    )
-    fake.responses["list-tabs"] = _tabs(42)
-    fake.responses["new-pane"] = _sequence(
-        (0, "terminal_9\n", ""), (0, "terminal_10\n", ""))
-    ref = _mux().spawn("agents", ["claude"], name="claude")
-    assert ref.pane_id == "10"
-    new_panes = [action for action in _actions(fake) if action[0] == "new-pane"]
-    assert new_panes[0][:6] == ["new-pane", "--tab-id", "0", "--floating", "--name",
-                                multiplexers.HOME_PANE_NAME]
-    assert new_panes[0][-3:] == ["-m", "tongs_agents.workspace_spawn", "home"]
-    stacks = [action for action in _actions(fake) if action[0] == "stack-panes"]
-    assert stacks == [["stack-panes", "--", "terminal_2", "terminal_9"],
-                      ["stack-panes", "--", "terminal_9", "terminal_10"]]
-    assert _mux().take_notices() == []
-
-
-def test_an_exited_agent_is_the_anchor_only_without_a_live_one(fake):
-    entries = [MARKED, *_stack(2, exited=True, is_held=True), *_stack(5)]
-    assert mux_zellij._agent_column(entries, MARKED)[0]["id"] == 2
-    column = mux_zellij._agent_column(entries, MARKED)
-    assert min(column, key=lambda entry: (entry["exited"], entry["id"]))["id"] == 5
-
-
-def test_the_agent_column_is_the_fullest_one_beside_the_sidebar(fake):
-    entries = [
-        MARKED, _pane(7, title="split", pane_x=0, pane_columns=40),
-        *_stack(4, 5), _pane(3, title="other", pane_x=100, pane_columns=60),
-        *_stack(8, tab_id=1),
+        _listing(MARKED, tiled), _listing(MARKED, tiled, *_agents(10)))
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    fake.responses["new-pane"] = (0, "terminal_10\n", "")
+    mux = _mux()
+    assert mux.spawn("agents", ["claude"], name="claude").pane_id == "10"
+    assert _actions(fake)[:3] == [
+        ["list-panes", "--json"],
+        ["list-tabs", "--json"],
+        ["new-pane", "--tab-id", "0", "--floating", "--pinned", "true", *OVER_HOME,
+         "--name", "claude", "--", "claude"],
     ]
-    assert [entry["id"] for entry in mux_zellij._agent_column(entries, MARKED)] == [4, 5]
+    assert mux.take_notices() == []
+    assert not any(action[0] == "new-pane" and multiplexers.HOME_PANE_NAME in action
+                   for action in _actions(fake))
 
 
-def test_a_home_pane_that_does_not_join_leaves_the_agent_as_anchor(fake):
-    stray = dict(_pane(9, title=multiplexers.HOME_PANE_NAME), is_floating=True)
+def test_a_sidebar_filling_its_tab_is_covered_on_the_right_with_a_notice(fake):
+    full = dict(MARKED, pane_columns=160)
     fake.responses["list-panes"] = _sequence(
-        _listing(MARKED, *_stack(2)),
-        *[_listing(MARKED, *_stack(2), stray)] * mux_zellij.READBACK_ATTEMPTS,
-        _listing(MARKED, *_stack(2)),
-        _listing(MARKED, *_stack(2, 10)),
-    )
-    fake.responses["list-tabs"] = _tabs(42)
-    fake.responses["new-pane"] = _sequence(
-        (0, "terminal_9\n", ""), (0, "terminal_10\n", ""))
-    assert _mux().spawn("agents", ["claude"]).pane_id == "10"
-    actions = _actions(fake)
-    assert ["close-pane", "--pane-id", "terminal_9"] in actions
-    assert actions[-2] == ["stack-panes", "--", "terminal_2", "terminal_10"]
+        _listing(full), _listing(full, *_agents(4, pane_x=40)))
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    mux = _mux()
+    assert mux.spawn("agents", ["claude"], name="claude").pane_id == "4"
+    assert _actions(fake)[2][6:14] == OVER_HOME
+    [notice] = mux.take_notices()
+    assert "sidebar fills its tab" in notice and "right three quarters" in notice
+    assert mux.take_notices() == []
 
 
-def test_a_full_stack_without_its_home_pane_is_still_refused(fake):
-    fake.responses["list-panes"] = _listing(MARKED, *_stack(2, 3, 4))
-    fake.responses["list-tabs"] = _tabs(8)
-    with pytest.raises(MultiplexerError, match="agent stack is full"):
+def test_a_failed_spawn_over_the_sidebar_leaves_no_notice(fake):
+    full = dict(MARKED, pane_columns=160)
+    fake.responses["list-panes"] = _listing(full)
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    fake.responses["new-pane"] = (0, "terminal_4\n", "")
+    mux = _mux()
+    with pytest.raises(MultiplexerError, match="closed new pane 4"):
+        mux.spawn("agents", ["claude"])
+    assert mux.take_notices() == []
+
+
+def test_align_over_a_covered_sidebar_queues_no_notice(fake):
+    full = dict(MARKED, pane_columns=160)
+    fake.responses["list-panes"] = _listing(full, *_agents(4, pane_x=10))
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    mux = _mux()
+    assert mux.align_agents("agents", ["4"]) == ["4"]
+    assert mux.take_notices() == []
+
+
+def test_a_list_tabs_without_the_sidebars_tab_is_refused(fake):
+    fake.responses["list-panes"] = _listing(MARKED)
+    fake.responses["list-tabs"] = _tabs(tab_id=7)
+    with pytest.raises(MultiplexerError, match="does not list tab 0"):
         _mux().spawn("agents", ["claude"])
     assert "new-pane" not in [action[0] for action in _actions(fake)]
 
 
-def test_a_gone_stack_falls_back_to_a_plain_pane_with_a_notice(fake):
-    fake.responses["list-panes"] = _listing(MARKED)
-    fake.responses["new-pane"] = (0, "terminal_4\n", "")
-    mux = _mux()
-    assert mux.spawn("agents", ["claude"], name="claude").pane_id == "4"
-    assert _actions(fake) == [["list-panes", "--json"],
-                              ["new-pane", "--name", "claude", "--", "claude"]]
-    [notice] = mux.take_notices()
-    assert "agent stack is gone" in notice and "side by side" in notice
-    assert mux.take_notices() == []
-
-
 def test_an_unmarked_session_without_a_home_pane_stays_silent(fake):
-    fake.responses["list-panes"] = _listing(SIDEBAR, *_stack(2))
+    fake.responses["list-panes"] = _listing(SIDEBAR, _pane(2, pane_x=40))
     fake.responses["new-pane"] = (0, "terminal_4\n", "")
     mux = _mux()
     mux.spawn("agents", ["claude"])
@@ -1283,18 +1261,18 @@ def test_an_unmarked_session_without_a_home_pane_stays_silent(fake):
 
 def test_layout_reads_the_home_pane_or_a_marked_sidebar(fake):
     mux = _mux()
-    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2))
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_agents(2))
     assert mux.layout("agents") == "single"
     fake.responses["list-panes"] = _listing(dict(MARKED, exited=True, is_floating=True))
     assert mux.layout("agents") == "single"
-    fake.responses["list-panes"] = _listing(SIDEBAR, *_stack(2))
+    fake.responses["list-panes"] = _listing(SIDEBAR, *_agents(2))
     assert mux.layout("agents") is None
 
 
 def test_a_readded_marked_sidebar_restores_home_recovery(fake):
     # ensure_sidebar re-adds the sidebar with the layout the session reports.
     readded = dict(MARKED, id=6)
-    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_stack(2))
+    fake.responses["list-panes"] = _listing(SIDEBAR, HOME, *_agents(2))
     argv = workspace_spawn.sidebar_argv(layout=_mux().layout("agents"))
     assert argv[-2:] == ["--layout", "single"]
     readded["terminal_command"] = " ".join(argv)
@@ -1323,3 +1301,49 @@ def test_rename_pane_failure_is_an_error(fake):
     fake.responses["rename-pane"] = (1, "", "no such pane")
     with pytest.raises(MultiplexerError, match="rename-pane"):
         _mux().rename_pane(REF, "alpha")
+
+
+# Following resizes: the sidebar asks to move its agents onto the agent area.
+
+def test_align_moves_only_the_given_floating_panes_that_moved_away(fake):
+    narrower = dict(HOME, pane_x=60, pane_columns=100)
+    fake.responses["list-panes"] = _listing(
+        dict(SIDEBAR, pane_columns=60), narrower,
+        *_agents(2, 3),
+        *_agents(4, pane_x=60, pane_columns=100),
+        *_agents(5),
+        *_agents(6, tab_id=1),
+        _pane(7, pane_x=60, pane_y=1, pane_columns=100, pane_rows=38),
+    )
+    moved = _mux().align_agents("agents", ["2", "3", "4", "6", "7", "99"])
+    assert moved == ["2", "3"]
+    target = ["-x", "60", "-y", "1", "--width", "100", "--height", "38", "--pinned", "true"]
+    assert _actions(fake) == [
+        ["list-panes", "--json"],
+        ["change-floating-pane-coordinates", "--pane-id", "terminal_2", *target],
+        ["change-floating-pane-coordinates", "--pane-id", "terminal_3", *target],
+    ]
+
+
+def test_align_follows_the_area_beside_a_marked_sidebar(fake):
+    fake.responses["list-panes"] = _listing(dict(MARKED, pane_columns=50), *_agents(2))
+    fake.responses["list-tabs"] = _tabs(columns=160)
+    mux = _mux()
+    assert mux.align_agents("agents", ["2"]) == ["2"]
+    assert _actions(fake)[-1][-10:] == ["-x", "50", "-y", "1", "--width", "110",
+                                        "--height", "38", "--pinned", "true"]
+    assert mux.take_notices() == []
+
+
+def test_align_moves_nothing_without_an_agent_area_or_panes(fake):
+    fake.responses["list-panes"] = _listing(SIDEBAR, *_agents(2))
+    mux = _mux()
+    assert mux.align_agents("agents", ["2"]) == []
+    assert mux.align_agents("agents", []) == []
+    assert _actions(fake) == [["list-panes", "--json"]]
+
+
+def test_align_refuses_a_pane_id_that_is_not_decimal(fake):
+    with pytest.raises(MultiplexerError, match="pane id"):
+        _mux().align_agents("agents", ["2; rm"])
+    assert fake.calls == []

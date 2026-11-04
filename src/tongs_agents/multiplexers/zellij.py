@@ -16,32 +16,35 @@ and unlinked, and a bounded `subscribe --format json` stream. `action` exits 0
 for an unknown pane id, so callers verify the pane first (control.py); the
 adapter holds no policy.
 
-A ``single`` workspace session (#124) has a ``tongs-agents-home`` pane at the
-head of a ``stacked=true`` column beside the sidebar. Every pane but the
-sidebar is then opened in that pane's tab with ``new-pane --tab-id N
---floating`` and tiled into the stack with ``stack-panes``. ``new-pane
+A ``single`` workspace session (#124) has a tiled ``tongs-agents-home``
+pane beside the sidebar. Every pane but the sidebar opens over it as a pinned
+floating pane: ``new-pane --tab-id N --floating --pinned true`` with ``-x``,
+``-y``, ``--width`` and ``--height`` set to the agent region, which is the
+home pane's geometry from ``list-panes --json`` (the coordinates
+``new-pane`` takes, tab bar included). Agents at the same geometry overlap;
+``focus-pane-id`` raises one to the top, and a pinned pane stays shown while
+the sidebar has the focus (a plain floating layer hides then). ``new-pane
 --stacked`` is never used: it stacks onto whichever pane is focused. Nor is a
 tiled ``new-pane``: it splits the tab's focused pane and, when that pane is
 too small to split (a short sidebar, a held one-row pane), silently vanishes
 with its process still running, while a floating pane always has room.
-``stack-panes`` exits 0 even when it did nothing, so membership is read back
-(same ``tab_id``, ``pane_x`` and ``pane_columns`` as the home pane) and a pane
-that did not join is closed again. A stack fits ``viewport_rows`` minus five
-members; past that zellij leaves new panes out of it, so a full stack is
-refused before anything starts. Selecting a stacked pane is the ordinary
-``focus-pane-id``, which expands it and collapses the rest. Collapsed panes
-keep running and stay listed (0.45.1 reports them ``is_suppressed``, which
-never means hidden or gone here).
+Placement is read back (the new pane is floating in the home pane's tab) and
+a pane that is not is closed again. ``list-panes`` reports no pinned flag
+(``dump-layout`` does).
+``align_agents`` moves given floating panes to the current agent region with
+``change-floating-pane-coordinates --pinned true`` (the sidebar calls it when
+its own pane is resized). A session created by 0.10.1, whose home pane heads a
+``stacked=true`` column, uses that whole column as the region; the agents
+stacked there stay tiled under the floating ones.
 
 The home pane can be closed. When it is gone but the sidebar pane runs with
-``--layout single`` (the workspace layout marks it), the next spawn opens a
-new home pane and stacks it onto a pane of the agent column in the sidebar's
-tab (the column with most tiled panes beside the sidebar), then stacks the
-new pane onto it as usual; if the home pane does not join, the column's pane
-anchors the stack itself. Only when that column is gone too does the pane
-open with a plain ``new-pane``, and ``take_notices`` returns a notice saying
-so. A session whose sidebar carries no marker (split, or created before it
-existed) keeps the plain placement silently.
+``--layout single`` (the workspace layout marks it), the region is what lies
+right of the sidebar in its tab (same rows, up to ``viewport_columns`` of
+``list-tabs``). When the sidebar fills the tab (closing the home pane gives it
+the space), the region is the sidebar's right three quarters and, once a
+pane opened there, ``take_notices`` returns a notice saying so. A session whose sidebar carries
+no marker (split, or created before it existed) keeps the plain placement
+silently.
 """
 
 from __future__ import annotations
@@ -52,7 +55,6 @@ import re
 import select
 import stat
 import subprocess
-import sys
 import tempfile
 import time
 from collections.abc import Iterator
@@ -60,8 +62,6 @@ from collections.abc import Iterator
 from tongs_agents import paths
 from tongs_agents.models import FocusOperation, FocusResult
 from tongs_agents.multiplexers.base import (
-    HOME_COMMAND,
-    HOME_MODULE,
     HOME_PANE_NAME,
     LAYOUT_OPTION,
     LAYOUT_SINGLE,
@@ -109,11 +109,11 @@ SUBSCRIBE_SECONDS = 60.0
 STOP_TIMEOUT = 2.0
 CAPTURE_DIR = "capture"
 MAX_DUMP_POLLS = 20
-STACK_MARGIN_ROWS = 5
-STACK_GONE = (
-    "the agent stack is gone (its tongs-agents-home pane and every agent pane in it "
-    "were closed), so the new pane opens side by side instead; start a new workspace "
-    "session to get one agent at a time back"
+MIN_AGENT_COLUMNS = 20
+SIDEBAR_COVERED = (
+    "the tongs-agents-home pane is gone and the sidebar fills its tab, so agent panes "
+    "cover the sidebar's right three quarters; start a new workspace session to get "
+    "the agent area beside the sidebar back"
 )
 _KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]*\Z")
 _NEW_PANE = re.compile(r"terminal_([0-9]{1,12})")
@@ -238,6 +238,14 @@ def _geometry(entry: dict) -> tuple[int, int, int]:
     return values
 
 
+def _box(entry: dict) -> tuple[int, int, int, int]:
+    """``(pane_x, pane_y, pane_columns, pane_rows)`` of a pane, frame included."""
+    values = tuple(entry.get(key) for key in ("pane_x", "pane_y", "pane_columns", "pane_rows"))
+    if not all(_int(value) and value >= 0 for value in values):
+        raise MultiplexerError("unrecognized zellij list-panes entry: no pane geometry")
+    return values
+
+
 def _home_anchor(entries: list[dict]) -> dict | None:
     """The tiled ``tongs-agents-home`` pane with the lowest id, if any."""
     anchors = [
@@ -265,39 +273,37 @@ def _marks_single(entry: dict) -> bool:
     return entry.get("is_floating") is False and _runs_single(entry)
 
 
-def _agent_column(entries: list[dict], sidebar: dict) -> list[dict]:
-    """The tiled panes of the sidebar's tab that share the fullest column beside it."""
-    sidebar_column = _geometry(sidebar)
-    columns: dict[tuple[int, int, int], list[dict]] = {}
-    for entry in entries:
-        if (
-            entry["is_plugin"]
-            or entry.get("is_floating") is not False
-            or entry["title"] == SIDEBAR_PANE_NAME
-        ):
-            continue
-        column = _geometry(entry)
-        if column[0] == sidebar_column[0] and column != sidebar_column:
-            columns.setdefault(column, []).append(entry)
-    if not columns:
-        return []
-    return max(
-        columns.values(),
-        key=lambda group: (len(group), -min(entry["id"] for entry in group)),
-    )
-
-
-def _stack_members(entries: list[dict], anchor: dict) -> list[dict]:
-    column = _geometry(anchor)
-    return [
-        entry for entry in entries
+def _home_region(entries: list[dict], home: dict) -> tuple[int, int, int, int]:
+    """The home pane's box, or its whole column when it shares one (a 0.10.1 stack)."""
+    column = _geometry(home)
+    boxes = [
+        _box(entry) for entry in entries
         if not entry["is_plugin"]
         and entry.get("is_floating") is False
         and _geometry(entry) == column
     ]
+    top = min(box[1] for box in boxes)
+    bottom = max(box[1] + box[3] for box in boxes)
+    x, _, columns, _ = _box(home)
+    return x, top, columns, bottom - top
 
 
-def _viewport_rows(output: str, tab_id: int) -> int:
+def _beside_sidebar(
+    sidebar: dict, viewport_columns: int
+) -> tuple[tuple[int, int, int, int], bool]:
+    """The region right of the sidebar, or its right three quarters when none is left.
+
+    The flag is True for the fallback.
+    """
+    x, y, columns, rows = _box(sidebar)
+    right = x + columns
+    if viewport_columns - right >= MIN_AGENT_COLUMNS:
+        return (right, y, viewport_columns - right, rows), False
+    left = x + columns // 4
+    return (left, y, right - left, rows), True
+
+
+def _viewport_columns(output: str, tab_id: int) -> int:
     try:
         tabs = json.loads(output or "")
     except ValueError as error:
@@ -306,16 +312,13 @@ def _viewport_rows(output: str, tab_id: int) -> int:
         raise MultiplexerError("unrecognized zellij list-tabs output")
     for tab in tabs:
         if isinstance(tab, dict) and tab.get("tab_id") == tab_id:
-            rows = tab.get("viewport_rows")
-            if _int(rows) and rows >= 0:
-                return rows
-            raise MultiplexerError("unrecognized zellij list-tabs entry: field 'viewport_rows'")
+            columns = tab.get("viewport_columns")
+            if _int(columns) and columns >= 0:
+                return columns
+            raise MultiplexerError(
+                "unrecognized zellij list-tabs entry: field 'viewport_columns'"
+            )
     raise MultiplexerError(f"zellij list-tabs does not list tab {tab_id}")
-
-
-def stack_capacity(viewport_rows: int) -> int:
-    """How many panes, the home pane included, a stack may hold in that viewport."""
-    return max(viewport_rows - STACK_MARGIN_ROWS, 1)
 
 
 def _running_sessions(output: str) -> dict[str, bool]:
@@ -486,11 +489,11 @@ class ZellijMultiplexer:
 
         zellij moves the spawning client to the new pane on every supported
         version and 0.44.2 rejects `--no-focus`, so `focus` is not passed on
-        (M1-0 recommendation). In a session with a home pane every pane but
-        the sidebar joins the agent stack (see the module docstring); a full
-        stack is refused and a pane that does not join is closed again. A
-        floating pane does not take the focus, so with ``focus`` the stacked
-        pane is selected afterwards (best effort).
+        (M1-0 recommendation). In a ``single`` session every pane but the
+        sidebar opens as a pinned floating pane over the agent region (see
+        the module docstring); a pane not read back as floating in that tab
+        is closed again. A floating pane does not take the focus, so with
+        ``focus`` it is selected afterwards (best effort).
         """
         session = _session(session)
         command = _argv(argv)
@@ -500,13 +503,12 @@ class ZellijMultiplexer:
         if cwd is not None:
             options += ["--cwd", _cwd(cwd)]
         if name != SIDEBAR_PANE_NAME:
-            entries = self._pane_entries(session)
-            anchor = _home_anchor(entries)
-            if anchor is None:
-                anchor, entries = self._restore_home(session, entries)
-            if anchor is not None:
-                members = _stack_members(entries, anchor)
-                ref = self._spawn_stacked(session, anchor, members, options, command)
+            region = self._agent_region(session, self._pane_entries(session))
+            if region is not None:
+                tab_id, box, covered = region
+                ref = self._spawn_over(session, tab_id, box, options, command)
+                if covered:
+                    self.notices.append(SIDEBAR_COVERED)
                 if focus:
                     self.focus(ref)
                 return ref
@@ -528,29 +530,59 @@ class ZellijMultiplexer:
         notices, self.notices = self.notices, []
         return notices
 
-    def _restore_home(self, session: str, entries: list[dict]) -> tuple[dict | None, list[dict]]:
-        """The stack's anchor when the home pane of a ``single`` session was closed.
+    def align_agents(self, session: str, pane_ids) -> list[str]:
+        """Move the given floating panes onto the current agent region; return those moved.
 
-        Returns ``(None, entries)`` for a session without a marked sidebar
-        and, with a notice, when no agent column is left.
+        Only floating panes in the region's tab whose geometry differs move;
+        a pane that is gone, tiled or in another tab is left alone, and a
+        session without an agent region (split) moves nothing.
         """
+        session = _session(session)
+        wanted = {_pane_id(pane_id) for pane_id in pane_ids}
+        if not wanted:
+            return []
+        entries = self._pane_entries(session)
+        region = self._agent_region(session, entries)
+        if region is None:
+            return []
+        tab_id, box, _ = region
+        moved = []
+        for entry in entries:
+            if (
+                entry["is_plugin"]
+                or str(entry["id"]) not in wanted
+                or entry.get("is_floating") is not True
+                or entry.get("tab_id") != tab_id
+                or _box(entry) == box
+            ):
+                continue
+            self._action(
+                session, None, "change-floating-pane-coordinates",
+                "--pane-id", f"terminal_{entry['id']}", *_coordinates(box),
+                "--pinned", "true",
+            )
+            moved.append(str(entry["id"]))
+        return moved
+
+    def _agent_region(
+        self, session: str, entries: list[dict]
+    ) -> tuple[int, tuple[int, int, int, int], bool] | None:
+        """``(tab_id, (x, y, columns, rows), covered)`` where agents show, or None (split).
+
+        ``covered`` is True when the region lies over the sidebar's right part.
+        """
+        home = _home_anchor(entries)
+        if home is not None:
+            return _geometry(home)[0], _home_region(entries, home), False
         sidebar = next((entry for entry in entries if _marks_single(entry)), None)
         if sidebar is None:
-            return None, entries
-        column = _agent_column(entries, sidebar)
-        if not column:
-            self.notices.append(STACK_GONE)
-            return None, entries
-        agent = min(column, key=lambda entry: (entry["exited"], entry["id"]))
-        try:
-            self._spawn_stacked(
-                session, agent, column, ["--name", HOME_PANE_NAME],
-                [sys.executable, "-m", HOME_MODULE, HOME_COMMAND],
-            )
-        except MultiplexerError:
-            return agent, self._pane_entries(session)
-        entries = self._pane_entries(session)
-        return _home_anchor(entries) or agent, entries
+            return None
+        tab_id = _geometry(sidebar)[0]
+        columns = _viewport_columns(
+            self._answered(session, None, "list-tabs", "--json").stdout, tab_id
+        )
+        box, covered = _beside_sidebar(sidebar, columns)
+        return tab_id, box, covered
 
     def _new_ref(self, session: str, result) -> PaneRef:
         match = _NEW_PANE.fullmatch((result.stdout or "").strip())
@@ -561,52 +593,33 @@ class ZellijMultiplexer:
             )
         return PaneRef(NAME, session, match.group(1), self._effective_socket_dir())
 
-    def _spawn_stacked(
-        self, session: str, anchor: dict, members: list[dict], options: list[str],
-        command: list[str],
+    def _spawn_over(
+        self, session: str, tab_id: int, box: tuple[int, int, int, int],
+        options: list[str], command: list[str],
     ) -> PaneRef:
-        """Open the pane in the home pane's tab, stack it there and read it back."""
-        tab_id = _geometry(anchor)[0]
-        rows = _viewport_rows(
-            self._answered(session, None, "list-tabs", "--json").stdout, tab_id
-        )
-        capacity = stack_capacity(rows)
-        if len(members) >= capacity:
-            raise MultiplexerError(
-                f"the agent stack is full: {len(members)} panes fill a {rows}-row "
-                "window; close an agent pane or make the terminal taller"
-            )
+        """Open a pinned floating pane over ``box`` in tab ``tab_id`` and read it back."""
         result = self._new_pane(
-            session, "--tab-id", str(tab_id), "--floating", *options, "--", *command
+            session, "--tab-id", str(tab_id), "--floating", "--pinned", "true",
+            *_coordinates(box), *options, "--", *command,
         )
         ref = self._new_ref(session, result)
-        try:
-            self._action(
-                session, None, "stack-panes", "--",
-                f"terminal_{anchor['id']}", f"terminal_{ref.pane_id}",
-            )
-            if self._joined_stack(session, anchor["id"], ref.pane_id):
-                return ref
-            problem = "it did not join the agent stack"
-        except MultiplexerError as error:
-            problem = error.detail
+        if self._floating_in(session, tab_id, ref.pane_id):
+            return ref
         self._close_quietly(session, ref.pane_id)
         raise MultiplexerError(
-            f"closed new pane {ref.pane_id}: {problem} (zellij places panes past a "
-            "full stack elsewhere; close an agent pane or make the terminal taller)"
+            f"closed new pane {ref.pane_id}: it did not open as a floating pane "
+            "in the agent area's tab"
         )
 
-    def _joined_stack(self, session: str, anchor_id: int, pane_id: str) -> bool:
-        """Read back that the pane sits in the anchor's column of the anchor's tab."""
+    def _floating_in(self, session: str, tab_id: int, pane_id: str) -> bool:
+        """Read back that the pane is listed as floating in tab ``tab_id``."""
         for attempt in range(READBACK_ATTEMPTS):
-            entries = self._pane_entries(session)
-            anchor = next(
-                (entry for entry in entries
-                 if not entry["is_plugin"] and entry["id"] == anchor_id),
-                None,
-            )
-            if anchor is not None and any(
-                str(entry["id"]) == pane_id for entry in _stack_members(entries, anchor)
+            if any(
+                not entry["is_plugin"]
+                and str(entry["id"]) == pane_id
+                and entry.get("is_floating") is True
+                and entry.get("tab_id") == tab_id
+                for entry in self._pane_entries(session)
             ):
                 return True
             if attempt + 1 < READBACK_ATTEMPTS:
@@ -651,7 +664,7 @@ class ZellijMultiplexer:
         return entries
 
     def list_panes(self, session: str) -> list[PaneInfo]:
-        """Every pane, collapsed stack members and exited panes included."""
+        """Every pane, floating, collapsed and exited ones included."""
         session = _session(session)
         entries = self._pane_entries(session)
         socket_dir = self._effective_socket_dir()
@@ -760,7 +773,7 @@ class ZellijMultiplexer:
         return _failed(f"no zellij client moved to pane {pane}")
 
     def show(self, ref: PaneRef) -> FocusResult:
-        """Selecting a pane expands it in its stack, so showing is focusing."""
+        """Selecting a pinned agent pane raises it over the others, so showing is focusing."""
         return self.focus(ref)
 
     def paste(self, ref: PaneRef, text: str) -> None:
@@ -840,6 +853,11 @@ class ZellijMultiplexer:
             session, socket_dir, "rename-pane", "--pane-id", f"terminal_{pane}", "--",
             _pane_name(name),
         )
+
+
+def _coordinates(box: tuple[int, int, int, int]) -> list[str]:
+    x, y, columns, rows = box
+    return ["-x", str(x), "-y", str(y), "--width", str(columns), "--height", str(rows)]
 
 
 def _target(ref) -> tuple[str, str, str | None]:

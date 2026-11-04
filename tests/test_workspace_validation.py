@@ -587,109 +587,294 @@ def test_hosted_workspace_job_runs_the_validator_on_every_pin():
 
 
 def _geometry_pane(pane_id, title, x, columns=80, **extra):
-    return {"id": pane_id, "title": title, "tab_id": 0, "pane_x": x, "pane_columns": columns,
-            "pane_rows": 12, "is_floating": False, "is_suppressed": False, **extra}
+    return {"id": pane_id, "title": title, "tab_id": 0, "pane_x": x, "pane_y": 1,
+            "pane_columns": columns, "pane_rows": 12, "is_floating": False, **extra}
 
 
-def _stacked_panes():
+def _overlay_panes():
     return [
         _geometry_pane(0, validator.workspace_spawn.SIDEBAR_PANE_NAME, 0, 40),
-        _geometry_pane(1, validator.HOME_PANE_NAME, 40, is_suppressed=True),
-        _geometry_pane(2, "f1", 40, is_suppressed=True),
-        _geometry_pane(3, "f2", 40, pane_rows=1),
+        _geometry_pane(1, validator.HOME_PANE_NAME, 40),
+        _geometry_pane(2, "f1", 40, is_floating=True),
+        _geometry_pane(3, "f2", 40, is_floating=True),
     ]
 
 
+class _LayoutTarget(_Target):
+    """dump-layout answers with ``pinned`` pinned panes after ``blank`` empty answers.
+
+    By default every floating pane is pinned.
+    """
+
+    def __init__(self, panes, pinned=None, blank=0):
+        super().__init__(["s1"], panes)
+        self.pinned = pinned if pinned is not None else sum(
+            1 for pane in panes if pane.get("is_floating"))
+        self.blank = blank
+
+    def action(self, *arguments):
+        if arguments[0] == "dump-layout":
+            if self.blank:
+                self.blank -= 1
+                return 0, "", ""
+            return 0, "floating_panes {\n" + "    pinned true\n" * self.pinned + "}\n", ""
+        return super().action(*arguments)
+
+
 @linux_only
-def test_stack_membership_accepts_profiles_in_the_home_column():
+def test_overlay_membership_accepts_pinned_profiles_over_the_home_pane():
     observations = {}
-    validator.stack_membership(_Target(["s1"], _stacked_panes()), ("f1", "f2"),
-                               observations, "stack")
-    facts = observations["stack"]
-    assert facts["member_titles"] == ["f1", "f2", validator.HOME_PANE_NAME]
-    assert facts["sidebar_outside_stack"] and facts["suppressed_members"] == 2
-    assert facts["collapsed_members"] == 1
+    validator.overlay_membership(_LayoutTarget(_overlay_panes()), ("f1", "f2"),
+                                 observations, "overlay")
+    facts = observations["overlay"]
+    assert facts["member_titles"] == ["f1", "f2"]
+    assert facts["sidebar_tiled"] and facts["pinned_panes"] == facts["floating_panes"] == 2
 
 
 @linux_only
 @pytest.mark.parametrize("stray", [
-    {"pane_x": 0, "pane_columns": 40}, {"tab_id": 1}, {"is_floating": True},
+    {"pane_x": 0, "pane_columns": 40}, {"tab_id": 1}, {"is_floating": False},
+    {"pane_rows": 11},
 ])
-def test_stack_membership_refuses_a_profile_outside_the_stack(stray):
-    panes = _stacked_panes()
+def test_overlay_membership_refuses_a_profile_off_the_home_pane(stray):
+    panes = _overlay_panes()
     panes[3].update(stray)
-    with pytest.raises(validator.Check, match="not stacked"):
-        validator.stack_membership(_Target(["s1"], panes), ("f1", "f2"), {}, "stack")
+    with pytest.raises(validator.Check, match="not over the home pane"):
+        validator.overlay_membership(_LayoutTarget(panes), ("f1", "f2"), {}, "overlay")
 
 
 @linux_only
-def test_stack_membership_needs_a_home_pane():
-    panes = [pane for pane in _stacked_panes() if pane["title"] != validator.HOME_PANE_NAME]
+def test_overlay_membership_asks_again_after_an_empty_layout():
+    observations = {}
+    validator.overlay_membership(_LayoutTarget(_overlay_panes(), blank=2), ("f1", "f2"),
+                                 observations, "overlay")
+    assert observations["overlay"]["pinned_panes"] == 2
+
+
+@linux_only
+def test_overlay_membership_needs_pinned_panes_and_a_home_pane(monkeypatch):
+    monkeypatch.setattr(validator, "LAYOUT_WAIT", 0.2)
+    with pytest.raises(validator.Check, match="1 of 2 floating panes are pinned"):
+        validator.overlay_membership(_LayoutTarget(_overlay_panes(), pinned=1), ("f1",), {},
+                                     "overlay")
+    panes = [pane for pane in _overlay_panes() if pane["title"] != validator.HOME_PANE_NAME]
     with pytest.raises(validator.Check, match="no home pane"):
-        validator.stack_membership(_Target(["s1"], panes), ("f1",), {}, "stack")
+        validator.overlay_membership(_LayoutTarget(panes), ("f1",), {}, "overlay")
 
 
-class _RecoveringTarget(_Target):
-    """Closing the home pane removes it; the fake adapter's spawn adds it back."""
+class _ClosingTarget(_Target):
+    """Closing the home pane gives its columns to the sidebar; new-pane splits it."""
 
-    def __init__(self, panes):
+    def __init__(self, panes, splits=True):
         super().__init__(["s1"], panes)
         self.closed = []
+        self.splits = splits
 
     def action(self, *arguments):
         if arguments[0] == "close-pane":
             pane_id = int(arguments[-1].removeprefix("terminal_"))
             self.closed.append(pane_id)
             self._panes = [pane for pane in self._panes if pane["id"] != pane_id]
+            self._panes[0] = dict(self._panes[0], pane_columns=120)
+        if arguments[0] == "list-tabs":
+            return 0, json.dumps([{"tab_id": 0, "viewport_columns": 120}]), ""
+        if arguments[0] == "new-pane":
+            if self.splits:
+                self._panes[0] = dict(self._panes[0], pane_columns=60)
+                self._panes.append(_geometry_pane(20, "filler", 60, 60))
+            return 0, "terminal_20\n", ""
         return 0, "", ""
 
 
 class _FakeAdapter:
-    def __init__(self, target, panes, notices=()):
+    """Each spawn adds its next pane and leaves its next notices."""
+
+    def __init__(self, target, spawns):
         self.target = target
-        self.panes = panes
-        self.notices = list(notices)
+        self.spawns = list(spawns)
+        self.notices = []
 
     def __call__(self):
         return self
 
     def spawn(self, session, argv, *, name=None):
-        self.target._panes.extend(self.panes)
-        return SimpleNamespace(pane_id=str(self.panes[-1]["id"]))
+        pane, self.notices = self.spawns.pop(0)
+        self.target._panes.append(pane)
+        return SimpleNamespace(pane_id=str(pane["id"]))
 
     def take_notices(self):
-        return self.notices
+        notices, self.notices = self.notices, []
+        return notices
+
+
+COVERED = (_geometry_pane(8, "recovered", 30, 90, is_floating=True),
+           [validator.SIDEBAR_COVERED])
+BESIDE = (_geometry_pane(9, "beside", 60, 60, is_floating=True), [])
 
 
 @linux_only
-def test_home_recovery_expects_a_new_home_in_the_agent_column(monkeypatch):
-    target = _RecoveringTarget(_stacked_panes())
-    reopened = [_geometry_pane(7, validator.HOME_PANE_NAME, 40),
-                _geometry_pane(8, "recovered", 40)]
-    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(target, reopened))
+def test_home_recovery_expects_covered_then_beside_placement(monkeypatch):
+    target = _ClosingTarget(_overlay_panes())
+    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(target, [COVERED, BESIDE]))
     observations = {}
     validator.home_recovery("/root", "s1", target, _Tracker(), observations)
     facts = observations["home_recovery"]
     assert target.closed == [1]
-    assert facts["home_reopened"] and facts["same_column"] and facts["spawn_stacked"]
-    assert (facts["members_before"], facts["members_after"]) == (3, 4)
+    assert facts["covered"]["covers_sidebar_right"] and facts["covered"]["sidebar_fills_tab"]
+    assert facts["filler_tiled_right_of_sidebar"]
+    assert facts["beside"]["beside_sidebar"] and not facts["beside"]["notices"]
 
 
 @linux_only
-def test_home_recovery_refuses_a_side_by_side_fallback(monkeypatch):
-    target = _RecoveringTarget(_stacked_panes())
-    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(
-        target, [_geometry_pane(8, "recovered", 0, 40)], ["the agent stack is gone"]))
-    with pytest.raises(validator.Check, match="not reopened"):
+@pytest.mark.parametrize("spawns, message", [
+    ([(dict(COVERED[0], is_floating=False), COVERED[1]), BESIDE], "not in the agent"),
+    ([(COVERED[0], []), BESIDE], "filling the tab is misplaced"),
+    ([(_geometry_pane(8, "recovered", 30, 80, is_floating=True), COVERED[1]), BESIDE],
+     "filling the tab is misplaced"),
+    ([COVERED, (BESIDE[0], [validator.SIDEBAR_COVERED])], "beside the sidebar is misplaced"),
+    ([COVERED, (_geometry_pane(9, "beside", 60, 50, is_floating=True), [])],
+     "beside the sidebar is misplaced"),
+    ([COVERED, (_geometry_pane(9, validator.HOME_PANE_NAME, 60, 60), [])], "opened again"),
+])
+def test_home_recovery_refuses_a_misplaced_spawn(monkeypatch, spawns, message):
+    target = _ClosingTarget(_overlay_panes())
+    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(target, spawns))
+    with pytest.raises(validator.Check, match=message):
         validator.home_recovery("/root", "s1", target, _Tracker(), {})
 
 
 @linux_only
-@pytest.mark.parametrize("pane, shown", [
-    ({"is_suppressed": False, "pane_rows": 12}, True),
-    ({"is_suppressed": True, "pane_rows": 12}, False),
-    ({"is_suppressed": False, "pane_rows": 1}, False),
-    ({}, False),
+def test_home_recovery_needs_the_split_beside_the_sidebar(monkeypatch):
+    target = _ClosingTarget(_overlay_panes(), splits=False)
+    monkeypatch.setattr(validator, "ZellijMultiplexer", _FakeAdapter(target, [COVERED, BESIDE]))
+    monkeypatch.setattr(validator, "RESIZE_WAIT", 0.2)
+    with pytest.raises(validator.Check, match="split off right of the sidebar"):
+        validator.home_recovery("/root", "s1", target, _Tracker(), {})
+
+
+class _Screen:
+    def __init__(self, text):
+        self.text = text
+
+    def screen(self):
+        return self.text
+
+
+@linux_only
+def test_top_title_is_the_last_candidate_frame_drawn():
+    client = _Screen("\u250c f1 \u2500\u2500\n\u250c f2 \u2500\u2500 PIN\n"
+                     "\u250c tongs-agents-sidebar \u2500\n f1 row\n")
+    assert validator.top_title(client, {"f1", "f2"}, wait=0) == "f2"
+    assert validator.top_title(_Screen("no frames"), {"f1"}, wait=0) is None
+
+
+class _ResizingTarget(_Target):
+    """A client resize, then a sidebar resize, each moves the home pane first.
+
+    The first listing after each step shows the agent still in place; later
+    ones show it aligned, unless ``follows`` is False.
+    """
+
+    def __init__(self, follows=True):
+        super().__init__(["s1"], _resized(40))
+        self.name = "s1"
+        self.follows = follows
+        self.actions = []
+        self.stage = 40
+        self.fresh = False
+        self.pinned = 1
+
+    def step(self, columns):
+        self.stage = columns
+        self.fresh = True
+
+    def panes(self):
+        aligned = self.follows and not self.fresh
+        self.fresh = False
+        return _resized(self.stage, aligned=aligned or self.stage == 40)
+
+    def action(self, *arguments):
+        self.actions.append(arguments)
+        if arguments[:3] == ("resize", "increase", "right"):
+            self.step(60)
+        if arguments[0] == "dump-layout":
+            return 0, "layout {\n" + "    pinned true\n" * self.pinned + "}\n", ""
+        return 0, "", ""
+
+
+def _resized(sidebar_columns, aligned=True):
+    home_x = sidebar_columns
+    agent_x = home_x if aligned else 40
+    return [
+        _geometry_pane(0, validator.workspace_spawn.SIDEBAR_PANE_NAME, 0, sidebar_columns),
+        _geometry_pane(1, validator.HOME_PANE_NAME, home_x, 160 - home_x),
+        _geometry_pane(2, "f1", agent_x, 160 - agent_x, is_floating=True),
+    ]
+
+
+@pytest.fixture
+def resizing(monkeypatch):
+    monkeypatch.setattr(validator, "records_by_profile",
+                        lambda session: {"f1": SimpleNamespace(pane_id="2")})
+    monkeypatch.setattr(validator, "RESIZE_WAIT", 0.5)
+    monkeypatch.setattr(validator, "LAYOUT_WAIT", 0.2)
+
+    def make(follows=True):
+        target = _ResizingTarget(follows)
+        monkeypatch.setattr(validator, "resize",
+                            lambda ptys, rows, columns: target.step(50))
+        return target
+    return make
+
+
+@linux_only
+def test_resize_alignment_waits_for_the_agents_to_follow(resizing):
+    target = resizing()
+    observations = {"_ptys": []}
+    validator.resize_alignment(target, observations)
+    facts = observations["resize_alignment"]
+    assert facts["aligned_after_clients"] and facts["aligned_after_sidebar"]
+    assert facts["home_after_clients"][1] == 50 and facts["home_after_sidebar"][1] == 60
+    assert ("resize", "increase", "right") in target.actions
+
+
+@linux_only
+def test_resize_alignment_fails_when_the_agents_stay(resizing):
+    with pytest.raises(validator.Check, match="terminal resize"):
+        validator.resize_alignment(resizing(follows=False), {"_ptys": []})
+
+
+@linux_only
+def test_resize_alignment_fails_when_a_moved_pane_lost_its_pin(resizing):
+    target = resizing()
+    target.pinned = 0
+    with pytest.raises(validator.Check, match="0 of 1 floating panes are pinned after moving"):
+        validator.resize_alignment(target, {"_ptys": []})
+
+
+@linux_only
+@pytest.mark.parametrize("blank", [
+    (0, "", ""), (0, "  \n", ""), (1, "", "error"), (0, "not json", ""),
+    (0, json.dumps([{"id": 0, "is_plugin": True}]), ""),
 ])
-def test_expanded_reads_both_zellij_stack_shapes(pane, shown):
-    assert validator.expanded(pane) is shown
+def test_session_panes_asks_again_after_an_empty_answer(monkeypatch, blank):
+    answers = [blank, blank, (0, json.dumps([{"id": 0, "is_plugin": True},
+                                             {"id": 3, "title": "f1"}]), "")]
+    calls = []
+
+    def fake_run(argv, env=None, **options):
+        calls.append(argv)
+        return answers.pop(0) if len(answers) > 1 else answers[0]
+
+    monkeypatch.setattr(validator, "run", fake_run)
+    monkeypatch.setattr(validator.time, "sleep", lambda seconds: None)
+    session = validator.Session("s1", {}, "/bin/zellij")
+    assert session.panes() == [{"id": 3, "title": "f1"}]
+    assert len(calls) == 3
+
+
+@linux_only
+def test_session_panes_gives_up_empty_after_the_retry(monkeypatch):
+    monkeypatch.setattr(validator, "run", lambda argv, env=None, **options: (0, "", ""))
+    monkeypatch.setattr(validator, "PANES_RETRY", 0.05)
+    assert validator.Session("s1", {}, "/bin/zellij").panes() == []
