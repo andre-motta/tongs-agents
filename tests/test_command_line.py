@@ -581,7 +581,8 @@ async def test_the_palette_quit_opens_the_dialog(projects):
     app = _app(QuitMux())
     async with app.run_test(size=SIZE) as pilot:
         await _settle(app, pilot)
-        [quit_command] = [c for c in app.get_system_commands(app.screen) if c.title == "Quit"]
+        [quit_command] = [c for c in app.get_system_commands(app.screen)
+                          if c.callback == app.action_quit]
         assert "detach or kill" in quit_command.help
         await quit_command.callback()
         await pilot.pause()

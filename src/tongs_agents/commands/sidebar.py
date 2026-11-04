@@ -314,9 +314,9 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
 
     def get_system_commands(self, screen):
         for command in super().get_system_commands(screen):
-            if command.title == "Quit":
+            if command.callback == self.action_quit:
                 command = SystemCommand(
-                    "Quit", "Leave the workspace: detach or kill it", self.action_quit
+                    command.title, "Leave the workspace: detach or kill it", self.action_quit
                 )
             yield command
 
