@@ -63,7 +63,10 @@ items narrowed with `harnesses = [...]` reach only those harnesses.
 | `config capture HARNESS --into DIR [--force]` | Reads the managed entries of HARNESS (claude, codex or pi) from every target and writes a dotfiles directory into DIR | 0; 1 on an error or a non-empty DIR without `--force` |
 
 `apply` is idempotent: a second run with nothing changed writes 0 bytes,
-runs no CLI step and prints `Nothing to change.` Every verb also prints the
+runs no CLI step and prints `Nothing to change.` One apply runs at a time: it
+holds a lock file in the tongs-agents state dir (`emit/apply.lock`) from the
+first write to the last CLI step, and a second apply started meanwhile exits 1
+with `another tongs-agents config apply is running` and writes nothing. Every verb also prints the
 emitters' notes as `note: <target>: ...` lines, for example an HTTP MCP server
 a harness does not get yet.
 
@@ -79,9 +82,12 @@ decides:
 - Pi 0.99.0 or newer: `pi mcp add` and `pi mcp remove` with
   `PI_CODING_AGENT_DIR` set to the target. `pi mcp add` replaces a server of
   the same name in place, so a changed server is one add. With an older Pi, or
-  one whose version is not recognized, each server stays `pending` with the
-  reason (for example `Pi 0.99.0 or newer is required (found 0.90.0)`), so
-  `status` is not clean until Pi is upgraded; apply runs nothing for it.
+  one whose version is not recognized, each wanted server stays `pending` with
+  the reason (for example `Pi 0.99.0 or newer is required (found 0.90.0)`),
+  and one the dotfiles no longer want is `orphaned` and not removed, so
+  `status` is not clean until Pi is upgraded; apply runs nothing for it. A
+  server disabled in `mcp.json` (`"enabled": false`) is left as is when it
+  changed or is no longer wanted, and `--force` makes no backup for it.
 - Pi: the tongs-agents Pi extension is installed when it is missing or stale,
   as `tongs-agents install` does. It is `pending` with the reason when Pi is
   older than 0.84.4 or its version is not recognized, and `in sync` once

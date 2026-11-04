@@ -129,7 +129,8 @@ def test_apply_failure_rolls_back_and_exits_1(dotfiles, homes, registry, monkeyp
     assert run("apply", "--source", str(dotfiles)) == config_command.EXIT_ERROR
     assert "rolled back" in capsys.readouterr().err
     after = harness_state(homes)
-    assert {path: value[0] for path, value in after.items()} == {
+    lock = str(paths.state_dir() / "emit" / engine.APPLY_LOCK_NAME)
+    assert {path: value[0] for path, value in after.items() if path != lock} == {
         path: value[0] for path, value in before.items()
     }
 
