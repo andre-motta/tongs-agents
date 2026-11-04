@@ -58,13 +58,21 @@ class SandboxSessionTable(SessionTable):
 
     The column is added after the others only then, so a fleet without
     sandboxed agents keeps the plain layout. Compact rows mark the row
-    (``box``); full rows show the sandbox name.
+    (``box``); full rows show the sandbox name. While the column is shown
+    the full layout also needs room for it, so tables narrower than that
+    switch to the compact layout instead of scrolling sideways.
     """
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.sandboxes: dict[str, str] = {}
         self._sandbox_column = False
+
+    @property
+    def full_min_width(self) -> int:
+        if not self._sandbox_column:
+            return FULL_MIN_WIDTH
+        return FULL_MIN_WIDTH + SANDBOX_COLUMN_WIDTHS["full"] + 2 * self.cell_padding
 
     def _wants_sandbox_column(self) -> bool:
         return any(session.identity in self.sandboxes for session in self._sessions)
@@ -257,12 +265,13 @@ class AgentsPanel(Widget):
         if not self._live:
             return
         shown = self.shown_sessions()
-        self._update_summary(shown)
         table = self.table
         if isinstance(table, SandboxSessionTable):
             table.set_sessions(shown, sandboxes=self.sandbox_names(shown))
         else:
             table.set_sessions(shown)
+        # After the table, so the summary sees whether the sandbox column widened it.
+        self._update_summary(shown)
 
     def sandbox_names(self, sessions: list[FleetSession]) -> dict[str, str]:
         """Session identity to sandbox name for the rows that run in a sandbox."""
@@ -276,7 +285,7 @@ class AgentsPanel(Widget):
 
     def _is_narrow(self) -> bool:
         width = self.size.width
-        return self.compact or (0 < width < FULL_MIN_WIDTH)
+        return self.compact or (0 < width < self.table.full_min_width)
 
     def _update_summary(self, shown: list[FleetSession]) -> None:
         sessions = self._all_sessions

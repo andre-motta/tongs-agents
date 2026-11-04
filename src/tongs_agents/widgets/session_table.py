@@ -103,7 +103,7 @@ def compact_age(seconds: int) -> str:
 class SessionTable(DataTable):
     """Fleet session table with status-colored rows.
 
-    The full column set needs FULL_MIN_WIDTH cells. Narrower tables, or
+    The full column set needs ``full_min_width`` cells. Narrower tables, or
     ``compact=True``, use the compact set: attention, icon, a flexible name,
     status and age, with the detail column hidden.
     """
@@ -115,9 +115,14 @@ class SessionTable(DataTable):
         self._layout: tuple[str, int] | None = None
 
     @property
+    def full_min_width(self) -> int:
+        """Cells the full column set needs; narrower tables use the compact set."""
+        return FULL_MIN_WIDTH
+
+    @property
     def compact(self) -> bool:
         width = self.size.width
-        return self.force_compact or (0 < width < FULL_MIN_WIDTH)
+        return self.force_compact or (0 < width < self.full_min_width)
 
     def on_mount(self) -> None:
         self.cursor_type = "row"

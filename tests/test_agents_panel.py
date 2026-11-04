@@ -113,6 +113,68 @@ async def test_compact_flag_forces_compact_columns_at_full_width():
         assert len(table.columns) == 5
 
 
+SANDBOX_LAUNCH = "b0" * 16
+
+
+def _sandbox_feed(sandboxed):
+    boxed = _record(SessionStatus.RUNNING, "boxed")
+    if sandboxed:
+        boxed["launch"] = {"launch_id": SANDBOX_LAUNCH, "profile_id": "boxed"}
+    return SessionFeed(MutableReader([boxed, _record(SessionStatus.IDLE, "plain")]))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sandboxed, width, compact", [
+    (False, 79, True),
+    (False, 80, False),
+    (False, 97, False),
+    (True, 79, True),
+    (True, 80, True),
+    (True, 97, True),
+    (True, 98, False),
+])
+async def test_sandbox_column_moves_the_full_layout_threshold(monkeypatch, sandboxed, width,
+                                                              compact):
+    monkeypatch.setattr(agents_panel, "sandbox_launches",
+                        lambda: {SANDBOX_LAUNCH: "tongs-boxed"})
+    app = FleetMonitorApp(refresh_interval=60, notify_level="none",
+                          feed=_sandbox_feed(sandboxed))
+    async with app.run_test(size=(width, 30)) as pilot:
+        await _settle(app, pilot)
+        panel = app.query_one(AgentsPanel)
+        table = panel.table
+        keys = [c.key.value for c in table.ordered_columns]
+        assert ("sandbox" in keys) is sandboxed
+        assert table.full_min_width == (80 + 16 + 2 * table.cell_padding if sandboxed else 80)
+        assert table.compact is compact
+        assert ("name" in keys) is compact
+        assert panel._is_narrow() is compact
+        summary = str(panel.summary_bar.render())
+        assert ("2 agents" in summary) is compact
+        assert ("2 sessions" in summary) is not compact
+        if compact:
+            assert table.virtual_size.width <= table.size.width
+
+
+@pytest.mark.asyncio
+async def test_summary_follows_the_sandbox_column_as_it_comes_and_goes(monkeypatch):
+    monkeypatch.setattr(agents_panel, "sandbox_launches",
+                        lambda: {SANDBOX_LAUNCH: "tongs-boxed"})
+    feed = _sandbox_feed(True)
+    app = FleetMonitorApp(refresh_interval=60, notify_level="none", feed=feed)
+    async with app.run_test(size=(90, 30)) as pilot:
+        await _settle(app, pilot)
+        panel = app.query_one(AgentsPanel)
+        assert panel.table.compact and panel._is_narrow()
+        assert "2 agents" in str(panel.summary_bar.render())
+        panel.feed = _sandbox_feed(False)
+        panel.poll()
+        await _settle(app, pilot)
+        assert "sandbox" not in [c.key.value for c in panel.table.ordered_columns]
+        assert not panel.table.compact and not panel._is_narrow()
+        assert "2 sessions" in str(panel.summary_bar.render())
+
+
 @pytest.mark.asyncio
 async def test_screen_hosts_panel_with_its_ids_and_screen_bindings():
     from textual.app import App
