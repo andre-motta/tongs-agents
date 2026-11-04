@@ -766,10 +766,7 @@ def do_advisor(args) -> int:
 
 def do_sync(args) -> int:
     result = bridge.sync_all()
-    print(
-        f"{result.launches} sandboxed launch(es): {result.imported} event(s) imported, "
-        f"{result.rejected} rejected, {result.phase_records} phase update(s)"
-    )
+    print("\n".join(bridge.summary_lines(result)))
     for error in result.errors:
         print(f"  {clean(error)}", file=sys.stderr)
     return 1 if result.errors else 0

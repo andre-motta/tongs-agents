@@ -16,10 +16,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", choices=["sync"])
     parser.parse_args(argv)
     result = bridge.sync_all()
-    print(
-        f"{result.launches} sandboxed launch(es): {result.imported} event(s) imported, "
-        f"{result.rejected} rejected, {result.phase_records} phase update(s)"
-    )
+    print("\n".join(bridge.summary_lines(result)))
     for error in result.errors:
         print(f"  {error}", file=sys.stderr)
     return 1 if result.errors else 0
