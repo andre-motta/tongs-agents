@@ -287,12 +287,14 @@ palette) asks how to leave the whole workspace:
 
 | Key | Action |
 | --- | --- |
-| `d` | Detach: close the window. The session and every agent keep running; `tongs-agents` attaches again. |
-| `k` | Kill: end the session and every agent in it, after a second `y`. Work in progress in those agents is interrupted. |
-| `n`, Escape, `q` | Cancel. |
+| `d` | Detach: leave the workspace and return to your shell. The session and every agent keep running; the dialog shows the command that attaches again (`tongs-agents workspace --session NAME`, plus `--multiplexer tmux` on tmux). |
+| `k` | Kill: end the session and every agent in it, after a second confirmation (`y` or the "Yes, kill" button). Work in progress in those agents is interrupted. |
+| `n`, Escape, `q`, Enter | Cancel. |
 
-On Zellij, detach detaches the client you are using; on tmux, every client
-attached to the session. If the sidebar does exit (it crashed, or its pane
+Neither dialog acts on a reflex: the focus starts on Cancel and No, so Enter
+cancels, and a click on "Yes, kill" in the first half second is ignored, so a
+double-click on Kill cannot confirm it. On Zellij, detach detaches the client
+you are using; on tmux, every client attached to the session. If the sidebar does exit (it crashed, or its pane
 was closed), press Enter on its exited Zellij pane or run
 `tongs-agents workspace` in the session, which adds a sidebar when none is
 running.

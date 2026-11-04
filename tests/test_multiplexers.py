@@ -579,10 +579,13 @@ def test_kill_session_reports_a_failure(fake):
 
 
 def test_detach_detaches_from_the_named_session(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
     _mux().detach("agents")
     argv, kwargs = fake.calls[-1]
     assert argv == [ZELLIJ, "--session", "agents", "action", "detach"]
     assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+    with pytest.raises(MultiplexerError, match="not running"):
+        _mux().detach("scratch")
 
 
 def test_socket_dir_defaults_to_the_callers_environment(fake, monkeypatch):

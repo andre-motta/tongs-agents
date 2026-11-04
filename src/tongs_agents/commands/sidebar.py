@@ -62,7 +62,7 @@ import sys
 import threading
 
 from textual import events, work
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.binding import Binding
 
 from tongs_agents import workspace_spawn
@@ -90,7 +90,6 @@ from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
 from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel, ConfirmScreen
-from tongs_agents.widgets.quit_screen import DETACH, KILL, QuitScreen
 from tongs_agents.widgets.command_line import (
     CommandContext,
     CommandError,
@@ -101,6 +100,7 @@ from tongs_agents.widgets.command_line import (
     check_resume,
     start_resume,
 )
+from tongs_agents.widgets.quit_screen import DETACH, KILL, KillScreen, QuitScreen
 from tongs_agents.widgets.rename_prompt import RenameActions, RenamePrompt
 from tongs_agents.widgets.resume_picker import ResumePickerScreen
 from tongs_agents.widgets.shell import AppFooter, AppHeader
@@ -163,8 +163,6 @@ def focus_launched_row(mux: Multiplexer, feed: WorkspaceFeed,
     return focus_pane(mux, ref)
 
 
-KILL_TITLE = "Kill the workspace?"
-
 
 class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnSelect, App):
     """The workspace sidebar: a compact AgentsPanel, chat, access requests, spawns."""
@@ -207,6 +205,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         self.config_error = config_error
         self.multiplexer = multiplexer
         self.session = session
+        self.leaving = False
         self.token = token
         self.compact = compact
         self.feed = feed if feed is not None else WorkspaceFeed(
@@ -307,40 +306,51 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         The sidebar never quits on its own: it asks whether to detach (every
         agent keeps running) or to kill the session, after a second check.
         """
-        if isinstance(self.screen, QuitScreen) or (
-            isinstance(self.screen, ConfirmScreen) and self.screen.title_text == KILL_TITLE
+        if self.leaving or any(
+            isinstance(screen, (QuitScreen, KillScreen)) for screen in self.screen_stack
         ):
             return
-        self.push_screen(QuitScreen(self.session), self._quit_chosen)
+        self.push_screen(QuitScreen(self.session, self.multiplexer.name), self._quit_chosen)
+
+    def get_system_commands(self, screen):
+        for command in super().get_system_commands(screen):
+            if command.title == "Quit":
+                command = SystemCommand(
+                    "Quit", "Leave the workspace: detach or kill it", self.action_quit
+                )
+            yield command
 
     def _quit_chosen(self, choice: str | None) -> None:
         if choice == DETACH:
             self._leave(DETACH)
         elif choice == KILL:
             self.push_screen(
-                ConfirmScreen(
-                    KILL_TITLE,
-                    f"End session {self.session} and every agent in it? Work in "
-                    "progress in those agents is interrupted.",
-                ),
-                lambda yes: self._leave(KILL) if yes else None,
+                KillScreen(self.session), lambda yes: self._leave(KILL) if yes else None
             )
 
-    @work(thread=True, exclusive=True, group="quit")
     def _leave(self, choice: str) -> None:
+        self.leaving = True
+        self._leave_worker(choice)
+
+    @work(thread=True, exclusive=True, group="quit")
+    def _leave_worker(self, choice: str) -> None:
         try:
             if choice == KILL:
                 self.multiplexer.kill_session(self.session)
             else:
                 self.multiplexer.detach(self.session)
         except MultiplexerError as error:
-            self.call_from_thread(
-                self.notify, error.detail, title=f"Could not {choice}",
-                severity="error", timeout=15, markup=False,
-            )
+            self.call_from_thread(self._leave_failed, choice, error.detail)
             return
         if choice == KILL:
             self.call_from_thread(self.exit)
+        else:
+            self.call_from_thread(setattr, self, "leaving", False)
+
+    def _leave_failed(self, choice: str, detail: str) -> None:
+        self.leaving = False
+        self.notify(detail, title=f"Could not {choice}", severity="error", timeout=15,
+                    markup=False)
 
     def on_command_line_ran(self, event: CommandLine.Ran) -> None:
         if event.ok:

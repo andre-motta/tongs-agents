@@ -456,8 +456,15 @@ class ZellijMultiplexer:
         return self.session_state(session) == SESSION_RUNNING
 
     def detach(self, session: str) -> None:
-        """Detach the client that last sent input; zellij has no detach-all."""
-        self._action(_session(session), None, "detach")
+        """Detach the client that last sent input; zellij has no detach-all.
+
+        ``action`` exits 0 for an unknown session, so a session that is not
+        running (renamed or gone) is refused instead of doing nothing.
+        """
+        session = _session(session)
+        if self.session_state(session) != SESSION_RUNNING:
+            raise MultiplexerError(f"zellij session {session!r} is not running")
+        self._action(session, None, "detach")
 
     def kill_session(self, session: str) -> None:
         """End a running session and every pane in it (zellij may keep it EXITED)."""
