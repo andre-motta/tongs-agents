@@ -85,6 +85,8 @@ CONCURRENT = 4
 SETTLE = 1.0
 CLI_TIMEOUT = 60
 UNKNOWN = "unknown"
+REUSE_ATTEMPTS = 3
+REUSE_SLACK = 4
 
 
 class Check(Exception):
@@ -416,18 +418,33 @@ def not_spawned(cli, target, session, io_dir, token, sent, observations):
            "the non-spawned pane received a prompt")
 
 
+def reuse_pane_id(target, pane_id, stale_io):
+    """Open panes in the recreated session until zellij hands out ``pane_id`` again.
+
+    Ids grow from the new session's first pane, so stop once one passes it;
+    the caller then recreates the session and tries again (zellij sometimes
+    starts a new session's ids higher).
+    """
+    created = []
+    for _ in range(int(pane_id) + REUSE_SLACK):
+        created.append(target.new_pane(sys.executable, str(FAKE_REPL), str(stale_io)))
+        if created[-1] == pane_id or int(created[-1]) > int(pane_id):
+            break
+    return created
+
+
 def stale(cli, target, record, root, token, sent, tracker, observations):
     stale_io = Path(root) / "stale"
-    gone = target.stop()
-    expect(gone, "the session was not removed before recreation")
-    target.start()
-    tracker.sweep()
     reused = []
-    for _ in range(int(record.pane_id) + 2):
-        reused.append(target.new_pane(sys.executable, str(FAKE_REPL), str(stale_io)))
+    for _ in range(REUSE_ATTEMPTS):
+        gone = target.stop()
+        expect(gone, "the session was not removed before recreation")
+        target.start()
+        tracker.sweep()
+        reused = reuse_pane_id(target, record.pane_id, stale_io)
+        tracker.sweep()
         if record.pane_id in reused:
             break
-    tracker.sweep()
     wait_until(lambda: (stale_io / f"repl-{UNKNOWN}.ready").exists(), 10)
     text = f"stale launch {token}"
     sent.append(text)
@@ -438,6 +455,7 @@ def stale(cli, target, record, root, token, sent, tracker, observations):
     observations["stale_launch"] = {
         "session": "killed, deleted and recreated with the same name",
         "old_pane_id": record.pane_id,
+        "new_pane_ids": reused,
         "pane_id_reused_by_other_program": record.pane_id in reused,
         "send_exit_code": send_code,
         "read_exit_code": read_code,
