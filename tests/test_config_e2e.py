@@ -23,7 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 import tongs_agents
-from tongs_agents.config_layer import schema
+from tongs_agents.config_layer import engine, schema
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX fake harness CLIs")
 
@@ -520,6 +520,61 @@ def test_a_pi_without_mcp_support_never_looks_in_sync(world, version, extension)
     assert f"{pi_server}  ({reason})" in status.stdout
     assert states[f"{world.dirs['pi'] / 'tongs-agents.json'} [Pi extension]"] == extension
     assert not any(call.startswith("pi mcp") for call in calls(world))
+
+
+def test_an_old_pi_lists_servers_the_dotfiles_dropped_as_orphaned(world):
+    apply_ok(world)
+    agentic = world.dotfiles / "agentic.toml"
+    agentic.write_text(agentic.read_text().replace('harnesses = ["codex", "pi"]',
+                                                   'harnesses = ["codex"]'))
+    fake = world.tmp / "bin" / "pi"
+    fake.write_text(fake.read_text().replace('print("1.5.0")', 'print("0.90.0")'))
+    mcp_json = world.dirs["pi"] / "mcp.json"
+    reason = "Pi 0.99.0 or newer is required (found 0.90.0)"
+
+    status = world.run("status", *source(world))
+    no_traceback(status)
+    assert status.returncode == 3
+    states = entries(status.stdout)
+    assert states[f"{mcp_json} [mcpServers.notes]"] == "orphaned"
+    assert (f"{mcp_json} [mcpServers.notes]  (no longer in the dotfiles; not removed: {reason})"
+            in status.stdout)
+    assert states[f"{mcp_json} [mcpServers.issues]"] == "pending"
+    called = len(calls(world))
+    apply_ok(world)
+    assert not any(call.startswith("pi mcp") for call in calls(world)[called:])
+    assert "notes" in servers(mcp_json)
+
+
+def test_a_forced_apply_makes_no_backup_for_a_disabled_drifted_pi_server(world):
+    apply_ok(world)
+    mcp_json = world.dirs["pi"] / "mcp.json"
+    data = json.loads(mcp_json.read_text())
+    data["mcpServers"]["issues"].update(args=["--edited"], enabled=False)
+    mcp_json.write_text(json.dumps(data))
+    edited = mcp_json.read_bytes()
+
+    called = len(calls(world))
+    result = apply_ok(world, "--force")
+    assert f"Pi MCP server issues: disabled in {mcp_json}; left as is" in result.stdout
+    assert mcp_json.read_bytes() == edited
+    assert not mcp_json.with_name("mcp.json" + ".tongs-agents.drift.bak").exists()
+    assert not any(call.startswith("pi mcp") for call in calls(world)[called:])
+
+
+def test_apply_is_refused_while_another_apply_holds_the_lock(world, monkeypatch):
+    monkeypatch.setenv("TONGS_AGENTS_STATE_DIR", str(world.state))
+    before = snapshot(world)
+    with engine.apply_lock():
+        result = world.run("apply", *source(world))
+    no_traceback(result)
+    assert result.returncode == 1
+    assert "another tongs-agents config apply is running" in result.stderr
+    assert "nothing was written" in result.stderr
+    lock = str(world.state / "emit" / engine.APPLY_LOCK_NAME)
+    assert {path: value for path, value in snapshot(world).items() if path != lock} == before
+    assert not mcp_calls(world)
+    apply_ok(world)
 
 
 def test_an_unreadable_claude_json_is_a_conflict(world):

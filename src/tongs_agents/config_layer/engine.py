@@ -57,8 +57,10 @@ import importlib
 import json
 import os
 import re
+import stat
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -68,8 +70,15 @@ from tongs_agents.config_layer import schema
 from tongs_agents.config_layer.protocol import WRITING_KINDS, Change, ProfileTarget
 from tongs_agents.pi_install import PI_CONFIG_NAME
 
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+    import msvcrt
+
 EMITTERS_MODULE = "tongs_agents.config_layer.emitters"
 LEDGER_NAME = "entries.json"
+APPLY_LOCK_NAME = "apply.lock"
 LEDGER_SCHEMA = 1
 DRIFT_BACKUP_SUFFIX = ".tongs-agents.drift.bak"
 DRIFT_BACKUP_LIMIT = 100
@@ -100,6 +109,10 @@ class ConflictError(EngineError):
 
 class EmitterHookError(EngineError):
     """An emitter's ``entry_values`` or ``disabled`` hook raised."""
+
+
+class ApplyRunningError(EngineError):
+    """Another ``config apply`` holds the store-wide apply lock; nothing was written."""
 
 
 @dataclass(frozen=True)
@@ -719,6 +732,51 @@ def _settle(target: ProfileTarget, recorded: dict, entries: dict) -> dict:
     return entries
 
 
+def _try_lock(descriptor: int) -> bool:
+    try:
+        if fcntl is not None:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        else:
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+    except OSError:
+        return False
+    return True
+
+
+def _unlock(descriptor: int) -> None:
+    if fcntl is not None:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    else:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def apply_lock() -> Iterator[None]:
+    """The store-wide apply lock, taken without waiting.
+
+    Two applies at once would interleave their manifest commits, and the
+    second commit of a CLI step would fail as stale, so the later apply is
+    refused with ``ApplyRunningError`` before it writes anything.
+    """
+    path = paths.ensure_private_dir(paths.state_dir(create=True) / "emit") / APPLY_LOCK_NAME
+    descriptor = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise EngineError(f"{path}: not a regular lock file")
+        if not _try_lock(descriptor):
+            raise ApplyRunningError(
+                f"another tongs-agents config apply is running (it holds {path}); "
+                "nothing was written; run apply again when it finishes"
+            )
+        try:
+            yield
+        finally:
+            _unlock(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _run_steps(plan: Plan) -> tuple[StepResult, ...]:
     """Run each target's CLI steps, recording each step's entry before and after it.
 
@@ -744,6 +802,8 @@ def apply(plan: Plan) -> ApplyResult:
     Refuses everything when the plan has problems or foreign entries. Drifted
     entries the plan did not force are skipped and returned. The emitters'
     CLI steps run after the commit; their results are returned, never raised.
+    The whole apply holds ``apply_lock``; a concurrent apply raises
+    ``ApplyRunningError``.
     """
     if plan.problems:
         raise EngineError("; ".join(plan.problems))
@@ -752,6 +812,11 @@ def apply(plan: Plan) -> ApplyResult:
             "; ".join(f"{entry.path}: {entry.detail}" for entry in plan.foreign)
             + "; nothing was written"
         )
+    with apply_lock():
+        return _apply_locked(plan)
+
+
+def _apply_locked(plan: Plan) -> ApplyResult:
     changes = owned.ChangeSet()
     for backup in plan.backups:
         changes.add(backup)
@@ -769,7 +834,6 @@ def apply(plan: Plan) -> ApplyResult:
     skipped = tuple(plan.skipped)
     written = tuple(change for change in changes.changes if change.kind != "unchanged")
     if written:
-        paths.ensure_private_dir(paths.state_dir(create=True) / "emit")
         changes.commit()
     return ApplyResult(written, skipped, _run_steps(plan))
 

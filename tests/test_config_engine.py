@@ -397,6 +397,19 @@ def test_first_apply_then_second_apply_changes_zero_bytes(config, fakes, homes):
     assert snapshot(homes.home, homes.alt, engine.ledger_path().parent) == before
 
 
+def test_a_concurrent_apply_is_refused_before_it_writes(config, fakes, homes):
+    result = engine.plan(config, registry=fakes.registry)
+    with engine.apply_lock():
+        with pytest.raises(engine.ApplyRunningError, match="another tongs-agents config apply"):
+            engine.apply(result)
+    assert not engine.ledger_path().exists() and not owned.manifest_path().exists()
+    assert not (homes.alt / "settings.json").exists()
+
+    assert engine.apply(result).written
+    with engine.apply_lock():
+        pass
+
+
 def test_manual_edit_is_drift_and_apply_skips_only_that_entry(config, fakes, homes):
     engine.apply(engine.plan(config, registry=fakes.registry))
     path = homes.alt / "tongs-agents" / "instructions.md"

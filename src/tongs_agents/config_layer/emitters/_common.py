@@ -455,12 +455,13 @@ def server_action(
 
 def decide_server(
     plan: EmitPlan, path: Path, desired: Any, current: Any,
-    record: Mapping[str, str] | None, *, adoptable: bool, force: bool,
+    record: Mapping[str, str] | None, *, adoptable: bool, force: bool, backup: bool = True,
 ) -> str:
     """``server_action`` for a manifest record, adopting a matching pending value.
 
     A forced replacement or removal of a drifted entry asks the engine to
-    back up ``path``, the file that holds it, first.
+    back up ``path``, the file that holds it, first, unless ``backup`` is
+    False because the caller leaves that entry as it is.
     """
     recorded = None if record is None else record.get("sha256")
     if record is not None and PENDING_KEY in record:
@@ -469,7 +470,8 @@ def decide_server(
             recorded = pending
     action = server_action(desired, current, recorded, adoptable=adoptable, force=force)
     if (
-        action in ("replace", "remove") and current is not None and recorded is not None
+        backup and action in ("replace", "remove") and current is not None
+        and recorded is not None
         and digest_value(current) != recorded
     ):
         plan.backups.append(Path(path))

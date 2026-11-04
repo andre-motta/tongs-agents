@@ -4,8 +4,8 @@
 - Instructions: a managed block in ``<pi>/AGENTS.md``.
 - MCP: ``pi mcp add`` and ``remove`` with ``PI_CODING_AGENT_DIR`` per target,
   only on Pi 0.99.0 or newer (native MCP); below it the servers are skipped
-  with one line. No ``env`` is written: Pi stdio servers inherit its
-  environment.
+  with one line, wanted ones listed as pending and unwanted ones as orphaned.
+  No ``env`` is written: Pi stdio servers inherit its environment.
 - Hooks: the packaged extension plus the owned ``<pi>/tongs-agents.json``,
   installed by ``pi_install.install_pi`` when they are missing or stale.
 """
@@ -166,9 +166,14 @@ class PiEmitter(BaseEmitter):
         if version is None or version < MCP_MINIMUM:
             reason = _version_problem(MCP_MINIMUM, version)
             plan.notes.append(f"Pi MCP servers skipped: {reason}")
-            for name in sorted(set(self._desired(plan, canonical, target)) | managed):
+            desired = self._desired(plan, canonical, target)
+            for name in sorted(set(desired) | managed):
+                state, detail = _common.PENDING, reason
+                if name not in desired:
+                    state = _common.ORPHANED
+                    detail = f"no longer in the dotfiles; not removed: {reason}"
                 plan.items.append(_common.Item(
-                    directory / "mcp.json", f"mcpServers.{name}", _common.PENDING, reason,
+                    directory / "mcp.json", f"mcpServers.{name}", state, detail,
                 ))
             plan.entries.update((key, dict(value)) for key, value in keep_recorded)
             return
@@ -189,6 +194,7 @@ class PiEmitter(BaseEmitter):
             want = desired.get(name)
             action = _common.decide_server(
                 plan, path, want, current, recorded, adoptable=False, force=force,
+                backup=not disabled,
             )
             label = f"Pi MCP server {name}"
             _common.report_action(plan, label, action, path=path, key=f"mcpServers.{name}",
