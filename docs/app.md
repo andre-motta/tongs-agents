@@ -111,9 +111,9 @@ sidebar also detects tmux); started elsewhere it offers only the last four
 commands. In the sidebar the palette also has `Command line`, which opens the
 [sidebar command line](#sidebar-command-line) like `:`, `Resume in workspace`
 (same as `u`: resumes the selected agent's harness session in a new pane) and
-`Resume session…` (a list of the recent sessions in the session store; Enter
-resumes the chosen one), both described in
-[moving open sessions into the workspace](resume.md) (a session that already
+`Resume session…` (a filterable list of the running sessions and the past
+ones from the harnesses' history; Enter resumes the chosen one), both
+described in [resuming sessions in the workspace](resume.md) (a session that already
 runs in this workspace is not resumed again, and one that runs elsewhere asks
 first), and the chat entries (`Grant chat`, `Grant chat and wake`,
 `Revoke chat`, `Post to chat`, `Toggle chat` and `Open chat pane`); see
@@ -130,7 +130,7 @@ parser, and it always works on the session the sidebar runs in:
 | Verb | What it does |
 | --- | --- |
 | `run PROFILE [DIR] [-- ARGS ...]` | Same as [`tongs-agents run`](workspace.md#adding-agents-run) inside the session: adds a pane for the profile, in DIR, with ARGS appended for this launch. DIR defaults to the folder the sidebar started in, and a relative DIR is resolved from there. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
-| `resume [ID] [--profile NAME]` | Same as [`tongs-agents resume`](resume.md) inside the session: without ID it lists the sessions it can resume under the prompt; with an ID or a unique prefix it adds a pane that resumes that session in its recorded folder, with the matching profile. A session that already runs in this workspace is refused; a warning follows the result when the session still runs elsewhere. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
+| `resume [ID [DIR]] [--profile NAME]` | Same as [`tongs-agents resume`](resume.md) inside the session: without ID it opens the `Resume session…` list (running and past sessions, filtered as you type); with an ID or a unique prefix it adds a pane that resumes that session in DIR (a relative DIR is resolved from the folder the sidebar started in) or else its recorded folder, with the matching profile. A session that already runs in this workspace is refused; a warning follows the result when the session still runs elsewhere. `--session` and `--multiplexer` must name this session and multiplexer or be left out. |
 
 The line is split like a shell line (`run alpha ~/src -- --resume 'two
 words'`) but never run through a shell: a first word that is not a verb, such

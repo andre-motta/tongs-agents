@@ -157,12 +157,12 @@ def check_launch(profile: Profile, folder: str | None = None,
 
 def create_launches(
     multiplexer: str, session: str, profiles: Iterable[Profile], *,
-    folder: str | None = None, args: Iterable[str] = (),
+    folder: str | None = None, args: Iterable[str] = (), label: str | None = None,
 ) -> list[LaunchRecord]:
     """Pending launch records, one per profile, for panes not spawned yet.
 
-    ``folder`` and ``args`` apply to every one of them. When one cannot be
-    written, those already written are discarded.
+    ``folder``, ``args`` and ``label`` apply to every one of them. When one
+    cannot be written, those already written are discarded.
     """
     records = []
     profiles = list(profiles)
@@ -171,7 +171,7 @@ def create_launches(
     try:
         for profile in profiles:
             records.append(launches.create_pending(
-                profile, session, multiplexer, folder=folder, args=args,
+                profile, session, multiplexer, folder=folder, args=args, label=label,
             ))
     except BaseException:
         discard_launches(records)

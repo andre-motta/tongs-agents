@@ -436,7 +436,8 @@ def _outside_tmux(mux, args, session: str, profiles, new_profiles,
             if isinstance(new_profiles, _Refused):
                 return _error(str(new_profiles), new_profiles.code)
             for profile in new_profiles:
-                workspace_spawn.check_launch(profile, **launch_options)
+                workspace_spawn.check_launch(profile, launch_options.get("folder"),
+                                             launch_options.get("args", ()))
             mux.spawn(session, workspace_spawn.sidebar_argv(layout=layout),
                       name=SIDEBAR_PANE_NAME, focus=False)
             mux.set_layout(session, layout)

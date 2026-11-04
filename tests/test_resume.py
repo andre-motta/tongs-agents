@@ -337,7 +337,8 @@ def test_without_an_id_it_lists_the_sessions(tmp_path, project, monkeypatch, cap
     _store(monkeypatch, [_record("codex", CODEX_ID, project, ts=int(time.time()) - 90)])
     assert _main("resume") == 0
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0].split() == ["HARNESS", "SESSION", "PROFILE/CONFIG", "STATUS", "AGE", "FOLDER"]
+    assert lines[0].split() == ["HARNESS", "SESSION", "PROFILE/CONFIG", "STATUS", "AGE",
+                                "FOLDER", "TITLE"]
     assert lines[1].split() == ["codex", CODEX_ID, "cx", "idle", "1m", str(project)]
     assert "tongs-agents resume ID" in lines[-1]
 
@@ -472,7 +473,14 @@ async def test_the_resume_verb_lists_and_starts_sessions(tmp_path, project, monk
         await pilot.pause()
         line = app.command_line
         await _submit(app, pilot, "resume")
-        assert CODEX_ID in line.result_text and "cx" in line.result_text
+        await _settle(app, pilot)
+        assert isinstance(app.screen, ResumePickerScreen)
+        assert "cx" in str(app.screen.option_list.get_option_at_index(0).prompt)
+        await pilot.press("escape")
+        await _settle(app, pilot)
+        assert not line.has_class("visible")
+        app.action_command_line()
+        await pilot.pause()
         await _submit(app, pilot, "resume 019a --session other")
         assert "refusing to use --session 'other'" in line.result_text
         await _submit(app, pilot, "resume 019a")
@@ -714,7 +722,8 @@ async def test_the_picker_closes_with_escape_and_an_empty_store_only_notifies(mo
         await _settle(app, pilot)
         app.action_resume_session()
         await _settle(app, pilot)
-        assert notes == ["No sessions to resume in the session store"]
+        assert notes == ["No sessions to resume in the session store or the profiles' "
+                         "history"]
         sessions = resume.recent_sessions([_record("pi", PI_ID, "/tmp")])
         app.push_screen(ResumePickerScreen(sessions, SESSION))
         await pilot.pause()

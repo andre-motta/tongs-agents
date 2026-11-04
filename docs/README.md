@@ -53,7 +53,7 @@ New here? Start with [your first workspace](tutorials/first-workspace.md).
 | Define agents with their own config dir, cwd, env or model | [Agent profiles](profiles.md) |
 | Report status from a script or an agent without hooks | [Reporting state from any command](profiles.md#reporting-state-from-any-command) |
 | Open, reopen or resurrect a workspace | [Agent workspace](workspace.md) |
-| Move sessions open in other terminals into the workspace | [Move your open sessions into the workspace](resume.md) |
+| Resume sessions open in other terminals, or closed long ago, in the workspace | [Resume your sessions in the workspace](resume.md) |
 | Set defaults for the workspace, the sidebar and the monitor; pick a theme | [App settings](app.md) |
 | Keep instructions, skills and MCP servers in one dotfiles directory | [Config layer](config.md) |
 | Send prompts to agents from a script | [Driving agent panes](control.md) |
