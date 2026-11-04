@@ -430,3 +430,63 @@ async def test_typed_keys_reach_the_prompt_not_the_sidebar_bindings(projects):
         assert field.styles.border_top[0] in ("", "none")
         assert field.content_region.height == 1
     assert fired == []
+
+
+@pytest.mark.asyncio
+async def test_q_asks_before_quitting_the_sidebar(projects):
+    app = _app(FakeMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("q")
+        await pilot.pause()
+        assert app.screen.title_text == "Quit the sidebar?"
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.is_running
+        await pilot.press("q")
+        await pilot.pause()
+        await pilot.press("escape")
+        await pilot.pause()
+        assert app.is_running
+        await pilot.press("q")
+        await pilot.pause()
+        await pilot.press("y")
+        await pilot.pause()
+    assert app.return_code == 0
+
+
+@pytest.mark.asyncio
+async def test_q_typed_in_the_command_line_does_not_ask_to_quit(projects):
+    app = _app(FakeMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("colon", "q")
+        await pilot.pause()
+        assert app.command_line.input.value == "q"
+        assert not hasattr(app.screen, "title_text")
+
+
+@pytest.mark.asyncio
+async def test_ctrl_q_asks_before_quitting_the_sidebar_too(projects):
+    app = _app(FakeMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("ctrl+q")
+        await pilot.pause()
+        assert app.screen.title_text == "Quit the sidebar?"
+        await pilot.press("n")
+        await pilot.pause()
+        assert app.is_running
+
+
+@pytest.mark.asyncio
+async def test_q_again_while_asking_does_not_stack_dialogs(projects):
+    app = _app(FakeMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _settle(app, pilot)
+        await pilot.press("q", "q", "q")
+        await pilot.pause()
+        assert len(app.screen_stack) == 2
+        await pilot.press("n")
+        await pilot.pause()
+        assert len(app.screen_stack) == 1 and app.is_running

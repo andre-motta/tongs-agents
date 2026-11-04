@@ -162,6 +162,9 @@ def focus_launched_row(mux: Multiplexer, feed: WorkspaceFeed,
     return focus_pane(mux, ref)
 
 
+QUIT_TITLE = "Quit the sidebar?"
+
+
 class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnSelect, App):
     """The workspace sidebar: a compact AgentsPanel, chat, access requests, spawns."""
 
@@ -296,6 +299,19 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
 
     def action_command_line(self) -> None:
         self.command_line.open()
+
+    async def action_quit(self) -> None:
+        """Every quit path (q, ctrl+q, the palette) asks first: agents outlive the sidebar."""
+        if isinstance(self.screen, ConfirmScreen) and self.screen.title_text == QUIT_TITLE:
+            return
+        self.push_screen(
+            ConfirmScreen(
+                QUIT_TITLE,
+                "Agents keep running. To bring the sidebar back, press Enter on its "
+                "pane or run 'tongs-agents workspace' in this session.",
+            ),
+            lambda yes: self.exit() if yes else None,
+        )
 
     def on_command_line_ran(self, event: CommandLine.Ran) -> None:
         if event.ok:

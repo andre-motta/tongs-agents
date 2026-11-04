@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.10.3 (experimental)
+
+### Changed
+
+- Quitting the sidebar (`q`, `ctrl+q` or the palette) now asks first, since
+  it is easy to press by accident; agents keep running either way (#134).
+
 ## 0.10.2 (experimental)
 
 Fixes from using the one-agent view of 0.10.1 with many agents.
