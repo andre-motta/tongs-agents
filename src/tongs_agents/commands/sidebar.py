@@ -26,6 +26,9 @@ sidebar offers to show its pane instead. One whose process runs elsewhere
 is resumed only after a confirmation; that process is never stopped. While
 a session is being resumed, another request for it is ignored.
 
+``R`` renames the selected agent (``widgets.rename_prompt``): a display
+name kept in its launch record and given to its pane, best effort.
+
 Chat (docs/chat.md): ``m`` shows or hides a ChatPanel under the agents, and
 the palette offers Grant chat, Grant chat and wake, Revoke chat (for the
 selected launched pane, each confirmed in a dialog), Post to chat and Open
@@ -90,6 +93,7 @@ from tongs_agents.widgets.command_line import (
     check_resume,
     start_resume,
 )
+from tongs_agents.widgets.rename_prompt import RenameActions, RenamePrompt
 from tongs_agents.widgets.resume_picker import ResumePickerScreen
 from tongs_agents.widgets.shell import AppFooter, AppHeader
 
@@ -150,7 +154,7 @@ def focus_launched_row(mux: Multiplexer, feed: WorkspaceFeed,
     return focus_pane(mux, ref)
 
 
-class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
+class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnSelect, App):
     """The workspace sidebar: a compact AgentsPanel, chat, access requests, spawns."""
 
     TITLE = "tongs-agents"
@@ -161,6 +165,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
         Binding("plus", "add_agent", "Add agent", show=True),
         Binding("colon", "command_line", "Command", show=True, key_display=":"),
         Binding("u", "resume_selected", "Resume", show=False),
+        Binding("R", "rename_agent", "Rename", show=True),
         Binding("n", "next_attention", "Next", show=True),
         Binding("m", "toggle_chat", "Chat", show=True),
         Binding("a", "review_access", "Access", show=True),
@@ -216,6 +221,7 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, FocusOnSelect, App):
                          refusal=self.chat_refusal, id=self.chat_panel_id)
         chat.display = False
         yield chat
+        yield RenamePrompt(id=self.rename_prompt_id)
         yield CommandLine(self.command_context, id=self.command_line_id)
         yield AppFooter()
 

@@ -127,3 +127,10 @@ class Multiplexer(Protocol):
         A primitive only: it is not a status source.
         """
         ...
+
+    def rename_pane(self, ref: PaneRef, name: str) -> None:
+        """Set the name the multiplexer shows for the pane.
+
+        A display name only: the pane's id, its process and its placement stay.
+        """
+        ...

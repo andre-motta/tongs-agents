@@ -1299,3 +1299,27 @@ def test_a_readded_marked_sidebar_restores_home_recovery(fake):
     assert argv[-2:] == ["--layout", "single"]
     readded["terminal_command"] = " ".join(argv)
     assert mux_zellij._marks_single(readded)
+
+
+def test_rename_pane_names_the_terminal_pane_after_the_separator(fake):
+    _mux().rename_pane(REF, "review #130")
+
+    argv, kwargs = fake.calls[-1]
+    assert argv == [
+        ZELLIJ, "--session", "agents", "action", "rename-pane", "--pane-id", "terminal_3",
+        "--", "review #130",
+    ]
+    assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+
+
+@pytest.mark.parametrize("name", ["", "-x", "a\x1bb", "x" * 300, None])
+def test_rename_pane_refuses_bad_names(fake, name):
+    with pytest.raises(MultiplexerError, match="pane name"):
+        _mux().rename_pane(REF, name)
+    assert fake.calls == []
+
+
+def test_rename_pane_failure_is_an_error(fake):
+    fake.responses["rename-pane"] = (1, "", "no such pane")
+    with pytest.raises(MultiplexerError, match="rename-pane"):
+        _mux().rename_pane(REF, "alpha")

@@ -11,6 +11,9 @@ The chat tools (``chat_inbox``, ``chat_read``, ``chat_post``) are registered
 only when the server verifies its launch identity at start, and listed only
 while the maintainer has granted that launch chat; ``mcp_chat`` holds that
 policy. See docs/chat.md.
+
+Every session the ``fleet_*`` tools return carries ``label``: the name the
+maintainer gave its launch in the sidebar, empty when none.
 """
 
 import asyncio
@@ -19,7 +22,7 @@ import sys
 
 from mcp.server.fastmcp import FastMCP
 
-from tongs_agents import control
+from tongs_agents import control, launches
 from tongs_agents import focus as focus_module
 from tongs_agents.app_config import AppConfigError, load_app_config
 from tongs_agents.discovery import read_sessions
@@ -30,9 +33,18 @@ from tongs_agents.session_store import maintain_store
 SERVER_NAME = "tongs-agents"
 
 
+def _sessions() -> list[dict]:
+    """The store's sessions, each with the label of its launch (empty when none)."""
+    sessions = read_sessions()
+    names = launches.labels() if sessions else {}
+    for session in sessions:
+        session["label"] = names.get(session.get("launch_id") or "", "")
+    return sessions
+
+
 def fleet_status() -> str:
     """Get all Claude Code, Codex and Pi session statuses."""
-    sessions = read_sessions()
+    sessions = _sessions()
     if not sessions:
         return json.dumps({"sessions": [], "summary": "No active sessions"})
 
@@ -56,7 +68,7 @@ def fleet_status() -> str:
 
 def fleet_session(session_id: str) -> str:
     """Get a session by canonical or native ID (full or prefix match)."""
-    sessions = read_sessions()
+    sessions = _sessions()
     exact = [
         session for session in sessions
         if session_id in {
@@ -87,7 +99,7 @@ def fleet_session(session_id: str) -> str:
 
 def fleet_sessions_needing_attention() -> str:
     """Get sessions that are idle for over 2 minutes and likely need user input."""
-    sessions = read_sessions()
+    sessions = _sessions()
     attention = [s for s in sessions if s["needs_attention"]]
     if not attention:
         return json.dumps({"message": "All sessions healthy", "sessions": []})

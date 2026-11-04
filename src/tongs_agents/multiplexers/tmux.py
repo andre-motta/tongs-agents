@@ -153,6 +153,11 @@ def _pane_name(value) -> str:
     return value
 
 
+def _literal(value: str) -> str:
+    """``value`` for an argument tmux expands as a format: ``#`` doubled."""
+    return value.replace("#", "##")
+
+
 def _cwd(value) -> str:
     if not _text(value, MAX_SOCKET_BYTES) or not os.path.isabs(value) or not os.path.isdir(value):
         raise MultiplexerError(f"refused tmux pane cwd {value!r:.80}")
@@ -497,7 +502,7 @@ class TmuxMultiplexer:
         if result is None and pane_name != SIDEBAR_PANE_NAME and (
             self._layout(socket, session) == LAYOUT_SINGLE
         ):
-            named = [] if pane_name is None else ["-n", pane_name]
+            named = [] if pane_name is None else ["-n", _literal(pane_name)]
             result = _run_tmux(self._command(
                 socket, "new-window", "-d", "-t", f"={session}:", *named, *options, "--",
                 *command))
@@ -626,7 +631,8 @@ class TmuxMultiplexer:
             shown = (name.stdout or "").strip() if name is not None else ""
             if _text(shown, MAX_NAME_BYTES):
                 # Best effort: the status bar names the pane the window now holds.
-                _run_tmux(self._command(socket, "rename-window", "-t", parked_window, shown))
+                _run_tmux(self._command(socket, "rename-window", "-t", parked_window,
+                                        _literal(shown)))
             detail = "swapped into the main slot"
         else:
             self._tmux(socket, "join-pane", "-h", "-d", "-l", str(_main_columns(width)),
@@ -685,3 +691,30 @@ class TmuxMultiplexer:
         self, ref: PaneRef, *, max_events: int = 1000, timeout: float = 60.0
     ) -> Iterator[dict]:
         raise Unsupported("tmux has no pane render subscription")
+
+    def rename_pane(self, ref: PaneRef, name: str) -> None:
+        """Name the pane: its ``@tongs_agents_name``, its title and its parked window.
+
+        The pane option is what ``list_panes`` reports and what a swap names
+        the parked window after. The title (``select-pane -T``) and, in a
+        ``single`` session, the window the pane is parked in alone follow it
+        best effort; tmux expands formats in both, so ``#`` is doubled.
+        """
+        session, pane, socket = _target(ref)
+        name = _pane_name(name)
+        self._tmux(socket, "set-option", "-p", "-t", pane, NAME_OPTION, name)
+        _run_tmux(self._command(socket, "select-pane", "-t", pane, "-T", _literal(name)))
+        if self._layout(socket, session) != LAYOUT_SINGLE:
+            return
+        located = _run_tmux(self._command(
+            socket, "display-message", "-p", "-t", pane,
+            "#{window_id}\t#{window_panes}"))
+        window, _, count = ((located.stdout or "").strip() if located else "").partition("\t")
+        if _WINDOW_ID.match(window) is None or count != "1":
+            return
+        try:
+            slot = self._slot(socket, session)
+        except MultiplexerError:
+            return
+        if slot is None or slot[1] != window:
+            _run_tmux(self._command(socket, "rename-window", "-t", window, _literal(name)))

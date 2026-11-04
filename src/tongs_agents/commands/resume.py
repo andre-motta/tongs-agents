@@ -49,7 +49,7 @@ from tongs_agents.commands import run as run_command
 from tongs_agents.commands import workspace
 from tongs_agents.harnesses import get_harness
 from tongs_agents.launches import LaunchError
-from tongs_agents.models import format_age
+from tongs_agents.models import format_age, validated_launch
 from tongs_agents.multiplexers import get_multiplexer
 from tongs_agents.pi_install import pi_config_dir
 from tongs_agents.profiles import (
@@ -138,6 +138,7 @@ class Plan:
     target: Resumable
     profile: Profile
     options: dict
+    label: str | None = None
 
     @property
     def summary(self) -> str:
@@ -453,7 +454,23 @@ def plan(session: Resumable, profiles: Mapping[str, Profile],
         )
     except LaunchError as error:
         raise ResumeRefused(str(error)) from None
-    return Plan(session, profile, {"folder": folder, "args": extra})
+    return Plan(session, profile, {"folder": folder, "args": extra},
+                label=previous_label(session))
+
+
+def previous_label(session: Resumable) -> str | None:
+    """The sidebar label of the latest launch that ran ``session``, if any.
+
+    A resume from the sidebar gives it to the new launch, so a renamed agent
+    keeps its name. Records are read newest first; a launch record that was
+    pruned or never labelled gives nothing.
+    """
+    for record in session.records:
+        launch = validated_launch(record.get("launch")) or {}
+        launched = launches.get(launch.get("launch_id", ""))
+        if launched is not None and launched.label:
+            return launched.label
+    return None
 
 
 # -- Live processes --

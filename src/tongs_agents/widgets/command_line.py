@@ -449,7 +449,7 @@ def start_resume(context: CommandContext, plan: resume_command.Plan) -> list[str
     try:
         workspace_spawn.spawn_profiles(
             context.multiplexer, context.session, [plan.profile], **plan.options,
-            notices=notices,
+            notices=notices, label=plan.label,
         )
     except (MultiplexerError, LaunchError, OSError) as error:
         raise CommandError(_with_notices(

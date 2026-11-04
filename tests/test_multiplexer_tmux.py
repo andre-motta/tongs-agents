@@ -704,3 +704,73 @@ def test_a_focused_spawn_in_a_single_session_shows_the_parked_pane(fake, mux):
     fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%7", "@4", "chat", "1", "80")))
     mux.spawn("agents", ["python", "-m", "x"], name="chat", focus=True)
     assert ["join-pane", "-h", "-d", "-l", "119", "-s", "%7", "-t", "%0"] in fake.tails()
+
+
+def test_rename_pane_sets_the_name_option_and_a_literal_title(fake, mux):
+    mux.rename_pane(ref(), "review #{pane_id} #(id)")
+    assert fake.tails() == [
+        ["set-option", "-p", "-t", "%3", tmux_mux.NAME_OPTION, "review #{pane_id} #(id)"],
+        ["select-pane", "-t", "%3", "-T", "review ##{pane_id} ##(id)"],
+        LAYOUT_QUERY,
+    ]
+
+
+def test_rename_pane_renames_the_window_a_parked_pane_sits_in_alone(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("display-message", "@4\t1\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%5", "@0", "beta", "1", "160"),
+                                     ("%3", "@4", "alpha", "1", "80")))
+    mux.rename_pane(ref(), "fix #130")
+    assert fake.tails()[-1] == ["rename-window", "-t", "@4", "fix ##130"]
+
+
+@pytest.mark.parametrize("located", ["@0\t2\n", "@4\t2\n", "garbage\n"])
+def test_rename_pane_leaves_shared_and_sidebar_windows_alone(fake, mux, located):
+    fake.answer("show-options", "single\n")
+    fake.answer("display-message", located)
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%3", "@0", "alpha", "1", "160")))
+    mux.rename_pane(ref(), "alpha2")
+    assert "rename-window" not in [tail[0] for tail in fake.tails()]
+
+
+def test_rename_pane_in_the_main_slot_leaves_the_sidebar_window_alone(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("display-message", "@0\t1\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW))
+    mux.rename_pane(ref(), "alpha2")
+    assert "rename-window" not in [tail[0] for tail in fake.tails()]
+
+
+@pytest.mark.parametrize("name", ["", "-x", "a\nb", "x" * 300, None])
+def test_rename_pane_refuses_bad_names(fake, mux, name):
+    with pytest.raises(MultiplexerError, match="pane name"):
+        mux.rename_pane(ref(), name)
+    assert fake.calls == []
+
+
+def test_rename_pane_fails_when_the_pane_is_gone(fake, mux):
+    fake.answer("set-option", "", 1)
+    with pytest.raises(MultiplexerError, match="set-option"):
+        mux.rename_pane(ref(), "alpha2")
+
+
+def test_a_swap_names_the_parked_window_literally(fake, mux):
+    fake.answer("display-message", "$1\n")
+    fake.answer("display-message", "$1\t@4\n")
+    fake.answer("display-message", "fix #130\n")
+    fake.answer("display-message", "@0\n")
+    fake.answer("display-message", "%3\n")
+    fake.answer("show-options", "single\n")
+    fake.answer("list-panes", _slots(SIDEBAR_ROW, ("%5", "@0", "beta", "1", "160"),
+                                     ("%3", "@4", "alpha", "1", "80")))
+    mux.show(ref())
+    assert ["rename-window", "-t", "@4", "fix ##130"] in fake.tails()
+
+
+def test_a_parked_window_named_at_spawn_is_named_literally(fake, mux):
+    fake.answer("show-options", "single\n")
+    fake.answer("new-window", "%7\n")
+    mux.spawn("agents", ["python", "-m", "x"], name="fix #130")
+    assert fake.tails()[2][:6] == ["new-window", "-d", "-t", "=agents:", "-n", "fix ##130"]
+    assert fake.tails()[3] == ["set-option", "-p", "-t", "%7", tmux_mux.NAME_OPTION,
+                               "fix #130"]

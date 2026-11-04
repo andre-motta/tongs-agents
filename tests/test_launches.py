@@ -374,3 +374,84 @@ def test_a_tampered_folder_or_args_makes_the_record_invalid(change):
     data.update(change)
     path.write_text(json.dumps(data))
     assert launches.get(record.launch_id) is None
+
+
+def test_a_label_round_trips_and_plain_records_keep_their_shape():
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    assert "label" not in json.loads(record_file(pending.launch_id).read_text())
+    claimed = launches.claim(pending.launch_id, 4242, "1", PANE)
+    labelled = launches.set_label(pending.launch_id, "  review #130  ")
+    assert labelled.label == "review #130"
+    assert labelled == launches.get(pending.launch_id)
+    assert labelled == LaunchRecord(**{**claimed.__dict__, "label": "review #130"})
+    data = json.loads(record_file(pending.launch_id).read_text())
+    assert data["label"] == "review #130"
+    assert data["schema_version"] == launches.SCHEMA_VERSION
+    assert launches.labels() == {pending.launch_id: "review #130"}
+    restored = launches.set_label(pending.launch_id, "   ")
+    assert restored.label is None
+    assert restored == claimed
+    assert "label" not in json.loads(record_file(pending.launch_id).read_text())
+    assert launches.labels() == {}
+
+
+def test_a_replacing_claim_keeps_the_label():
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    launches.claim(pending.launch_id, 4242, "1", PANE)
+    launches.set_label(pending.launch_id, "reviewer")
+    fresh = launches.claim(pending.launch_id, 5151, "2", PANE)
+    assert (fresh.replaces, fresh.label) == (pending.launch_id, "reviewer")
+
+
+@pytest.mark.parametrize("label, message", [
+    ("x" * (launches.MAX_LABEL_LENGTH + 1), "at most"),
+    ("tab\there", "control"),
+    ("bell\x07", "control"),
+    ("line\nbreak", "control"),
+    ("-flag", "'-'"),
+    ("tongs-agents-sidebar", "reserved"),
+    ("tongs-agents-home", "reserved"),
+    (42, "non-empty"),
+])
+def test_invalid_labels_are_refused_and_nothing_is_written(label, message):
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    launches.claim(pending.launch_id, 4242, "1", PANE)
+    before = record_file(pending.launch_id).read_bytes()
+    with pytest.raises(LaunchError, match=message):
+        launches.set_label(pending.launch_id, label)
+    assert record_file(pending.launch_id).read_bytes() == before
+
+
+def test_a_pending_record_is_not_relabelled_so_a_claim_cannot_be_undone():
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    before = record_file(pending.launch_id).read_bytes()
+    with pytest.raises(LaunchError, match="still starting"):
+        launches.set_label(pending.launch_id, "reviewer")
+    assert record_file(pending.launch_id).read_bytes() == before
+    claimed = launches.claim(pending.launch_id, 4242, "1", PANE)
+    assert claimed.launch_id == pending.launch_id and claimed.state == "running"
+
+
+def test_create_pending_takes_a_checked_label():
+    record = launches.create_pending(PROFILE, "agents", "zellij", label=" reviewer ")
+    assert launches.get(record.launch_id).label == "reviewer"
+    assert launches.create_pending(PROFILE, "agents", "zellij", label="").label is None
+    with pytest.raises(LaunchError, match="reserved"):
+        launches.create_pending(PROFILE, "agents", "zellij", label="tongs-agents-home")
+
+
+def test_set_label_needs_an_existing_record():
+    with pytest.raises(LaunchError, match="no launch record"):
+        launches.set_label("a" * 32, "name")
+    with pytest.raises(LaunchError, match="invalid launch id"):
+        launches.set_label("../x", "name")
+
+
+@pytest.mark.parametrize("label", ["", "-x", "a\x1bb", "x" * 65, 7, ["a"]])
+def test_a_tampered_label_makes_the_record_invalid(label):
+    pending = launches.create_pending(PROFILE, "agents", "zellij")
+    path = record_file(pending.launch_id)
+    data = json.loads(path.read_text())
+    data["label"] = label
+    path.write_text(json.dumps(data))
+    assert launches.get(pending.launch_id) is None
