@@ -562,6 +562,29 @@ def test_delete_session_checks_that_the_session_is_gone(fake):
         _mux().delete_session("scratch")
 
 
+def test_kill_session_kills_only_a_running_session(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    _mux().kill_session("agents")
+    assert [argv for argv, _ in fake.calls if argv[1] == "kill-session"] == [
+        [ZELLIJ, "kill-session", "agents"]]
+    with pytest.raises(MultiplexerError, match="not running"):
+        _mux().kill_session("scratch")
+
+
+def test_kill_session_reports_a_failure(fake):
+    fake.responses["list-sessions"] = (0, LIST_SESSIONS, "")
+    fake.responses["kill-session"] = (1, "", "no such session\n")
+    with pytest.raises(MultiplexerError, match="kill-session agents exited 1: no such"):
+        _mux().kill_session("agents")
+
+
+def test_detach_detaches_from_the_named_session(fake):
+    _mux().detach("agents")
+    argv, kwargs = fake.calls[-1]
+    assert argv == [ZELLIJ, "--session", "agents", "action", "detach"]
+    assert kwargs["env"]["ZELLIJ_SOCKET_DIR"] == SOCKET_DIR
+
+
 def test_socket_dir_defaults_to_the_callers_environment(fake, monkeypatch):
     monkeypatch.setenv("ZELLIJ_SOCKET_DIR", "/run/user/1000/zellij-env")
     _split_session(fake)

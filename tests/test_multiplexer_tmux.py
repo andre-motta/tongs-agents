@@ -536,6 +536,15 @@ def _slots(*rows):
 SIDEBAR_ROW = ("%0", "@0", tmux_mux.SIDEBAR_PANE_NAME, "0", "160")
 
 
+def test_detach_and_kill_session_target_the_exact_session(fake, mux):
+    mux.detach("agents")
+    mux.kill_session("agents")
+    assert fake.tails() == [
+        ["detach-client", "-s", "=agents"],
+        ["kill-session", "-t", "=agents"],
+    ]
+
+
 def test_set_layout_records_the_session_option(fake, mux):
     mux.set_layout("agents", "single")
     assert fake.tails() == [

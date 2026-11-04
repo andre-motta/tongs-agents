@@ -15,6 +15,8 @@ from tongs_agents.commands.sidebar import SidebarApp
 from tongs_agents.palette import COMMAND_LINE, RELOAD_PROFILES
 from tongs_agents.sessions_feed import WorkspaceFeed
 from tongs_agents.widgets import agents_panel, command_line
+from tongs_agents.multiplexers import MultiplexerError
+from tongs_agents.widgets.quit_screen import QuitScreen
 from tongs_agents.widgets.command_line import (
     VERBS,
     CommandError,
@@ -432,61 +434,106 @@ async def test_typed_keys_reach_the_prompt_not_the_sidebar_bindings(projects):
     assert fired == []
 
 
+
+class QuitMux(FakeMux):
+    def __init__(self, fail=None):
+        super().__init__()
+        self.left = []
+        self.fail = fail
+
+    def detach(self, session):
+        if self.fail:
+            raise MultiplexerError(self.fail)
+        self.left.append(("detach", session))
+
+    def kill_session(self, session):
+        if self.fail:
+            raise MultiplexerError(self.fail)
+        self.left.append(("kill", session))
+
+
+async def _quit_dialog(app, pilot, key="q"):
+    await _settle(app, pilot)
+    await pilot.press(key)
+    await pilot.pause()
+    assert isinstance(app.screen, QuitScreen)
+
+
 @pytest.mark.asyncio
-async def test_q_asks_before_quitting_the_sidebar(projects):
-    app = _app(FakeMux())
+async def test_q_never_quits_only_the_sidebar_and_detach_keeps_everything(projects):
+    mux = QuitMux()
+    app = _app(mux)
     async with app.run_test(size=SIZE) as pilot:
-        await _settle(app, pilot)
-        await pilot.press("q")
+        await _quit_dialog(app, pilot)
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
         await pilot.pause()
-        assert app.screen.title_text == "Quit the sidebar?"
+        assert app.is_running
+        assert mux.left == [("detach", SESSION)]
+
+
+@pytest.mark.asyncio
+async def test_kill_needs_a_second_yes_and_ends_the_session(projects):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
+        await pilot.pause()
+        assert app.screen.title_text == "Kill the workspace?"
         await pilot.press("n")
         await pilot.pause()
-        assert app.is_running
-        await pilot.press("q")
-        await pilot.pause()
-        await pilot.press("escape")
-        await pilot.pause()
-        assert app.is_running
-        await pilot.press("q")
+        assert mux.left == [] and app.is_running
+        await _quit_dialog(app, pilot)
+        await pilot.press("k")
         await pilot.pause()
         await pilot.press("y")
+        await app.workers.wait_for_complete()
         await pilot.pause()
+    assert mux.left == [("kill", SESSION)]
     assert app.return_code == 0
 
 
 @pytest.mark.asyncio
-async def test_q_typed_in_the_command_line_does_not_ask_to_quit(projects):
-    app = _app(FakeMux())
+@pytest.mark.parametrize("key", ["n", "escape", "q"])
+async def test_cancel_leaves_everything_as_it_was(projects, key):
+    mux = QuitMux()
+    app = _app(mux)
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press(key)
+        await pilot.pause()
+        assert not isinstance(app.screen, QuitScreen)
+        assert len(app.screen_stack) == 1 and app.is_running
+    assert mux.left == []
+
+
+@pytest.mark.asyncio
+async def test_ctrl_q_opens_the_same_dialog(projects):
+    app = _app(QuitMux())
+    async with app.run_test(size=SIZE) as pilot:
+        await _quit_dialog(app, pilot, "ctrl+q")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_detach_is_shown_and_the_sidebar_stays(projects):
+    mux = QuitMux(fail="zellij action detach failed")
+    app = _app(mux)
+    async with app.run_test(size=SIZE, notifications=True) as pilot:
+        await _quit_dialog(app, pilot)
+        await pilot.press("d")
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app.is_running
+        assert any("detach failed" in n.message for n in app._notifications)
+
+
+@pytest.mark.asyncio
+async def test_q_typed_in_the_command_line_does_not_open_the_dialog(projects):
+    app = _app(QuitMux())
     async with app.run_test(size=SIZE) as pilot:
         await _settle(app, pilot)
         await pilot.press("colon", "q")
         await pilot.pause()
         assert app.command_line.input.value == "q"
-        assert not hasattr(app.screen, "title_text")
-
-
-@pytest.mark.asyncio
-async def test_ctrl_q_asks_before_quitting_the_sidebar_too(projects):
-    app = _app(FakeMux())
-    async with app.run_test(size=SIZE) as pilot:
-        await _settle(app, pilot)
-        await pilot.press("ctrl+q")
-        await pilot.pause()
-        assert app.screen.title_text == "Quit the sidebar?"
-        await pilot.press("n")
-        await pilot.pause()
-        assert app.is_running
-
-
-@pytest.mark.asyncio
-async def test_q_again_while_asking_does_not_stack_dialogs(projects):
-    app = _app(FakeMux())
-    async with app.run_test(size=SIZE) as pilot:
-        await _settle(app, pilot)
-        await pilot.press("q", "q", "q")
-        await pilot.pause()
-        assert len(app.screen_stack) == 2
-        await pilot.press("n")
-        await pilot.pause()
-        assert len(app.screen_stack) == 1 and app.is_running
+        assert not isinstance(app.screen, QuitScreen)

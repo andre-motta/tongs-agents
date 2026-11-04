@@ -455,6 +455,23 @@ class ZellijMultiplexer:
         """True only for a running session; EXITED sessions count as absent."""
         return self.session_state(session) == SESSION_RUNNING
 
+    def detach(self, session: str) -> None:
+        """Detach the client that last sent input; zellij has no detach-all."""
+        self._action(_session(session), None, "detach")
+
+    def kill_session(self, session: str) -> None:
+        """End a running session and every pane in it (zellij may keep it EXITED)."""
+        session = _session(session)
+        if self.session_state(session) != SESSION_RUNNING:
+            raise MultiplexerError(f"zellij session {session!r} is not running")
+        result = self._cli("kill-session", session)
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip().splitlines()
+            raise MultiplexerError(
+                f"zellij kill-session {session} exited {result.returncode}"
+                + (f": {detail[0][:200]}" if detail else "")
+            )
+
     def delete_session(self, session: str) -> None:
         """Delete ``session`` only while it is listed as EXITED; never forced."""
         session = _session(session)

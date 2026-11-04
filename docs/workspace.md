@@ -280,13 +280,22 @@ pane, half a second after the resizing stops. Hook rows go through the same focu
 hookless rows select their pane directly after checking that it is still
 listed. Spawn failures appear as notifications.
 
-### Quitting the sidebar
+### Quitting
 
-`q` (also `ctrl+q` and Quit in the palette) asks before the sidebar exits:
-`y` quits, `n` or Escape keeps it. Quitting closes only the sidebar; every
-agent pane keeps running. To bring it back, press Enter on the sidebar's
-exited pane (Zellij offers to re-run it) or run `tongs-agents workspace` in
-the session, which adds a sidebar when none is running.
+The sidebar never closes on its own. `q` (also `ctrl+q` and Quit in the
+palette) asks how to leave the whole workspace:
+
+| Key | Action |
+| --- | --- |
+| `d` | Detach: close the window. The session and every agent keep running; `tongs-agents` attaches again. |
+| `k` | Kill: end the session and every agent in it, after a second `y`. Work in progress in those agents is interrupted. |
+| `n`, Escape, `q` | Cancel. |
+
+On Zellij, detach detaches the client you are using; on tmux, every client
+attached to the session. If the sidebar does exit (it crashed, or its pane
+was closed), press Enter on its exited Zellij pane or run
+`tongs-agents workspace` in the session, which adds a sidebar when none is
+running.
 
 ### Renaming an agent
 

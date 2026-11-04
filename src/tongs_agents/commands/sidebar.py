@@ -90,6 +90,7 @@ from tongs_agents.sessions_feed import LAUNCH_SOURCE, WorkspaceFeed
 from tongs_agents.widgets.agents_panel import AgentsPanel, FocusOnSelect
 from tongs_agents.widgets.approvals import APPROVAL_POLL_SECONDS, ApprovalActions
 from tongs_agents.widgets.chat_panel import ChatActions, ChatPanel, ConfirmScreen
+from tongs_agents.widgets.quit_screen import DETACH, KILL, QuitScreen
 from tongs_agents.widgets.command_line import (
     CommandContext,
     CommandError,
@@ -162,7 +163,7 @@ def focus_launched_row(mux: Multiplexer, feed: WorkspaceFeed,
     return focus_pane(mux, ref)
 
 
-QUIT_TITLE = "Quit the sidebar?"
+KILL_TITLE = "Kill the workspace?"
 
 
 class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnSelect, App):
@@ -301,17 +302,45 @@ class SidebarApp(AppShell, ChatActions, ApprovalActions, RenameActions, FocusOnS
         self.command_line.open()
 
     async def action_quit(self) -> None:
-        """Every quit path (q, ctrl+q, the palette) asks first: agents outlive the sidebar."""
-        if isinstance(self.screen, ConfirmScreen) and self.screen.title_text == QUIT_TITLE:
+        """Every quit path (q, ctrl+q, the palette) leaves the whole workspace.
+
+        The sidebar never quits on its own: it asks whether to detach (every
+        agent keeps running) or to kill the session, after a second check.
+        """
+        if isinstance(self.screen, QuitScreen) or (
+            isinstance(self.screen, ConfirmScreen) and self.screen.title_text == KILL_TITLE
+        ):
             return
-        self.push_screen(
-            ConfirmScreen(
-                QUIT_TITLE,
-                "Agents keep running. To bring the sidebar back, press Enter on its "
-                "pane or run 'tongs-agents workspace' in this session.",
-            ),
-            lambda yes: self.exit() if yes else None,
-        )
+        self.push_screen(QuitScreen(self.session), self._quit_chosen)
+
+    def _quit_chosen(self, choice: str | None) -> None:
+        if choice == DETACH:
+            self._leave(DETACH)
+        elif choice == KILL:
+            self.push_screen(
+                ConfirmScreen(
+                    KILL_TITLE,
+                    f"End session {self.session} and every agent in it? Work in "
+                    "progress in those agents is interrupted.",
+                ),
+                lambda yes: self._leave(KILL) if yes else None,
+            )
+
+    @work(thread=True, exclusive=True, group="quit")
+    def _leave(self, choice: str) -> None:
+        try:
+            if choice == KILL:
+                self.multiplexer.kill_session(self.session)
+            else:
+                self.multiplexer.detach(self.session)
+        except MultiplexerError as error:
+            self.call_from_thread(
+                self.notify, error.detail, title=f"Could not {choice}",
+                severity="error", timeout=15, markup=False,
+            )
+            return
+        if choice == KILL:
+            self.call_from_thread(self.exit)
 
     def on_command_line_ran(self, event: CommandLine.Ran) -> None:
         if event.ok:

@@ -4,8 +4,11 @@
 
 ### Changed
 
-- Quitting the sidebar (`q`, `ctrl+q` or the palette) now asks first, since
-  it is easy to press by accident; agents keep running either way (#134).
+- `q` in the sidebar (also `ctrl+q` and the palette) no longer closes the
+  sidebar alone. It asks how to leave the workspace: `d` detaches (the window
+  closes, every agent keeps running, `tongs-agents` attaches again), `k` kills
+  the session and every agent after a second confirmation, `n` or Escape
+  cancels (#134).
 
 ## 0.10.2 (experimental)
 
